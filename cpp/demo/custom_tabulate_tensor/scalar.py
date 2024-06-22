@@ -12,6 +12,7 @@ from ufl import (
     TestFunction,
     TrialFunction,
     dc,
+    dx,
     grad,
     inner,
 )
@@ -37,4 +38,4 @@ alpha = Constant(mesh)
 
 # Finally, we define the bilinear and linear forms according to the
 # variational formulation of the equations:
-L = alpha*dc
+L = alpha*dc + alpha*dx
