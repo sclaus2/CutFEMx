@@ -1,7 +1,8 @@
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+
 #include <vector>
 #include <span>
-#include <iostream>
-#include <string>
 #include <math.h>
 
 #include "scalar.h"
@@ -12,7 +13,6 @@
 #include <dolfinx/mesh/Mesh.h>
 #include <dolfinx/mesh/utils.h>
 #include <dolfinx/mesh/generation.h>
-
 
 using T = double;
 
@@ -27,11 +27,7 @@ T compute_detJ(std::span<const T> coordinate_dofs)
   return _detJ;
 }
 
-int main(int argc, char* argv[])
-{
-  MPI_Init(&argc, &argv);
-  dolfinx::init_logging(argc, argv);
-
+double assemble_scalar() {
   auto celltype = dolfinx::mesh::CellType::triangle;
   int degree = 1;
   T alpha = 1.0;
@@ -102,32 +98,9 @@ int main(int argc, char* argv[])
         nullptr, &num_points,  pts.data(), weights.data());
   }
 
-  std::cout << "custom_sum=" << custom_sum << std::endl;
+  return custom_sum;
+}
 
-  // ----------------------------------------------------------------------------------
-  // Standard Integral
-  // ----------------------------------------------------------------------------------
-  T sum(0);
-
-  //obtain standard integral
-  ufcx_integral* integral = ufcx_L.form_integrals[integral_offsets[cell]];
-  auto kernel = integral->tabulate_tensor_float64;
-
-    // Iterate over all cells
-  for (std::int32_t c = 0; c < num_cells; ++c)
-  {
-    //get cell node coordinates
-    auto x_dofs = MDSPAN_IMPL_STANDARD_NAMESPACE::submdspan(
-        x_dofmap, c, MDSPAN_IMPL_STANDARD_NAMESPACE::full_extent);
-    for (std::size_t i = 0; i < x_dofs.size(); ++i)
-    {
-      std::copy_n(std::next(x.begin(), 3 * x_dofs[i]), 3,
-                  std::next(coordinate_dofs.begin(), 3 * i));
-    }
-
-    kernel(&sum, {}, &alpha, coordinate_dofs.data(), nullptr, nullptr);
-  }
-
-  std::cout << "sum=" << sum << std::endl;
-
+TEST_CASE( "Assemble custom integrals over scalar over simple mesh", "[assemble_scalar]" ) {
+    REQUIRE_THAT(assemble_scalar(), Catch::Matchers::WithinRel(4.0));
 }
