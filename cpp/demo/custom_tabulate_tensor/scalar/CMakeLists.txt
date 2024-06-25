@@ -12,8 +12,10 @@ set(CMAKE_BUILD_TYPE Debug)
 add_compile_options(-Wall -Wextra -pedantic)
 
 find_package(DOLFINX REQUIRED)
+find_package(CUTFEMX REQUIRED)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-add_executable(${PROJECT_NAME} main.cpp scalar.c cwrapper.cpp)
+add_executable(${PROJECT_NAME} main.cpp scalar.c)
 target_link_libraries(${PROJECT_NAME} dolfinx)
+target_link_libraries(${PROJECT_NAME} cutfemx)

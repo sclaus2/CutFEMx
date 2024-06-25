@@ -78,7 +78,6 @@ int main(int argc, char* argv[])
   ufcx_integral* custom_integral = ufcx_L.form_integrals[integral_offsets[custom]];
   auto custom_kernel = custom_integral->custom_tabulate_tensor_float64;
 
-  T value(0);
   T custom_sum(0);
   // Iterate over all cells
   for (std::int32_t c = 0; c < num_cells; ++c)
@@ -99,10 +98,8 @@ int main(int argc, char* argv[])
     for(std::int32_t i = 0; i < num_points; ++i)
         weights[i] = wts[i]*std::fabs(_detJ);
 
-    custom_kernel(&value, {}, &alpha, coordinate_dofs.data(), nullptr,
+    custom_kernel(&custom_sum, {}, &alpha, coordinate_dofs.data(), nullptr,
         nullptr, &num_points,  pts.data(), weights.data());
-
-    custom_sum += value;
   }
 
   std::cout << "custom_sum=" << custom_sum << std::endl;
@@ -110,7 +107,6 @@ int main(int argc, char* argv[])
   // ----------------------------------------------------------------------------------
   // Standard Integral
   // ----------------------------------------------------------------------------------
-  value = 0.0;
   T sum(0);
 
   //obtain standard integral
@@ -129,9 +125,7 @@ int main(int argc, char* argv[])
                   std::next(coordinate_dofs.begin(), 3 * i));
     }
 
-    kernel(&value, {}, &alpha, coordinate_dofs.data(), nullptr, nullptr);
-
-    sum += value;
+    kernel(&sum, {}, &alpha, coordinate_dofs.data(), nullptr, nullptr);
   }
 
   std::cout << "sum=" << sum << std::endl;

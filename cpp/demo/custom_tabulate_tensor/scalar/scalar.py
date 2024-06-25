@@ -5,16 +5,11 @@
 
 from basix.ufl import element
 from ufl import (
-    Coefficient,
     Constant,
     FunctionSpace,
     Mesh,
-    TestFunction,
-    TrialFunction,
     dc,
     dx,
-    grad,
-    inner,
 )
 
 e = element("Lagrange", "triangle", 1)
