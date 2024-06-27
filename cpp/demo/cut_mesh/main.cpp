@@ -12,6 +12,7 @@
 #include <dolfinx/fem/utils.h>
 
 #include <cutcells/cut_mesh.h>
+#include <cutcells/write_vtk.h>
 
 #include <cutfemx/level_set/locate_entities.h>
 #include <cutfemx/level_set/cut_entities.h>
@@ -65,4 +66,10 @@ int main(int argc, char* argv[])
   cutcells::mesh::CutCells cut_cells = cutfemx::level_set::cut_entities<T>(level_set,intersected_cells, tdim,"phi<0");
 
   cutcells::mesh::str(cut_cells);
+
+  cutcells::mesh::CutMesh cut_mesh = cutcells::mesh::create_cut_mesh(cut_cells._cut_cells);
+
+  cutcells::io::write_vtk("cut_mesh.vtu", cut_mesh._vertex_coords, cut_mesh._connectivity,
+                     cut_mesh._types,
+                     cut_mesh._gdim);
 }
