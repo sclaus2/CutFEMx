@@ -11,6 +11,8 @@
 #include <dolfinx/mesh/generation.h>
 #include <dolfinx/fem/utils.h>
 
+#include <dolfinx/io/XDMFFile.h>
+
 #include <cutcells/cut_mesh.h>
 #include <cutcells/write_vtk.h>
 
@@ -72,4 +74,11 @@ int main(int argc, char* argv[])
   cutcells::io::write_vtk("cut_mesh.vtu", cut_mesh._vertex_coords, cut_mesh._connectivity,
                      cut_mesh._types,
                      cut_mesh._gdim);
+
+  auto fido_cells = cutfemx::level_set::locate_entities<T>( level_set,tdim,"phi<=0");
+  const auto [submesh, cell_parent_map, vertex_parent_map, geom_parent_map] =
+      dolfinx::mesh::create_submesh(*mesh, tdim,fido_cells);
+
+  io::XDMFFile file_sigma(submesh.comm(), "submesh.xdmf", "w");
+  file_sigma.write_mesh(submesh);
 }

@@ -85,6 +85,18 @@ namespace cutfemx::level_set
         {
           marked_entities.push_back(entity_index);
         }
+
+        if((ls_part=="phi<=0") &&
+        ((marker_type==cutcells::cell::domain::intersected) || (marker_type==cutcells::cell::domain::inside)))
+        {
+          marked_entities.push_back(entity_index);
+        }
+
+        if((ls_part=="phi>=0") &&
+        ((marker_type==cutcells::cell::domain::intersected) || (marker_type==cutcells::cell::domain::outside)))
+        {
+          marked_entities.push_back(entity_index);
+        }
     }
 
     return marked_entities;
