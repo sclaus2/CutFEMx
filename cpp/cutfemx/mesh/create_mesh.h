@@ -9,6 +9,7 @@
 #include <dolfinx/mesh/cell_types.h>
 #include <dolfinx/fem/CoordinateElement.h>
 #include "convert.h"
+#include <cmath>
 
 #include <cutcells/cut_mesh.h>
 
@@ -142,6 +143,94 @@ namespace cutfemx::mesh
     //create cut mesh from cut cells
     //i.e. merging of cut cells
     cutcells::mesh::CutMesh cut_mesh = cutcells::mesh::create_cut_mesh(cut_cells._cut_cells);
+
+    return {create_mesh2<T>(comm, cut_mesh._vertex_coords,cut_mesh._connectivity,
+                      cutcells_to_dolfinx_cell_type(cut_mesh._types[0]), cut_mesh._gdim),
+                      std::move(cut_mesh._parent_cell_index)};
+
+  }
+
+  template <std::floating_point T>
+  std::tuple<dolfinx::mesh::Mesh<T>, std::vector<std::int32_t>> create_mesh(MPI_Comm comm, cutcells::mesh::CutCells& cut_cells,
+  const dolfinx::mesh::Mesh<T>& mesh, std::span<const std::int32_t> entities)
+  {
+    //create cut mesh from cut cells
+    //i.e. merging of cut cells
+    cutcells::mesh::CutMesh cut_mesh = cutcells::mesh::create_cut_mesh(cut_cells._cut_cells);
+
+    //add entities from background mesh to cut mesh
+
+    //get all vertices connected to entities
+    auto tdim = cut_mesh._tdim;
+    const std::vector<std::int32_t>& vertices = dolfinx::mesh::compute_incident_entities(*mesh.topology(), entities, tdim, 0);
+    std::span<const double> x_nodes = mesh.geometry().x();
+
+    std::span<const double> vertex_coords(cut_mesh._vertex_coords); // open a view
+
+    //create a map from vertices ids to vertex id in cut_mesh
+    // and add new vertices to cut_mesh
+    std::map<int32_t,int32_t> vertex_map;
+    std::size_t vertex_index = cut_mesh._num_cells;
+    std::size_t num_vertices = cut_mesh._num_vertices;
+
+    for(auto& vertex : vertices)
+    {
+      //get vertex coordinate and see if vertex coordinate already exists in cut_mesh
+      const auto vertex_coord = x_nodes.subspan(vertex*3, cut_mesh._gdim);
+      for(std::size_t v=0;v<num_vertices;v++)
+      {
+        double distance = 0.0;
+        const auto vertex_cut_mesh = vertex_coords.subspan(v*cut_mesh._gdim,cut_mesh._gdim);
+        for(std::size_t j=0;j<cut_mesh._gdim;j++)
+        {
+          distance +=(vertex_coord[j] - vertex_cut_mesh[j])*(vertex_coord[j] - vertex_cut_mesh[j]);
+        }
+
+        distance = sqrt(distance);
+
+        if(distance < 1e-12)
+        {
+          //vertex already exists
+          vertex_map[vertex] = v;
+          break;
+        }
+
+        //vertex was not found as loop did not call break
+        //then add the vertex to cut_mesh
+        if(v==num_vertices-1)
+        {
+          vertex_map[vertex] = num_vertices;
+
+          for(std::size_t j=0;j<cut_mesh._gdim;j++)
+          {
+            cut_mesh._vertex_coords.push_back(x_nodes[vertex*3+j]);
+          }
+          num_vertices++;
+        }
+      }
+    }
+
+    cut_mesh._num_vertices = num_vertices-1;
+    //Add connectivity of new entities to cut_mesh
+    //get entity to vertex map
+    auto c_to_v = mesh.topology()->connectivity(cut_mesh._tdim, 0);
+
+    //add new elements to connectivity
+    for(auto& entity : entities)
+    {
+      //get original vertices and use map to new vertex numbering
+      cut_mesh._parent_cell_index.push_back(entity);
+
+      //get vertices attached to entity
+      std::span<const int> original_vertex_ids = c_to_v->links(entity);
+      std::vector<int> new_vertex_ids(original_vertex_ids.size());
+
+      for(std::size_t i=0;i<original_vertex_ids.size();i++)
+      {
+        new_vertex_ids[i] = vertex_map[original_vertex_ids[i]];
+      }
+      cut_mesh._connectivity.push_back(new_vertex_ids);
+    }
 
     return {create_mesh2<T>(comm, cut_mesh._vertex_coords,cut_mesh._connectivity,
                       cutcells_to_dolfinx_cell_type(cut_mesh._types[0]), cut_mesh._gdim),

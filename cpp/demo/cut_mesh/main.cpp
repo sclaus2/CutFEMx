@@ -79,4 +79,9 @@ int main(int argc, char* argv[])
   const auto [dolfinx_cut_mesh, cut_cell_parent_map] = cutfemx::mesh::create_mesh<T>(mesh->comm(), cut_cells);
   io::XDMFFile file_cut_mesh(mesh->comm(), "cut_mesh.xdmf", "w");
   file_cut_mesh.write_mesh(dolfinx_cut_mesh);
+
+  auto inside_cells = cutfemx::level_set::locate_entities<T>( level_set,tdim,"phi<0");
+  const auto [dolfinx_inside_cut_mesh, inside_cut_cell_parent_map] = cutfemx::mesh::create_mesh(mesh->comm(), cut_cells, *mesh, inside_cells);
+  io::XDMFFile file_inside_cut_mesh(mesh->comm(), "inside_cut_mesh.xdmf", "w");
+  file_inside_cut_mesh.write_mesh(dolfinx_inside_cut_mesh);
 }
