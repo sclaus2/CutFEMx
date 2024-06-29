@@ -19,6 +19,8 @@
 #include <cutfemx/level_set/locate_entities.h>
 #include <cutfemx/level_set/cut_entities.h>
 
+#include <cutfemx/mesh/create_mesh.h>
+
 using T = double;
 
 int main(int argc, char* argv[])
@@ -67,18 +69,14 @@ int main(int argc, char* argv[])
   auto intersected_cells = cutfemx::level_set::locate_entities<T>( level_set,tdim,"phi=0");
   cutcells::mesh::CutCells cut_cells = cutfemx::level_set::cut_entities<T>(level_set,intersected_cells, tdim,"phi<0");
 
-  cutcells::mesh::str(cut_cells);
-
-  cutcells::mesh::CutMesh cut_mesh = cutcells::mesh::create_cut_mesh(cut_cells._cut_cells);
-
-  cutcells::io::write_vtk("cut_mesh.vtu", cut_mesh._vertex_coords, cut_mesh._connectivity,
-                     cut_mesh._types,
-                     cut_mesh._gdim);
-
   auto fido_cells = cutfemx::level_set::locate_entities<T>( level_set,tdim,"phi<=0");
   const auto [submesh, cell_parent_map, vertex_parent_map, geom_parent_map] =
       dolfinx::mesh::create_submesh(*mesh, tdim,fido_cells);
 
   io::XDMFFile file_sigma(submesh.comm(), "submesh.xdmf", "w");
   file_sigma.write_mesh(submesh);
+
+  const auto [dolfinx_cut_mesh, cut_cell_parent_map] = cutfemx::mesh::create_mesh<T>(mesh->comm(), cut_cells);
+  io::XDMFFile file_cut_mesh(mesh->comm(), "cut_mesh.xdmf", "w");
+  file_cut_mesh.write_mesh(dolfinx_cut_mesh);
 }
