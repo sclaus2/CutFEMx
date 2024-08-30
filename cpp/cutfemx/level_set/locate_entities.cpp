@@ -15,7 +15,8 @@ namespace cutfemx::level_set
   template <std::floating_point T>
   std::vector<int32_t> locate_entities(std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
                                        const int& dim,
-                                       const std::string& ls_part)
+                                       const std::string& ls_part,
+                                       bool include_ghost)
   {
     assert(level_set->function_space()->mesh());
     std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh = level_set->function_space()->mesh();
@@ -27,7 +28,12 @@ namespace cutfemx::level_set
       entity_map = mesh->topology()->index_map(dim);
     }
 
-    std::int32_t num_entities = entity_map->size_local() + entity_map->num_ghosts();
+    std::int32_t num_entities = entity_map->size_local();
+    if(include_ghost)
+    {
+      num_entities += entity_map->num_ghosts();
+    }
+
     std::vector<int32_t> entities(num_entities);
     std::iota (std::begin(entities), std::end(entities), 0);
 
@@ -105,7 +111,8 @@ namespace cutfemx::level_set
 //----------------------------------------------------------------------------------------
   template std::vector<int32_t> locate_entities<double>(std::shared_ptr<const dolfinx::fem::Function<double>> level_set,
                                        const int& dim,
-                                       const std::string& ls_part);
+                                       const std::string& ls_part,
+                                       bool include_ghost);
 
   template std::vector<int32_t> locate_entities<double>(std::shared_ptr<const dolfinx::fem::Function<double>> level_set,
                             std::span<const int32_t> entities,

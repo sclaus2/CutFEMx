@@ -80,8 +80,15 @@ int main(int argc, char* argv[])
   io::XDMFFile file_cut_mesh(mesh->comm(), "cut_mesh.xdmf", "w");
   file_cut_mesh.write_mesh(dolfinx_cut_mesh);
 
-  auto inside_cells = cutfemx::level_set::locate_entities<T>( level_set,tdim,"phi<0");
-  const auto [dolfinx_inside_cut_mesh, inside_cut_cell_parent_map] = cutfemx::mesh::create_mesh(mesh->comm(), cut_cells, *mesh, inside_cells);
-  io::XDMFFile file_inside_cut_mesh(mesh->comm(), "inside_cut_mesh.xdmf", "w");
-  file_inside_cut_mesh.write_mesh(dolfinx_inside_cut_mesh);
+  // auto inside_cells = cutfemx::level_set::locate_entities<T>( level_set,tdim,"phi<0");
+  // const auto [dolfinx_inside_cut_mesh, inside_cut_cell_parent_map] = cutfemx::mesh::create_mesh(mesh->comm(), cut_cells, *mesh, inside_cells);
+  // const auto cut_mesh_ptr = std::make_shared<dolfinx::mesh::Mesh<T>>(std::move(dolfinx_inside_cut_mesh));
+  // // Create a scalar function space
+  // auto V_cut = std::make_shared<fem::FunctionSpace<T>>(
+  //     dolfinx::fem::create_functionspace(cut_mesh_ptr, e));
+  // auto ls_cut = std::make_shared<fem::Function<T>>(V_cut);
+  // ls_cut->interpolate(*level_set,inside_cut_cell_parent_map);
+  // io::XDMFFile file_inside_cut_mesh(mesh->comm(), "inside_cut_mesh.xdmf", "w");
+  // file_inside_cut_mesh.write_mesh(dolfinx_inside_cut_mesh);
+  // file_inside_cut_mesh.write_function(*ls_cut,0.0);
 }

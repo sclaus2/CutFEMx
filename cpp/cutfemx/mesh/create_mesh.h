@@ -18,7 +18,7 @@ namespace cutfemx::mesh
   // Copy of create_mesh from utils.h in dolfinx without re-ordering and partitioning
   template <std::floating_point T>
   dolfinx::mesh::Mesh<T> create_mesh(
-      MPI_Comm comm, std::span<const std::int64_t> cells,
+      MPI_Comm comm, std::span<std::int64_t> cells,
       const dolfinx::fem::CoordinateElement<T>& element,
       std::span<const T> x, std::array<std::size_t, 2> xshape)
   {
@@ -42,6 +42,7 @@ namespace cutfemx::mesh
     std::vector<int> ghost_owners;
     cells1 = graph::regular_adjacency_list(
         std::vector(cells.begin(), cells.end()), num_cell_nodes);
+
     std::int64_t offset(0), num_owned(cells1.num_nodes());
     MPI_Exscan(&num_owned, &offset, 1, MPI_INT64_T, MPI_SUM, comm);
     original_idx1.resize(cells1.num_nodes());
@@ -114,6 +115,7 @@ namespace cutfemx::mesh
                       const dolfinx::mesh::CellType& cell_type, const unsigned long &gdim)
   {
     //@todo: support hybrid meshes
+    // currently only linear meshes are supported
     dolfinx::fem::CoordinateElement<T> element(cell_type, 1);
 
     std::array<std::size_t, 2> xshape = {vertex_coordinates.size() / gdim, gdim};
@@ -125,14 +127,26 @@ namespace cutfemx::mesh
     }
     std::vector<std::int64_t> cells(num_entries);
     int cnt = 0;
+
+    // determine offset for vertex numbering as dolfinx expects a global numbering scheme for
+    // vertex connectivity of the cells
+    std::int64_t v_offset(0), num_v_owned(xshape[0]);
+    MPI_Exscan(&num_v_owned, &v_offset, 1, MPI_INT64_T, MPI_SUM, comm);
+
     for(std::size_t i=0;i<connectivity.size();i++)
     {
       for(std::size_t j=0;j<connectivity[i].size();j++)
       {
-        cells[cnt] = connectivity[i][j];
+        cells[cnt] = connectivity[i][j]+v_offset;
         cnt++;
       }
     }
+
+    //these cut meshes are just for visualization purposes hence no ghost cells are required
+    dolfinx::mesh::GhostMode ghost_mode = dolfinx::mesh::GhostMode::shared_facet;
+    //return create_mesh(comm, comm, cells, element, comm, vertex_coordinates, xshape,
+                         //create_cell_partitioner(ghost_mode));
+
     return create_mesh<T>(comm, cells, element, vertex_coordinates, xshape);
   }
 
@@ -151,12 +165,14 @@ namespace cutfemx::mesh
   }
 
   template <std::floating_point T>
-  std::tuple<dolfinx::mesh::Mesh<T>, std::vector<std::int32_t>> create_mesh(MPI_Comm comm, cutcells::mesh::CutCells& cut_cells,
+  std::tuple<dolfinx::mesh::Mesh<T>, std::vector<std::int32_t>, std::int32_t> create_mesh(MPI_Comm comm, cutcells::mesh::CutCells& cut_cells,
   const dolfinx::mesh::Mesh<T>& mesh, std::span<const std::int32_t> entities)
   {
     //create cut mesh from cut cells
     //i.e. merging of cut cells
     cutcells::mesh::CutMesh cut_mesh = cutcells::mesh::create_cut_mesh(cut_cells._cut_cells);
+    //determine offset of all cells that are new cut cells
+    std::int32_t num_cut_cells = cut_mesh._num_vertices;
 
     //add entities from background mesh to cut mesh
 
@@ -234,7 +250,7 @@ namespace cutfemx::mesh
 
     return {create_mesh2<T>(comm, cut_mesh._vertex_coords,cut_mesh._connectivity,
                       cutcells_to_dolfinx_cell_type(cut_mesh._types[0]), cut_mesh._gdim),
-                      std::move(cut_mesh._parent_cell_index)};
+                      std::move(cut_mesh._parent_cell_index), num_cut_cells};
 
   }
 }

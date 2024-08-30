@@ -17,7 +17,8 @@ namespace cutfemx::level_set
   template <std::floating_point T>
   std::vector<int32_t> locate_entities(std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
                                        const int& dim,
-                                       const std::string& ls_part);
+                                       const std::string& ls_part,
+                                       bool include_ghost = true);
   template <std::floating_point T>
   std::vector<int32_t> locate_entities(std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
                             std::span<const int32_t> entities,
