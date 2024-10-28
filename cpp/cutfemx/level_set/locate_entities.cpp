@@ -49,7 +49,7 @@ namespace cutfemx::level_set
   {
     assert(level_set->function_space()->mesh());
     std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh = level_set->function_space()->mesh();
-    assert(level_set->function_space()->dofmap(););
+    assert(level_set->function_space()->dofmap());
     std::shared_ptr<const  dolfinx::fem::DofMap> dofmap = level_set->function_space()->dofmap();
 
     auto cell_dim = mesh->topology()->dim();
@@ -75,7 +75,7 @@ namespace cutfemx::level_set
         for (std::size_t i = 0; i < dofs.size(); ++i)
             ls_vals[i] = ls_values[dofs[i]];
 
-        cutcells::cell::domain marker_type = cutcells::cell::classify_cell_domain(ls_vals);
+        cutcells::cell::domain marker_type = cutcells::cell::classify_cell_domain<T>(ls_vals);
 
         if((marker_type==cutcells::cell::domain::inside) && (ls_part=="phi<0"))
         {
@@ -115,6 +115,16 @@ namespace cutfemx::level_set
                                        bool include_ghost);
 
   template std::vector<int32_t> locate_entities<double>(std::shared_ptr<const dolfinx::fem::Function<double>> level_set,
+                            std::span<const int32_t> entities,
+                            const int& dim,
+                            const std::string& ls_part);
+
+  template std::vector<int32_t> locate_entities<float>(std::shared_ptr<const dolfinx::fem::Function<float>> level_set,
+                                       const int& dim,
+                                       const std::string& ls_part,
+                                       bool include_ghost);
+
+  template std::vector<int32_t> locate_entities<float>(std::shared_ptr<const dolfinx::fem::Function<float>> level_set,
                             std::span<const int32_t> entities,
                             const int& dim,
                             const std::string& ls_part);

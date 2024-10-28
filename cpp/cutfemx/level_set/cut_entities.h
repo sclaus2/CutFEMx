@@ -20,12 +20,12 @@ namespace cutfemx::level_set
     // assuming as the level set function represents a geometry and not a field that level set function
     // can only be double or float
     template <std::floating_point U>
-    cutcells::mesh::CutCells cut_entities(const std::shared_ptr<const dolfinx::fem::Function<U>> level_set,
+    cutcells::mesh::CutCells<U> cut_entities(const std::shared_ptr<const dolfinx::fem::Function<U>> level_set,
                 std::span<const int32_t> entities, const int &tdim, const std::string& cut_type);
 
     //version without computation of dof coordinates
     template <std::floating_point U>
-    cutcells::mesh::CutCells cut_entities(const std::shared_ptr<const dolfinx::fem::Function<U>> level_set,
+    cutcells::mesh::CutCells<U> cut_entities(const std::shared_ptr<const dolfinx::fem::Function<U>> level_set,
                                                 std::span<const U> dof_coordinates,
                                                 std::span<const int32_t> entities,
                                                 const int& tdim,

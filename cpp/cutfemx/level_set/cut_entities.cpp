@@ -23,22 +23,21 @@
 namespace cutfemx::level_set
 {
     template <std::floating_point U>
-    cutcells::mesh::CutCells cut_entities(const std::shared_ptr<const dolfinx::fem::Function<U>> level_set,
+    cutcells::mesh::CutCells<U> cut_entities(const std::shared_ptr<const dolfinx::fem::Function<U>> level_set,
                                           std::span<const U> dof_coordinates,
                                           std::span<const int32_t> entities,
                                           const int& tdim,
                                           const std::string& cut_type)
     {
-        cutcells::mesh::CutCells cut_mesh;
+        cutcells::mesh::CutCells<U> cut_mesh;
 
         auto basix_element = level_set->function_space()->element()->basix_element();
-        assert(basix_element);
         int degree = basix_element.degree();
         basix::element::family family = basix_element.family();
         if(family!=basix::element::family::P)
           throw std::invalid_argument( "Only Lagrange elements are supported for cutting algorithm" );
 
-        assert(level_set->function_space()->dofmap(););
+        assert(level_set->function_space()->dofmap());
         std::shared_ptr<const dolfinx::fem::DofMap> dofmap = level_set->function_space()->dofmap();
         assert(level_set->function_space()->mesh());
         std::shared_ptr<const dolfinx::mesh::Mesh<U>> mesh = level_set->function_space()->mesh();
@@ -89,7 +88,7 @@ namespace cutfemx::level_set
             for (std::size_t i = 0; i < dofs.size(); ++i)
                 ls_vals[i] = ls_values[dofs[i]];
 
-            if(cutcells::cell::is_intersected(ls_vals))
+            if(cutcells::cell::is_intersected<U>(ls_vals))
             {
                 num_cut_cells++;
             }
@@ -112,7 +111,7 @@ namespace cutfemx::level_set
           for (std::size_t i = 0; i < dofs.size(); ++i)
               ls_vals[i] = ls_values[dofs[i]];
 
-          if(cutcells::cell::is_intersected(ls_vals))
+          if(cutcells::cell::is_intersected<U>(ls_vals))
           {
               std::vector<U> vertex_coordinates(dofs.size()*gdim);
 
@@ -124,16 +123,16 @@ namespace cutfemx::level_set
                   }
               }
 
-              cutcells::cell::CutCell cut_cell;
+              cutcells::cell::CutCell<U> cut_cell;
 
               switch(degree)
               {
                 case 1: {
-                            cut(cutcells_cell_type,vertex_coordinates,gdim,ls_vals,cut_type,cut_cell,true);
+                            cut<U>(cutcells_cell_type,vertex_coordinates,gdim,ls_vals,cut_type,cut_cell,true);
                             break;
                         }
                 case 2: {
-                            cut_cell = higher_order_cut(cutcells_cell_type,vertex_coordinates,gdim,ls_vals,cut_type,true);
+                            cut_cell = higher_order_cut<U>(cutcells_cell_type,vertex_coordinates,gdim,ls_vals,cut_type,true);
                             break;
                         }
                 default:{
@@ -173,22 +172,30 @@ namespace cutfemx::level_set
     }
 
     template <std::floating_point U>
-    cutcells::mesh::CutCells cut_entities(const std::shared_ptr<const dolfinx::fem::Function<U>> level_set,
+    cutcells::mesh::CutCells<U> cut_entities(const std::shared_ptr<const dolfinx::fem::Function<U>> level_set,
                 std::span<const int32_t> entities, const int &tdim, const std::string& cut_type)
     {
       const std::vector<U> dof_coordinates = level_set->function_space()->tabulate_dof_coordinates(false);
-      const cutcells::mesh::CutCells& cut_mesh = cut_entities<U>(level_set, dof_coordinates, entities, tdim, cut_type);
+      const cutcells::mesh::CutCells<U>& cut_mesh = cut_entities<U>(level_set, dof_coordinates, entities, tdim, cut_type);
 
       return cut_mesh;
     }
 
 //----------------------------------------------------------------------------------------
-    template cutcells::mesh::CutCells cut_entities<double>(const std::shared_ptr<const dolfinx::fem::Function<double>> level_set,
+    template cutcells::mesh::CutCells<double> cut_entities<double>(const std::shared_ptr<const dolfinx::fem::Function<double>> level_set,
                                           std::span<const double> dof_coordinates,
                                           std::span<const int32_t> entities,
                                           const int& tdim,
                                           const std::string& cut_type);
-    template cutcells::mesh::CutCells cut_entities<double>(const std::shared_ptr<const dolfinx::fem::Function<double>> level_set,
+    template cutcells::mesh::CutCells<double> cut_entities<double>(const std::shared_ptr<const dolfinx::fem::Function<double>> level_set,
+                std::span<const int32_t> entities, const int &tdim, const std::string& cut_type);
+
+    template cutcells::mesh::CutCells<float> cut_entities<float>(const std::shared_ptr<const dolfinx::fem::Function<float>> level_set,
+                                          std::span<const float> dof_coordinates,
+                                          std::span<const int32_t> entities,
+                                          const int& tdim,
+                                          const std::string& cut_type);
+    template cutcells::mesh::CutCells<float> cut_entities<float>(const std::shared_ptr<const dolfinx::fem::Function<float>> level_set,
                 std::span<const int32_t> entities, const int &tdim, const std::string& cut_type);
 //----------------------------------------------------------------------------------------
 
