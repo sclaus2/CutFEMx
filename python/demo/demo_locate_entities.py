@@ -2,11 +2,7 @@ import numpy as np
 from mpi4py import MPI
 
 from cutfemx.level_set import locate_entities
-
-#from dolfinx.cpp.fem import Function_float64
-
-from dolfinx import fem, io, mesh, plot
-from dolfinx.mesh import meshtags
+from dolfinx import fem, mesh, plot
 
 try:
     import pyvista
