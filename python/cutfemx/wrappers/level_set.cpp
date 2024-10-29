@@ -12,7 +12,6 @@
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
-#include <nanobind/stl/map.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <span>
 
@@ -43,6 +42,19 @@ void declare_level_set(nb::module_& m, std::string type)
 
              }
              , "locate entities");
+
+  m.def("locate_entities_part", [](std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
+                            nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> entities,
+                            const int& dim,
+                            const std::string& ls_part)
+          {
+            return dolfinx_wrappers::as_nbarray(cutfemx::level_set::locate_entities(level_set,
+                            std::span(entities.data(), entities.size()),
+                            dim,
+                            ls_part));
+
+            }
+            , "locate entities_part");
 }
 
 } // namespace
