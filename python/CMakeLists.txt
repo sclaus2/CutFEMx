@@ -55,11 +55,17 @@ execute_process(
   ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
+find_package(CutCells REQUIRED CONFIG)
+if(CutCells_FOUND)
+  message(STATUS "Found CutCells at ${CutCells_DIR}")
+endif()
+
 
 find_package(CUTFEMX REQUIRED CONFIG)
 if(CUTFEMX_FOUND)
   message(STATUS "Found CutFEMx at ${CUTFEMX_DIR}")
 endif()
+
 
 # Create the binding library nanobind handles its own calls to
 # target_link_libraries
@@ -99,6 +105,7 @@ target_compile_definitions(cutfemx_cpp PRIVATE HAS_PETSC4PY)
 
 # Add DOLFINx libraries
 target_link_libraries(cutfemx_cpp PRIVATE dolfinx)
+target_link_libraries(cutfemx_cpp PRIVATE CUTCELLS::cutcells)
 target_link_libraries(cutfemx_cpp PRIVATE cutfemx)
 
 # Add DOLFINx python, petsc4py and mpi4py include directories (with DOLFINx C++

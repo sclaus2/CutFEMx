@@ -151,6 +151,8 @@ namespace cutfemx::level_set
                   cell_index = e_to_c->links(entity_index)[0];
               }
               cut_mesh._parent_map[cut_cell_id] = cell_index;
+              cut_mesh._cut_cells[cut_cell_id]._parent_cell_index.resize(1);
+              cut_mesh._cut_cells[cut_cell_id]._parent_cell_index[0] = cell_index;
               int num_vertices = cut_cell._vertex_coords.size()/gdim;
               total_number_vertices += num_vertices;
 
@@ -196,7 +198,7 @@ namespace cutfemx::level_set
                                           const int& tdim,
                                           const std::string& cut_type);
     template cutcells::mesh::CutCells<float> cut_entities<float>(const std::shared_ptr<const dolfinx::fem::Function<float>> level_set,
-                std::span<const int32_t> entities, const int &tdim, const std::string& cut_type);
+                std::span<const int32_t> entities, const int &tdim, const std::string& cut_type); 
 //----------------------------------------------------------------------------------------
 
 }

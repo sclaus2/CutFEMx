@@ -31,7 +31,7 @@ int main(int argc, char* argv[])
   auto celltype = dolfinx::mesh::CellType::triangle;
   int degree = 1;
 
-  long unsigned int N = 11;
+  int N = 11;
 
   auto part = dolfinx::mesh::create_cell_partitioner(dolfinx::mesh::GhostMode::shared_facet);
   auto mesh = std::make_shared<dolfinx::mesh::Mesh<T>>(
@@ -67,7 +67,7 @@ int main(int argc, char* argv[])
   //cutting of intersected cells
   int tdim = mesh->topology()->dim();
   auto intersected_cells = cutfemx::level_set::locate_entities<T>( level_set,tdim,"phi=0");
-  cutcells::mesh::CutCells cut_cells = cutfemx::level_set::cut_entities<T>(level_set,intersected_cells, tdim,"phi<0");
+  cutcells::mesh::CutCells<T> cut_cells = cutfemx::level_set::cut_entities<T>(level_set,intersected_cells, tdim,"phi<0");
 
   auto fido_cells = cutfemx::level_set::locate_entities<T>( level_set,tdim,"phi<=0");
   const auto [submesh, cell_parent_map, vertex_parent_map, geom_parent_map] =
@@ -76,13 +76,19 @@ int main(int argc, char* argv[])
   io::XDMFFile file_sigma(submesh.comm(), "submesh.xdmf", "w");
   file_sigma.write_mesh(submesh);
 
-  const auto [dolfinx_cut_mesh, cut_cell_parent_map] = cutfemx::mesh::create_mesh<T>(mesh->comm(), cut_cells);
-  io::XDMFFile file_cut_mesh(mesh->comm(), "cut_mesh.xdmf", "w");
+  auto entity_map = mesh->topology()->index_map(tdim);
+  int num_local_cells = entity_map->size_local();
+
+  const auto [dolfinx_cut_mesh, cut_cell_parent_map] = cutfemx::mesh::create_cut_mesh<T>(mesh->comm(), num_local_cells, cut_cells);
+  io::XDMFFile file_cut_mesh(mesh->comm(), "cut_cells.xdmf", "w");
   file_cut_mesh.write_mesh(dolfinx_cut_mesh);
 
-  // auto inside_cells = cutfemx::level_set::locate_entities<T>( level_set,tdim,"phi<0");
-  // const auto [dolfinx_inside_cut_mesh, inside_cut_cell_parent_map] = cutfemx::mesh::create_mesh(mesh->comm(), cut_cells, *mesh, inside_cells);
-  // const auto cut_mesh_ptr = std::make_shared<dolfinx::mesh::Mesh<T>>(std::move(dolfinx_inside_cut_mesh));
+  auto inside_cells = cutfemx::level_set::locate_entities<T>( level_set,tdim,"phi<0");
+  const auto [dolfinx_inside_cut_mesh, inside_cut_cell_parent_map] = cutfemx::mesh::create_cut_mesh<T>(mesh->comm(), cut_cells, *mesh, inside_cells);
+  io::XDMFFile file_cut_inside_mesh(mesh->comm(), "cut_mesh.xdmf", "w");
+  file_cut_inside_mesh.write_mesh(dolfinx_inside_cut_mesh);
+
+  //const auto cut_mesh_ptr = std::make_shared<dolfinx::mesh::Mesh<T>>(std::move(dolfinx_inside_cut_mesh));
   // // Create a scalar function space
   // auto V_cut = std::make_shared<fem::FunctionSpace<T>>(
   //     dolfinx::fem::create_functionspace(cut_mesh_ptr, e));

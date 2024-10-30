@@ -29,3 +29,4 @@ def locate_entities_part(
     ls_part: str
 ) -> npt.NDArray[np.int32]:
   return _cpp.level_set.locate_entities_part(level_set._cpp_object,entities,dim,ls_part)
+

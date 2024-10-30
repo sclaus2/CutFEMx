@@ -10,7 +10,7 @@
 
 namespace cutfemx::mesh
 {
-  cutcells::cell::type dolfinx_to_cutcells_cell_type(const dolfinx::mesh::CellType& cell_type)
+  static cutcells::cell::type dolfinx_to_cutcells_cell_type(const dolfinx::mesh::CellType& cell_type)
   {
     cutcells::cell::type cutcells_cell_type;
     switch(cell_type)
@@ -28,7 +28,7 @@ namespace cutfemx::mesh
     return cutcells_cell_type;
   }
 
-  dolfinx::mesh::CellType cutcells_to_dolfinx_cell_type(const cutcells::cell::type& cell_type)
+  static dolfinx::mesh::CellType cutcells_to_dolfinx_cell_type(const cutcells::cell::type& cell_type)
   {
     dolfinx::mesh::CellType dolfinx_cell_type;
     switch(cell_type)

@@ -11,9 +11,20 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_BUILD_TYPE Debug)
 add_compile_options(-Wall -Wextra -pedantic)
 
-find_package(CutCells REQUIRED)
+find_package(CUTCELLS REQUIRED)
+if(CUTCELLS_FOUND)
+  message(STATUS "Found CutCells at ${CutCells_DIR}")
+endif()
+
 find_package(DOLFINX REQUIRED)
+if(DOLFINX_FOUND)
+  message(STATUS "Found DOLFINx at ${DOLFINX_DIR}")
+endif()
+
 find_package(CUTFEMX REQUIRED)
+if(CUTFEMX_FOUND)
+  message(STATUS "Found CutFEMx at ${CUTFEMX_DIR}")
+endif()
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
