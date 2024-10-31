@@ -220,8 +220,10 @@ namespace cutfemx::mesh
 
   //return Mesh and parent cell map as this can be used for interpolation
   template <std::floating_point T>
-  std::tuple<dolfinx::mesh::Mesh<T>, std::vector<std::int64_t>> create_cut_mesh(MPI_Comm comm, const int& num_local_cells, cutcells::mesh::CutCells<T>& cut_cells)
+  CutMesh<T> create_cut_mesh(MPI_Comm comm, const int& num_local_cells, cutcells::mesh::CutCells<T>& cut_cells)
   {
+    CutMesh<T> cut_mesh;
+
     //create local meshes with local vertex numbering
     std::size_t gdim = cut_cells._cut_cells[0]._gdim;
     std::size_t tdim = cut_cells._cut_cells[0]._tdim;
@@ -291,11 +293,13 @@ namespace cutfemx::mesh
     const auto [dolfinx_cut_mesh, original_idx] = create_mesh<T>(comm, comm, cells, element, comm, vertex_coords, xshape, nullptr);
 
     //determine parent map for reordered cells
-    std::vector<int64_t> parent_index(num_cells);
+    cut_mesh._cut_mesh = std::make_shared<dolfinx::mesh::Mesh<T>>(dolfinx_cut_mesh);
+    cut_mesh._parent_index.resize(num_cells);
+    cut_mesh._is_cut_cell.assign(num_cells, true);
 
     for(std::size_t i=0;i<original_idx.size();i++)
     {
-      parent_index[i] = original_parent_index[original_idx[i]];
+      cut_mesh._parent_index[i] = original_parent_index[original_idx[i]];
     }
 
     // std::cout << "original_parent_index=[";
@@ -308,13 +312,16 @@ namespace cutfemx::mesh
     //     std::cout << i << ',';
     // std::cout << "]" << std::endl;
 
-    return {dolfinx_cut_mesh, parent_index};
+    return cut_mesh;
   }
 
   template <std::floating_point T>
-  std::tuple<dolfinx::mesh::Mesh<T>, std::vector<std::int64_t>> create_cut_mesh(MPI_Comm comm, cutcells::mesh::CutCells<T>& cut_cells,
+  CutMesh<T> create_cut_mesh(MPI_Comm comm, cutcells::mesh::CutCells<T>& cut_cells,
                                   const dolfinx::mesh::Mesh<T>& mesh, std::span<const std::int32_t> entities)
   {
+    CutMesh<T> cut_mesh;
+    cut_mesh._bg_mesh = std::make_shared<dolfinx::mesh::Mesh<T>>(mesh);
+
     //get vertices and cells from background mesh entities
     auto tdim = mesh.topology()->dim();
     std::size_t gdim = mesh.geometry().dim();
@@ -379,6 +386,8 @@ namespace cutfemx::mesh
 
     std::vector<int64_t> cells(num_cells*num_cell_vertices);
     std::vector<int> original_parent_index(num_cells);
+    std::vector<bool> original_is_cut_cell(num_cells);
+
     v_cnt = 0; //vertex counter
     int c_cnt = 0; //local cell counter
     int cut_cell_id = 0; // cut cell counter
@@ -396,6 +405,7 @@ namespace cutfemx::mesh
       }
 
       original_parent_index[c_cnt] = entity;
+      original_is_cut_cell[c_cnt] = false;
       c_cnt++;
     }
 
@@ -416,6 +426,7 @@ namespace cutfemx::mesh
           v_cnt++;
         }
         original_parent_index[c_cnt] = cut_cell._parent_cell_index[0];
+        original_is_cut_cell[c_cnt] = true;
         c_cnt++;
       }
       cut_cell_id++;
@@ -428,30 +439,33 @@ namespace cutfemx::mesh
     //create global vertex numbering and call create_mesh function based on dolfinx implementation
     const auto [dolfinx_cut_mesh, original_idx] = create_mesh<T>(comm, comm, cells, element, comm, vertex_coords, xshape, nullptr);
 
-    //determine parent map for reordered cells
-    std::vector<int64_t> parent_index(num_cells);
+    //determine parent map and if it is a cut cell for reordered cells
+    cut_mesh._cut_mesh = std::make_shared<dolfinx::mesh::Mesh<T>>(dolfinx_cut_mesh);
+    cut_mesh._parent_index.resize(num_cells);
+    cut_mesh._is_cut_cell.resize(num_cells);
 
     for(std::size_t i=0;i<original_idx.size();i++)
     {
-      parent_index[i] = original_parent_index[original_idx[i]];
+      cut_mesh._parent_index[i] = original_parent_index[original_idx[i]];
+      cut_mesh._is_cut_cell[i] = original_is_cut_cell[original_idx[i]];
     }
 
-    return {dolfinx_cut_mesh, parent_index};
+    return cut_mesh;
   }
 
   //----------------------------------------------------------------------
-    template
-  std::tuple<dolfinx::mesh::Mesh<double>, std::vector<std::int64_t>> create_cut_mesh(MPI_Comm comm, const int& num_local_cells, cutcells::mesh::CutCells<double>& cut_cells);
+  template
+  CutMesh<double> create_cut_mesh(MPI_Comm comm, const int& num_local_cells, cutcells::mesh::CutCells<double>& cut_cells);
 
   template
-  std::tuple<dolfinx::mesh::Mesh<float>, std::vector<std::int64_t>> create_cut_mesh(MPI_Comm comm, const int& num_local_cells, cutcells::mesh::CutCells<float>& cut_cells);
+  CutMesh<float> create_cut_mesh(MPI_Comm comm, const int& num_local_cells, cutcells::mesh::CutCells<float>& cut_cells);
 
   template
-  std::tuple<dolfinx::mesh::Mesh<double>, std::vector<std::int64_t>> create_cut_mesh(MPI_Comm comm, cutcells::mesh::CutCells<double>& cut_cells,
+  CutMesh<double> create_cut_mesh(MPI_Comm comm, cutcells::mesh::CutCells<double>& cut_cells,
                                   const dolfinx::mesh::Mesh<double>& mesh, std::span<const std::int32_t> entities);
 
   template
-  std::tuple<dolfinx::mesh::Mesh<float>, std::vector<std::int64_t>> create_cut_mesh(MPI_Comm comm, cutcells::mesh::CutCells<float>& cut_cells,
+  CutMesh<float> create_cut_mesh(MPI_Comm comm, cutcells::mesh::CutCells<float>& cut_cells,
                                   const dolfinx::mesh::Mesh<float>& mesh, std::span<const std::int32_t> entities);
 
   //----------------------------------------------------------------------
