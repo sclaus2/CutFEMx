@@ -7,6 +7,7 @@
 #include <basix/finite-element.h>
 
 #include <dolfinx/mesh/Mesh.h>
+#include <dolfinx/mesh/MeshTags.h>
 #include <dolfinx/mesh/utils.h>
 #include <dolfinx/mesh/generation.h>
 #include <dolfinx/fem/utils.h>
@@ -83,10 +84,24 @@ int main(int argc, char* argv[])
   io::XDMFFile file_cut_mesh(mesh->comm(), "cut_cells.xdmf", "w");
   file_cut_mesh.write_mesh(dolfinx_cut_mesh);
 
-  auto inside_cells = cutfemx::level_set::locate_entities<T>( level_set,tdim,"phi<0");
+  auto inside_cells = cutfemx::level_set::locate_entities<T>( level_set,tdim,"phi<0",false);
   const auto [dolfinx_inside_cut_mesh, inside_cut_cell_parent_map] = cutfemx::mesh::create_cut_mesh<T>(mesh->comm(), cut_cells, *mesh, inside_cells);
+
+  int num_local_cells_cut = dolfinx_inside_cut_mesh.topology()->index_map(tdim)->size_local();
+
+  std::vector<std::int32_t> cells(num_local_cells_cut);
+  std::iota(cells.begin(), cells.end(), 0);
+  const int rank = dolfinx::MPI::rank(mesh->comm());
+  std::vector<std::int32_t> values(num_local_cells_cut, rank);
+  dolfinx::mesh::MeshTags<std::int32_t> cell_marker(dolfinx_inside_cut_mesh.topology(), tdim,
+                                                    cells, values);
+
+
   io::XDMFFile file_cut_inside_mesh(mesh->comm(), "cut_mesh.xdmf", "w");
   file_cut_inside_mesh.write_mesh(dolfinx_inside_cut_mesh);
+  file_cut_inside_mesh.write_meshtags(
+             cell_marker, dolfinx_inside_cut_mesh.geometry(),"/Xdmf/Domain/Grid[@Name='mesh']/Geometry");
+
 
   //const auto cut_mesh_ptr = std::make_shared<dolfinx::mesh::Mesh<T>>(std::move(dolfinx_inside_cut_mesh));
   // // Create a scalar function space
