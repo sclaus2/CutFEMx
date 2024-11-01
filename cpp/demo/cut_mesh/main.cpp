@@ -21,6 +21,7 @@
 #include <cutfemx/level_set/cut_entities.h>
 
 #include <cutfemx/mesh/create_mesh.h>
+#include <cutfemx/fem/interpolate.h>
 
 using T = double;
 
@@ -32,7 +33,7 @@ int main(int argc, char* argv[])
   auto celltype = dolfinx::mesh::CellType::triangle;
   int degree = 1;
 
-  int N = 11;
+  int N = 21;
 
   auto part = dolfinx::mesh::create_cell_partitioner(dolfinx::mesh::GhostMode::shared_facet);
   auto mesh = std::make_shared<dolfinx::mesh::Mesh<T>>(
@@ -91,11 +92,12 @@ int main(int argc, char* argv[])
   file_cut_inside_mesh.write_mesh(*cut_mesh_inside._cut_mesh);
 
   // Create a scalar function space
-  auto V_cut = std::make_shared<fem::FunctionSpace<T>>(
-      dolfinx::fem::create_functionspace(cut_mesh_inside._cut_mesh, e));
-  auto ls_cut = std::make_shared<fem::Function<T>>(V_cut);
-  // ls_cut->interpolate(*level_set,cut_mesh_inside._parent_index);
-  // io::XDMFFile file_inside_cut_mesh(mesh->comm(), "inside_cut_mesh.xdmf", "w");
-  // file_inside_cut_mesh.write_mesh(*cut_mesh_inside._cut_mesh);
-  // file_inside_cut_mesh.write_function(*ls_cut,0.0);
+  // auto V_cut = std::make_shared<fem::FunctionSpace<T>>(
+  //     dolfinx::fem::create_functionspace(cut_mesh_inside._cut_mesh, e));
+  // auto ls_cut = std::make_shared<fem::Function<T>>(V_cut);
+
+  auto ls_cut = cutfemx::fem::create_cut_function<T>(*level_set,cut_mesh_inside);
+  io::XDMFFile file_inside_cut_mesh(mesh->comm(), "inside_cut_mesh.xdmf", "w");
+  file_inside_cut_mesh.write_mesh(*cut_mesh_inside._cut_mesh);
+  file_inside_cut_mesh.write_function(ls_cut,0.0);
 }

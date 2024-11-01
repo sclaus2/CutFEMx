@@ -43,6 +43,8 @@ namespace cutfemx::mesh
     std::vector<std::int64_t> cells1;
     std::vector<std::int64_t> original_idx1;
     std::vector<int> ghost_owners;
+    std::int64_t offset = 0;
+
     if (partitioner)
     {
       spdlog::info("Using partitioner with {} cell data", cells.size());
@@ -68,7 +70,6 @@ namespace cutfemx::mesh
     {
       cells1 = std::vector<std::int64_t>(cells.begin(), cells.end());
       assert(cells1.size() % num_cell_nodes == 0);
-      std::int64_t offset = 0;
       std::int64_t num_owned = cells1.size() / num_cell_nodes;
       MPI_Exscan(&num_owned, &offset, 1, MPI_INT64_T, MPI_SUM, comm);
       original_idx1.resize(num_owned);
@@ -150,8 +151,14 @@ namespace cutfemx::mesh
     dolfinx::mesh::Geometry geometry
         = create_geometry(topology, element, nodes1, cells1, coords, xshape[1]);
 
+    //keep track of reordering but keep local numbering of cells
+    std::vector<std::int64_t> cell_idx_reordered_wo_offset(original_idx1.size());
+    for(std::size_t i = 0 ; i < original_idx1.size() ; ++i)
+      cell_idx_reordered_wo_offset[i] = original_idx1[i]-offset;
+
+
     return {dolfinx::mesh::Mesh(comm, std::make_shared<dolfinx::mesh::Topology>(std::move(topology)),
-                std::move(geometry)),original_idx1};
+                std::move(geometry)),cell_idx_reordered_wo_offset};
   }
 
   //Merge vertex coordinates
