@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-set(PROJECT_NAME demo_custom_tabulate_tensor)
+set(PROJECT_NAME demo_runtime_tabulate_tensor)
 project(${PROJECT_NAME} LANGUAGES C CXX)
 
 # Set standard

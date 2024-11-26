@@ -8,7 +8,6 @@ from ufl import (
     Constant,
     FunctionSpace,
     Mesh,
-    dc,
     dx,
 )
 
@@ -33,4 +32,4 @@ alpha = Constant(mesh)
 
 # Finally, we define the bilinear and linear forms according to the
 # variational formulation of the equations:
-L = alpha*dc + alpha*dx
+L = alpha*(dx(scheme="runtime")+dx)

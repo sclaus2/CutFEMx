@@ -36,7 +36,7 @@ int main(int argc, char* argv[])
   int degree = 1;
   T alpha = 1.0;
 
-  long unsigned int N = 11;
+  int N = 11;
 
   auto part = dolfinx::mesh::create_cell_partitioner(dolfinx::mesh::GhostMode::shared_facet);
   auto mesh = std::make_shared<dolfinx::mesh::Mesh<T>>(
@@ -73,38 +73,6 @@ int main(int argc, char* argv[])
   const int* integral_offsets = ufcx_L.form_integral_offsets;
 
   // ----------------------------------------------------------------------------------
-  // Custom Integral
-  // ----------------------------------------------------------------------------------
-  ufcx_integral* custom_integral = ufcx_L.form_integrals[integral_offsets[custom]];
-  auto custom_kernel = custom_integral->custom_tabulate_tensor_float64;
-
-  T custom_sum(0);
-  // Iterate over all cells
-  for (std::int32_t c = 0; c < num_cells; ++c)
-  {
-    //get cell node coordinates
-    auto x_dofs = MDSPAN_IMPL_STANDARD_NAMESPACE::submdspan(
-        x_dofmap, c, MDSPAN_IMPL_STANDARD_NAMESPACE::full_extent);
-    for (std::size_t i = 0; i < x_dofs.size(); ++i)
-    {
-      std::copy_n(std::next(x.begin(), 3 * x_dofs[i]), 3,
-                  std::next(coordinate_dofs.begin(), 3 * i));
-    }
-
-    //obtain the determinante of the Jacobian for the cell as this is
-    // multiplied by hand for runtime integrals
-    T _detJ = compute_detJ(coordinate_dofs);
-
-    for(std::int32_t i = 0; i < num_points; ++i)
-        weights[i] = wts[i]*std::fabs(_detJ);
-
-    custom_kernel(&custom_sum, {}, &alpha, coordinate_dofs.data(), nullptr,
-        nullptr, &num_points,  pts.data(), weights.data());
-  }
-
-  std::cout << "custom_sum=" << custom_sum << std::endl;
-
-  // ----------------------------------------------------------------------------------
   // Standard Integral
   // ----------------------------------------------------------------------------------
   T sum(0);
@@ -129,5 +97,34 @@ int main(int argc, char* argv[])
   }
 
   std::cout << "sum=" << sum << std::endl;
+
+  // ----------------------------------------------------------------------------------
+  // Runtime Integral
+  // ----------------------------------------------------------------------------------
+  auto runtime_kernel = integral->tabulate_tensor_runtime_float64;
+
+  std::cout << "fe_hash (generated)=" << integral->finite_element_hashes[0] << std::endl;
+  std::cout << "fe_hash (source)=" << e.hash() << std::endl;
+
+  auto [tab_data, shape] = e.tabulate(integral->finite_element_deriv_order[0], pts, {pts.size() / 2, 2});
+
+  T runtime_sum(0);
+  // Iterate over all cells
+  for (std::int32_t c = 0; c < num_cells; ++c)
+  {
+    //get cell node coordinates
+    auto x_dofs = MDSPAN_IMPL_STANDARD_NAMESPACE::submdspan(
+        x_dofmap, c, MDSPAN_IMPL_STANDARD_NAMESPACE::full_extent);
+    for (std::size_t i = 0; i < x_dofs.size(); ++i)
+    {
+      std::copy_n(std::next(x.begin(), 3 * x_dofs[i]), 3,
+                  std::next(coordinate_dofs.begin(), 3 * i));
+    }
+
+    runtime_kernel(&runtime_sum, {}, &alpha, coordinate_dofs.data(), nullptr,
+        nullptr, &num_points,  pts.data(), wts.data(), tab_data.data(), shape.data());
+  }
+
+  std::cout << "runtime_sum=" << runtime_sum << std::endl;
 
 }
