@@ -30,4 +30,12 @@ namespace cutfemx::level_set
                                                 std::span<const int32_t> entities,
                                                 const int& tdim,
                                                 const std::string& cut_type);
+    // cut cells in reference space
+    template <std::floating_point T>
+    void cut_reference_entities(std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
+                                std::span<const std::int32_t> entities, const int& tdim,
+                                const dolfinx::mesh::CellType& bg_cell_type,
+                                const std::string& cut_type,
+                                const bool& triangulate,
+                                std::vector<cutcells::cell::CutCell<T>>& cut_cells);
 }

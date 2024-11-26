@@ -11,6 +11,8 @@ namespace nb = nanobind;
 namespace cutfemx_wrappers
 {
 void level_set(nb::module_& m);
+void quadrature(nb::module_& m);
+void mesh(nb::module_& m);
 } // namespace cutfemx_wrappers
 
 NB_MODULE(cutfemx_cpp, m)
@@ -26,4 +28,11 @@ NB_MODULE(cutfemx_cpp, m)
   nb::module_ level_set = m.def_submodule("level_set", "LevelSet module");
   cutfemx_wrappers::level_set(level_set);
 
+  // Create quadrature submodule
+  nb::module_ quadrature = m.def_submodule("quadrature", "Quadrature module");
+  cutfemx_wrappers::quadrature(quadrature);
+
+  // Create mesh submodule
+  nb::module_ mesh = m.def_submodule("mesh", "Mesh module");
+  cutfemx_wrappers::mesh(mesh);
 }

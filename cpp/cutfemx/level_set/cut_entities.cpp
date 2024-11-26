@@ -183,6 +183,54 @@ namespace cutfemx::level_set
       return cut_mesh;
     }
 
+    template <std::floating_point T>
+    void cut_reference_entities(std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
+                                std::span<const std::int32_t> entities, const int& tdim,
+                                const dolfinx::mesh::CellType& bg_cell_type,
+                                const std::string& cut_type,
+                                const bool& triangulate,
+                                std::vector<cutcells::cell::CutCell<T>>& cut_cells)
+    {
+      int num_entities = entities.size();
+      assert(level_set->function_space()->dofmap());
+      std::shared_ptr<const dolfinx::fem::DofMap> dofmap = level_set->function_space()->dofmap();
+      assert(level_set->function_space()->mesh());
+      std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh = level_set->function_space()->mesh();
+
+      int gdim = mesh->geometry().dim();
+
+      // Construct a map from entity to dofs in order of entities vector
+      std::vector<std::vector<std::int32_t>> entity_dofs(num_entities);
+      fem::create_entity_dofmap<T>(entities, tdim, mesh, dofmap, entity_dofs);
+
+      //Parent cell type
+      basix::cell::type basix_cell_type = dolfinx::mesh::cell_type_to_basix_type(bg_cell_type);
+      cutcells::cell::type cutcells_cell_type = mesh::dolfinx_to_cutcells_cell_type(bg_cell_type);
+
+      //get reference cell geometry (vertex coordinates in reference space of parent cell)
+      auto [xdata, xshape] = basix::cell::geometry<T>(basix_cell_type);
+
+      // compute the cut of all intersected cells
+      cut_cells.resize(num_entities);
+
+      // Get level set values
+      const std::span<const T>& ls_values = level_set->x()->array();
+
+      //count number of cells that are intersected for memory allocation
+      for(std::size_t i=0;i<num_entities;i++)
+      {
+          int entity_index = entities[i];
+          std::span<const std::int32_t> dofs = entity_dofs[i];
+
+          // get level set values in cell
+          std::vector<T> ls_vals(dofs.size());
+          for (std::size_t i = 0; i < dofs.size(); ++i)
+              ls_vals[i] = ls_values[dofs[i]];
+
+          cutcells::cell::cut<T>(cutcells_cell_type,xdata,gdim,ls_vals,cut_type,cut_cells[i],triangulate);
+      }
+    }
+
 //----------------------------------------------------------------------------------------
     template cutcells::mesh::CutCells<double> cut_entities<double>(const std::shared_ptr<const dolfinx::fem::Function<double>> level_set,
                                           std::span<const double> dof_coordinates,
@@ -198,7 +246,21 @@ namespace cutfemx::level_set
                                           const int& tdim,
                                           const std::string& cut_type);
     template cutcells::mesh::CutCells<float> cut_entities<float>(const std::shared_ptr<const dolfinx::fem::Function<float>> level_set,
-                std::span<const int32_t> entities, const int &tdim, const std::string& cut_type); 
+                std::span<const int32_t> entities, const int &tdim, const std::string& cut_type);
+
+    template void cut_reference_entities(std::shared_ptr<const dolfinx::fem::Function<float>> level_set,
+                                std::span<const std::int32_t> entities, const int& tdim,
+                                const dolfinx::mesh::CellType& bg_cell_type,
+                                const std::string& cut_type,
+                                const bool& triangulate,
+                                std::vector<cutcells::cell::CutCell<float>>& cut_cells);
+
+    template void cut_reference_entities(std::shared_ptr<const dolfinx::fem::Function<double>> level_set,
+                                std::span<const std::int32_t> entities, const int& tdim,
+                                const dolfinx::mesh::CellType& bg_cell_type,
+                                const std::string& cut_type,
+                                const bool& triangulate,
+                                std::vector<cutcells::cell::CutCell<double>>& cut_cells);
 //----------------------------------------------------------------------------------------
 
 }

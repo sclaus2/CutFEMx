@@ -19,6 +19,7 @@
 #include <dolfinx/common/types.h>
 
 #include <cutcells/cut_cell.h>
+#include <cutcells/cut_mesh.h>
 
 #include <cutfemx/level_set/cut_entities.h>
 #include <cutfemx/level_set/locate_entities.h>
@@ -57,6 +58,20 @@ void declare_level_set(nb::module_& m, std::string type)
 
             }
             , "locate entities_part");
+
+  m.def("cut_entities", [](const std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
+                          nb::ndarray<const T, nb::ndim<2>, nb::c_contig> dof_coordinates,
+                          nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> entities,
+                          const int& tdim,
+                          const std::string& cut_type)
+                          {
+                            return cutfemx::level_set::cut_entities(level_set,
+                                              std::span(dof_coordinates.data(),dof_coordinates.size()),
+                                              std::span(entities.data(),entities.size()),
+                                              tdim,
+                                              cut_type);
+                          }, "cut entities");
+
 }
 
 } // namespace
