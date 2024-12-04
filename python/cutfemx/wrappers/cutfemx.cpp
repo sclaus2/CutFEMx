@@ -13,6 +13,7 @@ namespace cutfemx_wrappers
 void level_set(nb::module_& m);
 void quadrature(nb::module_& m);
 void mesh(nb::module_& m);
+void fem(nb::module_& m);
 } // namespace cutfemx_wrappers
 
 NB_MODULE(cutfemx_cpp, m)
@@ -35,4 +36,8 @@ NB_MODULE(cutfemx_cpp, m)
   // Create mesh submodule
   nb::module_ mesh = m.def_submodule("mesh", "Mesh module");
   cutfemx_wrappers::mesh(mesh);
+
+  // Create fem submodule
+  nb::module_ fem = m.def_submodule("fem", "FEM module");
+  cutfemx_wrappers::fem(fem);
 }

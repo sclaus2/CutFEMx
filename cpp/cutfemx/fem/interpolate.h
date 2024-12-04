@@ -12,6 +12,7 @@
 #include <basix/finite-element.h>
 
 #include <dolfinx/mesh/Mesh.h>
+#include <dolfinx/fem/utils.h>
 
 #include <cutcells/cell_flags.h>
 #include <cutcells/utils.h>

@@ -5,7 +5,7 @@
 # SPDX-License-Identifier:    MIT
 
 """Main module for CutFEMx"""
-from cutfemx import level_set, quadrature, mesh
+from cutfemx import level_set, quadrature, mesh, fem
 
 def get_include(user=False):
     import os
