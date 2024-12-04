@@ -36,7 +36,7 @@ int main(int argc, char* argv[])
   auto celltype = dolfinx::mesh::CellType::triangle;
   int degree = 1;
 
-  int N = 21;
+  int N = 41;
 
   auto part = dolfinx::mesh::create_cell_partitioner(dolfinx::mesh::GhostMode::shared_facet);
   auto mesh = std::make_shared<dolfinx::mesh::Mesh<T>>(
@@ -51,8 +51,6 @@ int main(int argc, char* argv[])
       dolfinx::mesh::cell_type_to_basix_type(celltype), degree,
       basix::element::lagrange_variant::unset,
       basix::element::dpc_variant::unset, false);
-
-  std::cout << "Hash in main.cpp:" << e.hash() << std::endl;
 
   // Create a scalar function space
   auto V = std::make_shared<dolfinx::fem::FunctionSpace<T>>(
@@ -83,8 +81,6 @@ int main(int argc, char* argv[])
   auto L = std::make_shared<dolfinx::fem::Form<T,T>>(dolfinx::fem::create_form<T,T>(
         *form_scalar_L, {}, {}, {{"alpha", alpha}}, subdomains_standard, {}, mesh));
 
-  std::cout << "Form created" << std::endl;
-
   auto runtime_rules = std::make_shared<cutfemx::quadrature::QuadratureRules<T>>();
   int order = 2;
   cutfemx::quadrature::runtime_quadrature<T>(level_set, "phi<0", order, *runtime_rules);
@@ -94,9 +90,15 @@ int main(int argc, char* argv[])
         subdomains = {{dolfinx::fem::IntegralType::cell, {std::make_pair(0, runtime_rules)}}};
 
   auto L_cut = std::make_shared<cutfemx::fem::CutForm<T,T>>(cutfemx::fem::create_cut_form_factory<T,T>(*form_scalar_L, L, subdomains));
-  std::cout << "CutForm created" << std::endl;
 
   T value = cutfemx::fem::assemble_scalar(*L_cut);
   std::cout << "value=" << value << std::endl;
+
+  double pi = 3.14159265358979323846;
+  double r = 0.5;
+
+  double area_circle = pi*r*r;
+
+  std::cout << "theoretical value=" << area_circle << std::endl;
 
 }

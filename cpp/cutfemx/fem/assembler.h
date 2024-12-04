@@ -61,21 +61,17 @@ namespace cutfemx::fem
   template <dolfinx::scalar T, std::floating_point U>
   T assemble_scalar(const CutForm<T, U>& M)
   {
-    std::cout << "Starting assembly preparations" << std::endl;
     const std::vector<T> constants = dolfinx::fem::pack_constants(*M._form);
     auto coefficients = dolfinx::fem::allocate_coefficient_storage(*M._form);
     dolfinx::fem::pack_coefficients(*M._form, coefficients);
     // assemble value of normal form first
-    std::cout << "Assemble standard values" << std::endl;
     T val = dolfinx::fem::assemble_scalar(*M._form, std::span(constants),
                           dolfinx::fem::make_coefficients_span(coefficients));
-    std::cout << "Standard value=" << val << std::endl;
-    //then assemble value from cut cells with runtime quadrature
-    T val2 = assemble_scalar(M, std::span(constants),
-                          dolfinx::fem::make_coefficients_span(coefficients));
 
-    std::cout << "value cutcells=" << val2 << std::endl;
-    val += val2;
+    //then assemble value from cut cells with runtime quadrature
+    T val_cut = assemble_scalar(M, std::span(constants),
+                          dolfinx::fem::make_coefficients_span(coefficients));
+    val += val_cut;
 
     return val;
   }
