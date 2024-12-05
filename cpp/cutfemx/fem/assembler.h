@@ -36,7 +36,8 @@
 
 namespace cutfemx::fem
 {
-  template <dolfinx::scalar T, std::floating_point U>
+    template <dolfinx::scalar T,
+          std::floating_point U = dolfinx::scalar_value_type_t<T>>
   T assemble_scalar(
       const CutForm<T, U>& M, std::span<const T> constants,
       const std::map<std::pair<dolfinx::fem::IntegralType, int>,
@@ -44,34 +45,25 @@ namespace cutfemx::fem
   {
     std::shared_ptr<const dolfinx::mesh::Mesh<U>> mesh = M._form->mesh();
     assert(mesh);
-    if constexpr (std::is_same_v<U, scalar_value_type_t<T>>)
-    {
-      return assemble_scalar(M, mesh->geometry().dofmap(),
+
+    T val = dolfinx::fem::impl::assemble_scalar<T,U>(*M._form, mesh->geometry().dofmap(),
                                   mesh->geometry().x(), constants, coefficients);
-    }
-    else
-    {
-      auto x = mesh->geometry().x();
-      std::vector<scalar_value_type_t<T>> _x(x.begin(), x.end());
-      return assemble_scalar(M, mesh->geometry().dofmap(), _x, constants,
-                                  coefficients);
-    }
+    T val_cut = assemble_scalar(M, mesh->geometry().dofmap(),
+                                  mesh->geometry().x(), constants, coefficients);
+    val += val_cut;
+    return val;
   }
 
-  template <dolfinx::scalar T, std::floating_point U>
+    template <dolfinx::scalar T,
+          std::floating_point U = dolfinx::scalar_value_type_t<T>>
   T assemble_scalar(const CutForm<T, U>& M)
   {
     const std::vector<T> constants = dolfinx::fem::pack_constants(*M._form);
     auto coefficients = dolfinx::fem::allocate_coefficient_storage(*M._form);
     dolfinx::fem::pack_coefficients(*M._form, coefficients);
-    // assemble value of normal form first
-    T val = dolfinx::fem::assemble_scalar(*M._form, std::span(constants),
-                          dolfinx::fem::make_coefficients_span(coefficients));
 
-    //then assemble value from cut cells with runtime quadrature
-    T val_cut = assemble_scalar(M, std::span(constants),
+    T val = assemble_scalar(M, std::span(constants),
                           dolfinx::fem::make_coefficients_span(coefficients));
-    val += val_cut;
 
     return val;
   }

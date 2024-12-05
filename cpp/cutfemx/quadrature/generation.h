@@ -67,63 +67,6 @@ namespace cutfemx::quadrature
     }
   }
 
-    // template <std::floating_point T>
-    // void push_forward(const basix::FiniteElement<T>& cmap,
-    //                   const std::span<T>& vertex_coordinates,
-    //                   const std::size_t tdim,
-    //                   const std::size_t gdim,
-    //                   const std::span<T>& X,
-    //                   std::vector<T>& detJ)
-    // {
-    //     const std::size_t num_points = X.size()/tdim;
-    //     const std::size_t num_xnodes = vertex_coordinates.size()/gdim; //cell_geometry.extent(0);
-    //     // int gdim = cell_geometry.extent(1)
-
-    //     std::vector<T> J_b(gdim * tdim);
-    //     mdspan2_t<T> J(J_b.data(), gdim, tdim);
-
-    //     std::vector<T> dphi_b(tdim * num_xnodes);
-    //     mdspan2_t<T> dphi(dphi_b.data(), tdim, num_xnodes);
-
-    //     detJ.resize(num_points);
-    //     std::vector<T> det_scratch(2 * gdim * tdim);
-
-    //     const std::array<std::size_t, 4> bsize = cmap.tabulate_shape(1, num_points);
-    //     std::vector<T> basis_b(std::reduce(bsize.begin(), bsize.end(), 1, std::multiplies{}));
-
-    //     /// - The first index is the derivative, with higher derivatives are
-    //     /// stored in triangular (2D) or tetrahedral (3D) ordering, ie for
-    //     /// the (x,y) derivatives in 2D: (0,0), (1,0), (0,1), (2,0), (1,1),
-    //     /// (0,2), (3,0)... The function basix::indexing::idx can be used to
-    //     /// find the appropriate derivative.
-    //     /// - The second index is the point index
-    //     /// - The third index is the basis function index
-    //     /// - The fourth index is the basis function component. Its has size
-    //     /// one for scalar basis functions.
-    //     mdspan_t<T,4> basis(basis_b.data(), bsize);
-
-    //     //Points in reference space
-    //     std::array<std::size_t, 2> Xshape = {num_points, tdim};
-
-    //     cmap.tabulate(1, X, Xshape, basis_b);
-    //     cmdspan2_t cell_geometry(vertex_coordinates.data(), num_xnodes, gdim);
-
-    //     //Iterate over each point and compute Jacobian and x coordinate
-    //     for(int ip=0;ip<num_points;ip++)
-    //     {
-    //         // Compute Jacobian and its determinant
-    //         std::fill(J_b.begin(), J_b.end(), 0.0);
-    //         for (std::size_t i = 0; i < tdim; ++i)
-    //             for (std::size_t j = 0; j < basis.extent(2); ++j)
-    //             {
-    //                 dphi(i, j) = basis(i + 1, ip, j, 0);
-    //             }
-
-    //         math::dot(cell_geometry, dphi, J, true);
-    //         detJ[ip] = std::abs(cmap.compute_jacobian_determinant(J, det_scratch));
-    //     }
-    // }
-
   template <std::floating_point T>
   void runtime_quadrature(std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
                      const std::string& ls_part,

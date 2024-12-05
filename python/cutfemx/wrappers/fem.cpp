@@ -6,6 +6,7 @@
 #include <array.h>
 #include <caster_mpi.h>
 #include <numpy_dtype.h>
+#include <pycoeff.h>
 
 #include <iostream>
 #include <nanobind/nanobind.h>
@@ -20,6 +21,7 @@
 #include <cutfemx/fem/CutForm.h>
 #include <cutfemx/fem/interpolate.h>
 #include <cutfemx/quadrature/quadrature.h>
+#include <cutfemx/fem/assembler.h>
 
 #include <dolfinx/mesh/Mesh.h>
 #include <dolfinx/fem/Form.h>
@@ -40,17 +42,16 @@ void declare_fem(nb::module_& m, std::string type)
                                          "CutForm object")
       .def(
           "__init__",
-          [](cutfemx::fem::CutForm<T, U>* fp, std::uintptr_t ufcform)
-            //std::shared_ptr<const dolfinx::fem::Form<T, U>> form) 
-            // const std::map<dolfinx::fem::IntegralType,
-            // std::vector<std::pair<std::int32_t, std::shared_ptr<cutfemx::quadrature::QuadratureRules<U>>>>>&
-            // subdomains)
+          [](cutfemx::fem::CutForm<T, U>* fp, std::uintptr_t ufcform,
+                std::shared_ptr<const dolfinx::fem::Form<T, U>> form,
+                const std::map<dolfinx::fem::IntegralType,
+                std::vector<std::pair<std::int32_t, std::shared_ptr<cutfemx::quadrature::QuadratureRules<U>>>>>&
+                subdomains)
           {
-            std::cout << "coucoucou" << std::endl;
-            // ufcx_form* p = reinterpret_cast<ufcx_form*>(ufcform);
-            // new (fp)
-            //     cutfemx::fem::CutForm<T, U>(cutfemx::fem::create_cut_form_factory<T>(
-            //         *p, form, subdomains));
+            ufcx_form* p = reinterpret_cast<ufcx_form*>(ufcform);
+            new (fp)
+                cutfemx::fem::CutForm<T, U>(cutfemx::fem::create_cut_form_factory<T>(
+                    *p, form, subdomains));
           }
           , "Create a Cutform from a pointer to a ufcx_form")
       .def(
@@ -77,6 +78,24 @@ void declare_fem(nb::module_& m, std::string type)
             return cutfemx::fem::create_cut_function(u, sub_mesh);
           }
         , "create function over cut mesh");
+
+  // Functional
+  m.def(
+      "assemble_scalar",
+      [](const cutfemx::fem::CutForm<T, U>& M,
+         nb::ndarray<const T, nb::ndim<1>, nb::c_contig> constants,
+         const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+                        nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
+             coefficients)
+      {
+        std::cout << "entering: ";
+        return cutfemx::fem::assemble_scalar<T,U>(
+            M, std::span(constants.data(), constants.size()),
+            py_to_cpp_coeffs(coefficients));
+      },
+      nb::arg("M"), nb::arg("constants"), nb::arg("coefficients"),
+      "Assemble functional over mesh with provided constants and "
+      "coefficients");
 
 }
 
