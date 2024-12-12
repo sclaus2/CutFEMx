@@ -4,8 +4,8 @@ import os
 
 from cutfemx.level_set import locate_entities, cut_entities
 from cutfemx.mesh import create_cut_mesh
-from cutfemx.quadrature import runtime_quadrature
-from cutfemx.fem import cut_form, assemble_scalar
+from cutfemx.quadrature import runtime_quadrature, physical_points
+from cutfemx.fem import assemble_scalar, cut_form
 
 from dolfinx import fem, mesh, plot
 from dolfinx import default_real_type
@@ -18,10 +18,7 @@ except ModuleNotFoundError:
     print("pyvista is required for this demo")
     exit(0)
 
-from cutfemx import cutfemx_cpp as _cpp
-
-
-N = 31
+N = 21
 
 msh = mesh.create_rectangle(
     comm=MPI.COMM_WORLD,
@@ -49,22 +46,46 @@ dof_coordinates = V.tabulate_dof_coordinates()
 cut_cells = cut_entities(level_set, dof_coordinates, intersected_entities, tdim, "phi<0")
 cut_mesh = create_cut_mesh(msh.comm,cut_cells,msh,inside_entities)
 
-order = 2
-runtime_quadrature = runtime_quadrature(level_set,"phi<0",order)
+order = 1
+inside_quadrature = runtime_quadrature(level_set,"phi<0",order)
+interface_quadrature = runtime_quadrature(level_set,"phi=0",order)
+
+quad_domains = [(0,inside_quadrature), (1,interface_quadrature)]
 
 alpha = fem.Constant(msh, default_real_type(1.0))
 
 dx = ufl.Measure("dx", subdomain_data=[(0, inside_entities)])
-dx_rt = ufl.Measure("dx", metadata={"quadrature_rule":"runtime"} , subdomain_data=[(0, runtime_quadrature)]) #
+dx_rt = ufl.Measure("dx", metadata={"quadrature_rule":"runtime"} , subdomain_data=quad_domains)
 
 dxq = dx_rt(0) + dx(0)
+dsq = dx_rt(1)
 
-L = alpha*dxq 
+L_area = alpha*dxq
 
 jit_options = {"cache_dir": os.getcwd()}
-L_form = cut_form(L, jit_options=jit_options)
+L_area_form = cut_form(L_area, jit_options=jit_options)
 
-val = assemble_scalar(L_form)
+area = assemble_scalar(L_area_form)
 
-print("value=", val)
-print("value theoretical=", 0.5*0.5*np.pi)
+print("area=", area)
+print("value theoretical area=", 0.5*0.5*np.pi)
+
+L_s = alpha*dsq
+L_s_form = cut_form(L_s, jit_options=jit_options)
+surface = assemble_scalar(L_s_form)
+
+print("circumference=", surface)
+print("value theoretical circumference=", 2*0.5*np.pi)
+
+#Plot runtime quadrature points on cut mesh
+points_phys = physical_points(inside_quadrature,msh)
+
+plotter = pyvista.Plotter()
+cells, types, x = plot.vtk_mesh(cut_mesh._mesh)
+grid = pyvista.UnstructuredGrid(cells, types, x)
+plotter.add_mesh(grid, show_edges=True, show_scalar_bar=True, color='lightgray')
+plotter.add_points(points_phys, render_points_as_spheres=True, color='black')
+plotter.view_xy()
+plotter.save_graphic("quadrature.svg")
+plotter.show()
+

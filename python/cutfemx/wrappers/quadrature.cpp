@@ -13,6 +13,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/pair.h>
 #include <span>
 
 #include <cutcells/cut_mesh.h>
@@ -122,8 +123,36 @@ void declare_quadrature(nb::module_& m, std::string type)
             const std::size_t gdim = mesh.geometry().dim();
             auto points = cutfemx::quadrature::physical_points(runtime_rules, mesh);
 
-            return nb::ndarray<T, nb::numpy>(
-                points.data(), {points.size()/gdim, gdim}, nb::handle());
+            std::size_t num_points = points.size()/gdim;
+
+            T *points_3d = new T[num_points * 3];
+
+            for(std::size_t i=0;i<num_points;i++)
+            {
+              for(std::size_t j=0;j<gdim;j++)
+              {
+                points_3d[i*3+j] = points[i*gdim+j];
+              }
+            }
+
+            if(gdim==2)
+            {
+              for(std::size_t i=0;i<num_points;i++)
+              {
+                  points_3d[i*3+2] = 0.0;
+              }
+            }
+
+            // Delete 'data' when the 'owner' capsule expires
+            nb::capsule owner(points_3d, [](void *p) noexcept {
+              delete[] (T *) p;
+            });
+
+            return nb::ndarray<nb::numpy, T, nb::shape<-1, 3>, nb::c_contig>(
+              /* data = */ points_3d,
+              /* shape = */ { num_points, 3 },
+              /* owner = */ owner
+              );
           }
         , "quadrature points in physical space in background mesh");
 }

@@ -36,7 +36,7 @@ int main(int argc, char* argv[])
   auto celltype = dolfinx::mesh::CellType::triangle;
   int degree = 1;
 
-  int N = 41;
+  int N = 2;
 
   auto part = dolfinx::mesh::create_cell_partitioner(dolfinx::mesh::GhostMode::shared_facet);
   auto mesh = std::make_shared<dolfinx::mesh::Mesh<T>>(
@@ -67,23 +67,45 @@ int main(int argc, char* argv[])
         std::vector<T> f(x.extent(1));
         T r = 0.5;
         for (std::size_t p = 0; p < x.extent(1); ++p)
-          f[p] = std::sqrt(x(0,p)*x(0,p)+x(1,p)*x(1,p))-r;
+          //f[p] = std::sqrt(x(0,p)*x(0,p)+x(1,p)*x(1,p))-r;
+          f[p] = x(1,p)+1e-10;
         return {f, {f.size()}};
       });
 
   // Assemble over standard cells
   std::vector<int32_t> inside_cells = cutfemx::level_set::locate_entities<T>( level_set,tdim,"phi<0",false);
-   const std::map<
-        dolfinx::fem::IntegralType,
-        std::vector<std::pair<std::int32_t, std::span<const std::int32_t>>>>
-        subdomains_standard =  {{dolfinx::fem::IntegralType::cell, {std::make_pair(0, std::span(inside_cells.data(),inside_cells.size()))}}};
+  std::vector<int32_t> intersected_cells = cutfemx::level_set::locate_entities<T>( level_set,tdim,"phi=0",false);
+
+  //  const std::map<
+  //       dolfinx::fem::IntegralType,
+  //       std::vector<std::pair<std::int32_t, std::span<const std::int32_t>>>>
+  //       subdomains_standard =  {{dolfinx::fem::IntegralType::cell, {std::make_pair(0, std::span(inside_cells.data(),inside_cells.size()))}}};
   auto alpha = std::make_shared<dolfinx::fem::Constant<T>>(1.0);
+  // auto L = std::make_shared<dolfinx::fem::Form<T,T>>(dolfinx::fem::create_form<T,T>(
+  //       *form_scalar_L, {}, {}, {{"alpha", alpha}}, subdomains_standard, {}, mesh));
+
   auto L = std::make_shared<dolfinx::fem::Form<T,T>>(dolfinx::fem::create_form<T,T>(
-        *form_scalar_L, {}, {}, {{"alpha", alpha}}, subdomains_standard, {}, mesh));
+        *form_scalar_L, {}, {}, {{"alpha", alpha}}, {}, {}, mesh));
 
   auto runtime_rules = std::make_shared<cutfemx::quadrature::QuadratureRules<T>>();
   int order = 2;
-  cutfemx::quadrature::runtime_quadrature<T>(level_set, "phi<0", order, *runtime_rules);
+  cutfemx::quadrature::runtime_quadrature<T>(level_set, "phi=0", order, *runtime_rules);
+
+  dolfinx::mesh::CellType entity_type = dolfinx::mesh::cell_entity_type(celltype, tdim, 0);
+  std::vector<cutcells::cell::CutCell<T>> cut_cells;
+  cutfemx::level_set::cut_reference_entities<T>(level_set, std::span(intersected_cells.data(),intersected_cells.size()), tdim,
+                                entity_type,
+                                "phi=0",
+                                true,
+                                cut_cells);
+
+  auto [points,weights] =  total_detJ(*runtime_rules, *mesh,  cut_cells);
+  std::cout << "points="; 
+  for(auto& p : points)
+  {
+    std::cout << p << ", ";
+  }
+  std::cout << std::endl;
 
   std::map< dolfinx::fem::IntegralType,
         std::vector<std::pair<std::int32_t, std::shared_ptr<cutfemx::quadrature::QuadratureRules<T>>>>>

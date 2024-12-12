@@ -64,7 +64,7 @@ using mdspand_t = MDSPAN_IMPL_STANDARD_NAMESPACE::mdspan<
           = std::accumulate(e_shape.begin(), e_shape.end(), 1, std::multiplies<>{});
       std::vector<T> phi_b(length);
       mdspand_t<T, 4> phi(phi_b.data(), e_shape);
-      mdspand_t<const T, 2> X(rule._points.data(), rule._weights.size(), tdim);
+
       // nd, mdspan of points, phi
       cmap.tabulate(0, std::span(rule._points.data(),rule._points.size()), {rule._weights.size(),tdim}, std::span(phi_b.data(),phi_b.size()));
 

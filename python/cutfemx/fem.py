@@ -164,9 +164,9 @@ def cut_form(
             else:
                 sd[_ufl_to_dolfinx_domain[integral.integral_type()]].append(integral.subdomain_data())
 
-        print("runtime_sd=", runtime_sd)
-        print("sd=", sd)
-        print("domain=", domain)
+        # print("runtime_sd=", runtime_sd)
+        # print("sd=", sd)
+        # print("domain=", domain)
 
         mesh = domain.ufl_cargo()
         if mesh is None:
@@ -216,9 +216,6 @@ def cut_form(
                 else:
                   subdomain_ids[_ufl_to_dolfinx_domain[integral.integral_type()]].append(ids)
 
-        print(subdomain_ids_runtime)
-        print(subdomain_ids)
-
         # Chain and sort subdomain ids
         # used to extract entities from meshtags
         for itg_type, marker_ids in subdomain_ids.items():
@@ -226,24 +223,37 @@ def cut_form(
             flattened_ids.sort()
             subdomain_ids[itg_type] = flattened_ids
 
-        print(subdomain_ids)
+        for itg_type, marker_ids in subdomain_ids_runtime.items():
+            flattened_ids = list(chain.from_iterable(marker_ids))
+            flattened_ids.sort()
+            subdomain_ids_runtime[itg_type] = flattened_ids
+
+        print("subdomain ids runtime=", subdomain_ids_runtime)
 
         # Subdomain markers (possibly empty list for some integral
         # types)
         subdomains = {}
+        runtime_subdomains = {}
 
         for itg_type, ids in subdomain_ids.items():
             subdomains[itg_type] = get_integration_domains(
                 itg_type, sd[itg_type][0], ids)
 
+        #order runtime subdomains
+        for itg_type, ids in subdomain_ids_runtime.items():
+            runtime_subdomains[itg_type] = []
+            for id in ids:
+              for s in runtime_sd[itg_type][0]:
+                if s[0] == id:
+                    runtime_subdomains[itg_type].append((s[0], s[1]))
+
+        print("runtime_subdomains=", runtime_subdomains)
+        print("subdomains=", subdomains)
+
         if entity_maps is None:
             _entity_maps = dict()
         else:
             _entity_maps = {msh._cpp_object: emap for (msh, emap) in entity_maps.items()}
-
-        print(_entity_maps)
-        print("subdomains=", subdomains)
-        print("runtime_sd=", runtime_sd)
 
         f = ftype(
             module.ffi.cast("uintptr_t", module.ffi.addressof(ufcx_form)),
@@ -256,20 +266,7 @@ def cut_form(
         )
         form_py = Form(f, ufcx_form, code, module)
 
-        quad_rule = runtime_sd[IntegralType.cell][0][0][1]
-
-        runtime_subdomains = {}
-
-        for itg_type, ids in subdomain_ids.items():
-            runtime_subdomains[itg_type] = [(s[0], s[1]) for s in runtime_sd[itg_type][0]]
-
-        print(quad_rule)
-        print("runtime_subdomains=", runtime_subdomains)
-
         ufcx_address = module.ffi.cast("uintptr_t", module.ffi.addressof(ufcx_form))
-
-        print("ufcx_address=", ufcx_address)
-
         cutf = cut_ftype(ufcx_address,
                          f,
                          runtime_subdomains)
@@ -295,9 +292,11 @@ def cut_function(
         sub_mesh: CutMesh)->Function:
       return _cpp.fem.create_cut_function(u._cpp_object,sub_mesh._cpp_object)
 
-def assemble_scalar(M: CutForm, constants=None, coeffs=None):
+def assemble_scalar(M: CutForm, constants=None, coeffs=None, coeffs_rt=None):
     constants = constants or _pack_constants(M._form._cpp_object)
     coeffs = coeffs or _pack_coefficients(M._form._cpp_object)
-    return _cpp.fem.assemble_scalar(M._cpp_object, constants, coeffs)
+    coeffs_rt = coeffs_rt or _cpp.fem.pack_coefficients(M._cpp_object)
+
+    return _cpp.fem.assemble_scalar(M._cpp_object, constants, coeffs, coeffs_rt)
 
 

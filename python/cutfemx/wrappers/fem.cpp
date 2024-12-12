@@ -22,6 +22,7 @@
 #include <cutfemx/fem/interpolate.h>
 #include <cutfemx/quadrature/quadrature.h>
 #include <cutfemx/fem/assembler.h>
+#include <cutfemx/fem/pack_coefficients.h>
 
 #include <dolfinx/mesh/Mesh.h>
 #include <dolfinx/fem/Form.h>
@@ -79,6 +80,39 @@ void declare_fem(nb::module_& m, std::string type)
           }
         , "create function over cut mesh");
 
+    m.def(
+      "pack_coefficients",
+      [](const cutfemx::fem::CutForm<T, U>& form)
+      {
+        using Key_t = typename std::pair<dolfinx::fem::IntegralType, int>;
+
+        // Pack coefficients
+        std::map<Key_t, std::pair<std::vector<T>, int>> coeffs
+            = cutfemx::fem::allocate_coefficient_storage(form);
+        cutfemx::fem::pack_coefficients(form, coeffs);
+
+        // Move into NumPy data structures
+        std::map<Key_t, nb::ndarray<T, nb::numpy>> c;
+        std::ranges::transform(
+            coeffs, std::inserter(c, c.end()),
+            [](auto& e) -> typename decltype(c)::value_type
+            {
+              std::size_t num_ents
+                  = e.second.first.empty()
+                        ? 0
+                        : e.second.first.size() / e.second.second;
+              return std::pair<const std::pair<dolfinx::fem::IntegralType, int>,
+                               nb::ndarray<T, nb::numpy>>(
+                  e.first,
+                  dolfinx_wrappers::as_nbarray(
+                      std::move(e.second.first),
+                      {num_ents, static_cast<std::size_t>(e.second.second)}));
+            });
+
+        return c;
+      },
+      nb::arg("form"), "Pack coefficients for a CutForm.");
+
   // Functional
   m.def(
       "assemble_scalar",
@@ -86,14 +120,17 @@ void declare_fem(nb::module_& m, std::string type)
          nb::ndarray<const T, nb::ndim<1>, nb::c_contig> constants,
          const std::map<std::pair<dolfinx::fem::IntegralType, int>,
                         nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
-             coefficients)
+             coefficients,
+         const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+                        nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
+             coeffs_rt)
       {
         std::cout << "entering: ";
         return cutfemx::fem::assemble_scalar<T,U>(
             M, std::span(constants.data(), constants.size()),
-            py_to_cpp_coeffs(coefficients));
+            py_to_cpp_coeffs(coefficients),py_to_cpp_coeffs(coeffs_rt));
       },
-      nb::arg("M"), nb::arg("constants"), nb::arg("coefficients"),
+      nb::arg("M"), nb::arg("constants"), nb::arg("coefficients"), nb::arg("coefficients runtime"),
       "Assemble functional over mesh with provided constants and "
       "coefficients");
 

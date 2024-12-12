@@ -32,4 +32,4 @@ alpha = Constant(mesh)
 
 # Finally, we define the bilinear and linear forms according to the
 # variational formulation of the equations:
-L = alpha*(dx(0, scheme="runtime")+dx(0))
+L = alpha*(dx(0, scheme="runtime"))

@@ -10,6 +10,7 @@
 
 #include "typedefs.h"
 #include "assemble_scalar.h"
+#include "pack_coefficients.h"
 
 #include <algorithm>
 #include <array>
@@ -41,7 +42,9 @@ namespace cutfemx::fem
   T assemble_scalar(
       const CutForm<T, U>& M, std::span<const T> constants,
       const std::map<std::pair<dolfinx::fem::IntegralType, int>,
-                    std::pair<std::span<const T>, int>>& coefficients)
+                    std::pair<std::span<const T>, int>>& coefficients,
+      const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+                    std::pair<std::span<const T>, int>>& coeffs_rt)
   {
     std::shared_ptr<const dolfinx::mesh::Mesh<U>> mesh = M._form->mesh();
     assert(mesh);
@@ -49,8 +52,9 @@ namespace cutfemx::fem
     T val = dolfinx::fem::impl::assemble_scalar<T,U>(*M._form, mesh->geometry().dofmap(),
                                   mesh->geometry().x(), constants, coefficients);
     T val_cut = assemble_scalar(M, mesh->geometry().dofmap(),
-                                  mesh->geometry().x(), constants, coefficients);
+                                  mesh->geometry().x(), constants, coeffs_rt);
     val += val_cut;
+
     return val;
   }
 
@@ -62,8 +66,13 @@ namespace cutfemx::fem
     auto coefficients = dolfinx::fem::allocate_coefficient_storage(*M._form);
     dolfinx::fem::pack_coefficients(*M._form, coefficients);
 
+    //pack coefficients of runtime integrals
+    auto coeffs_rt = cutfemx::fem::allocate_coefficient_storage(M);
+    cutfemx::fem::pack_coefficients(M,coeffs_rt);
+
     T val = assemble_scalar(M, std::span(constants),
-                          dolfinx::fem::make_coefficients_span(coefficients));
+                          dolfinx::fem::make_coefficients_span(coefficients),
+                          dolfinx::fem::make_coefficients_span(coeffs_rt));
 
     return val;
   }

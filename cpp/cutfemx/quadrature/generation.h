@@ -69,6 +69,8 @@ namespace cutfemx::quadrature
 
   template <std::floating_point T>
   void runtime_quadrature(std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
+                     std::span<const int32_t> entities,
+                     const int& tdim,
                      const std::string& ls_part,
                      const int& order, QuadratureRules<T>& runtime_rules)
   {
@@ -80,39 +82,40 @@ namespace cutfemx::quadrature
 
     //Background mesh cell data
     int gdim = mesh->geometry().dim();
-    int cell_dim = mesh->topology()->dim();
-    int tdim = cell_dim;
     auto bg_cell_type = mesh->topology()->cell_type();
 
+    //get background mesh geometry data
+    // Get geometry data
+    const dolfinx::fem::CoordinateElement<T>& cmap = mesh->geometry().cmap();
+    auto x_dofmap = mesh->geometry().dofmap();
+    const std::size_t num_dofs_g = cmap.dim();
+    std::span<const T> x_g = mesh->geometry().x();
+
+    // Evaluate coordinate map basis at reference interpolation points
+    using cmdspan4_t = MDSPAN_IMPL_STANDARD_NAMESPACE::mdspan<
+      const T, MDSPAN_IMPL_STANDARD_NAMESPACE::dextents<std::size_t, 4>>;
+    std::vector<T> coordinate_dofs(3 * x_dofmap.extent(1));
+
     //locate intersected entities
-    auto entity_map = mesh->topology()->index_map(tdim);
-    if (!entity_map)
-    {
-      mesh->topology_mutable()->create_entities(tdim);
-      entity_map = mesh->topology()->index_map(tdim);
-    }
+    dolfinx::mesh::CellType entity_type = dolfinx::mesh::cell_entity_type(bg_cell_type, tdim, 0);
 
-    std::int32_t num_entities = entity_map->size_local()+entity_map->num_ghosts();
-    std::vector<int32_t> entities(num_entities);
-    std::iota (std::begin(entities), std::end(entities), 0);
+    auto intersected_cells = cutfemx::level_set::locate_entities<T>(level_set,entities,tdim,"phi=0");
 
-    auto intersected_cells = cutfemx::level_set::locate_entities<T>(level_set,std::span(entities.data(),entities.size()),tdim,"phi=0");
-
-    num_entities = intersected_cells.size();
+    int num_entities = intersected_cells.size();
     std::vector<cutcells::cell::CutCell<T>> cut_cells;
     cutfemx::level_set::cut_reference_entities<T>(level_set, std::span(intersected_cells.data(),intersected_cells.size()), tdim,
-                                bg_cell_type,
+                                entity_type,
                                 ls_part,
                                 triangulate,
                                 cut_cells);
 
     //Generate quadrature rules
     //get type of cells for this cut
-    dolfinx::mesh::CellType entity_type = dolfinx::mesh::cell_entity_type(bg_cell_type, tdim, 0);
     auto cutcells_cell_type = mesh::dolfinx_to_cutcells_cell_type(entity_type);
 
     std::vector<cutcells::cell::type> cutcells_types = cutcells::cell::cut_cell_types(cutcells_cell_type, ls_part);
     std::unordered_map<cutcells::cell::type, std::size_t> type_id_map;
+
     std::size_t id = 0;
     int num_types = cutcells_types.size();
     //Note this does not allow for mixed topological dimension in one cut mesh
@@ -167,6 +170,7 @@ namespace cutfemx::quadrature
 
     for(std::size_t i=0;i<num_entities;i++)
     {
+      int parent_index = intersected_cells[i];
       runtime_rules._parent_map[i] = intersected_cells[i];
 
       for(std::size_t j=0; j< cut_cells[i]._connectivity.size();j++)
@@ -203,16 +207,49 @@ namespace cutfemx::quadrature
           }
         }
 
-        const std::size_t num_xnodes = vertex_coords.extent(0);
+        //Map local cut coordinates onto physical space
+        std::vector<T> vertex_coords_phys_b(num_vertices*gdim);
+        mdspan2_t<T> vertex_coords_phys(vertex_coords_phys_b.data(),num_vertices, gdim);
 
-        std::vector<T> J_b(tdim * ctdim);
-        mdspan2_t<T> J(J_b.data(), tdim, ctdim);
+        auto e_shape_phys = cmap.tabulate_shape(0, num_vertices);
+        std::size_t length_phys
+            = std::accumulate(e_shape_phys.begin(), e_shape_phys.end(), 1, std::multiplies<>{});
+        std::vector<T> phi_phys_b(length_phys);
+        mdspan_t<T, 4> phi_phys(phi_phys_b.data(), e_shape_phys);
+        // nd, mdspan of points, phi
+        cmap.tabulate(0, std::span(vertex_coords_b.data(),vertex_coords_b.size()), {num_vertices,tdim}, std::span(phi_phys_b.data(),phi_phys_b.size()));
+
+        auto x_dofs = MDSPAN_IMPL_STANDARD_NAMESPACE::submdspan(
+        x_dofmap, parent_index, MDSPAN_IMPL_STANDARD_NAMESPACE::full_extent);
+
+        for (std::size_t i = 0; i < x_dofs.size(); ++i)
+        {
+          std::copy_n(std::next(x_g.begin(), 3 * x_dofs[i]), 3,
+                      std::next(coordinate_dofs.begin(), 3 * i));
+        }
+
+        // x[ip] = sum(v) vc[v]*p[ip]
+        // / derivative, point index, basis function index, basis function component
+        for(std::size_t ip=0;ip<num_vertices;ip++)
+        {
+          for(std::size_t i=0;i<gdim;i++)
+          {
+            for(std::size_t v=0;v<x_dofs.size();v++) //shape function index
+            {
+              vertex_coords_phys(ip,i) += coordinate_dofs[v*3+i]*phi_phys(0, ip, v, 0);
+            }
+          }
+        }
+
+        //Map back to reference element of cut cell to get weights
+        std::vector<T> J_b(gdim * ctdim);
+        mdspan2_t<T> J(J_b.data(), gdim, ctdim);
 
         std::vector<T> dphi_b(ctdim * phi.extent(2));
         mdspan2_t<T> dphi(dphi_b.data(), ctdim, phi.extent(2));
 
         std::vector<T> detJ(num_points);
-        std::vector<T> det_scratch(2 * tdim * ctdim);
+        std::vector<T> det_scratch(2 * gdim * ctdim);
 
         std::vector<T> weights(num_points);
 
@@ -227,7 +264,7 @@ namespace cutfemx::quadrature
                     dphi(d, v) = phi(d + 1, ip, v, 0);
                 }
 
-            math::dot(vertex_coords, dphi, J, true);
+            math::dot(vertex_coords_phys, dphi, J, true);
             detJ[ip] = std::fabs(compute_detJ(J, std::span(det_scratch.data(),det_scratch.size())));
             weights[ip] = wts_refs[type_id_map[cut_cell_type]][ip]*detJ[ip];
         }
@@ -236,5 +273,29 @@ namespace cutfemx::quadrature
         runtime_rules._quadrature_rules[i]._points.insert(runtime_rules._quadrature_rules[i]._points.end(),points_b.begin(),points_b.end());
       }
     }
+  }
+
+  template <std::floating_point T>
+  void runtime_quadrature(std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
+                     const std::string& ls_part,
+                     const int& order, QuadratureRules<T>& runtime_rules)
+  {
+    assert(level_set->function_space()->mesh());
+    std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh = level_set->function_space()->mesh();
+    int cell_dim = mesh->topology()->dim();
+    int tdim = cell_dim;
+
+    auto entity_map = mesh->topology()->index_map(tdim);
+    if (!entity_map)
+    {
+      mesh->topology_mutable()->create_entities(tdim);
+      entity_map = mesh->topology()->index_map(tdim);
+    }
+
+    std::int32_t num_entities = entity_map->size_local()+entity_map->num_ghosts();
+    std::vector<int32_t> entities(num_entities);
+    std::iota (std::begin(entities), std::end(entities), 0);
+
+    runtime_quadrature(level_set, std::span(entities.data(),entities.size()),tdim,ls_part, order, runtime_rules);
   }
 }

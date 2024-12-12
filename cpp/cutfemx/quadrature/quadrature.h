@@ -26,7 +26,7 @@ namespace cutfemx::quadrature
   struct QuadratureRules
   {
       std::vector<QuadratureRule<T>> _quadrature_rules;
-      std::vector<std::int64_t> _parent_map;
+      std::vector<std::int32_t> _parent_map;
   };
 
    //introduce notion of interface with pair of parent_cells ()
@@ -34,6 +34,6 @@ namespace cutfemx::quadrature
    struct QuadratureRulesInterface
    {
         std::vector<QuadratureRule<T>> _quadrature_rules;
-        std::vector<std::pair<std::int64_t,std::int64_t>> _parent_map;
+        std::vector<std::pair<std::int32_t,std::int32_t>> _parent_map;
    };
 }

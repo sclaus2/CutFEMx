@@ -28,13 +28,6 @@ def runtime_quadrature(
 def physical_points(
         runtime_rules: typing.Union[_cpp.quadrature.QuadratureRules_float32, _cpp.quadrature.QuadratureRules_float64],
         mesh: Mesh)->typing.Union[npt.NDArray[np.float32], npt.NDArray[np.float64]]:
-      gdim = mesh.geometry.dim
       points_phys = _cpp.quadrature.physical_points(runtime_rules, mesh._cpp_object)
-      points3d = np.zeros(shape=(points_phys.shape[0],3))
-      if(gdim==2):
-        points3d[:,0] = points_phys[:, 0]
-        points3d[:,1] = points_phys[:, 1]
-      else:
-        points3d = points_phys
-      return points3d
+      return points_phys
 
