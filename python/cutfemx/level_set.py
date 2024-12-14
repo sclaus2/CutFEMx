@@ -16,7 +16,9 @@ from dolfinx.fem import Function
 __all__ = [
   "locate_entities",
   "locate_entities_part",
-  "cut_entities"
+  "cut_entities",
+  "ghost_penalty_facets",
+  "compute_normal"
 ]
 
 def locate_entities(
@@ -42,4 +44,14 @@ def cut_entities(
     cut_type: str
 ) -> typing.Union[CutCells_float32, CutCells_float64]:
       return _cpp.level_set.cut_entities(level_set._cpp_object,dof_coordinates,entities,tdim,cut_type)
+
+def ghost_penalty_facets(
+    level_set: Function,
+    cut_type: str
+) -> typing.Union[CutCells_float32, CutCells_float64]:
+      return _cpp.level_set.ghost_penalty_facets(level_set._cpp_object,cut_type)
+
+def compute_normal(normal: Function,level_set: Function,entities: npt.NDArray[np.int32]):
+    _cpp.level_set.compute_normal(normal._cpp_object,level_set._cpp_object,entities)
+    return normal
 

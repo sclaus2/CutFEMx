@@ -23,6 +23,8 @@
 
 #include <cutfemx/level_set/cut_entities.h>
 #include <cutfemx/level_set/locate_entities.h>
+#include <cutfemx/level_set/ghost_penalty_facets.h>
+#include <cutfemx/level_set/compute_normal.h>
 
 namespace nb = nanobind;
 
@@ -71,6 +73,20 @@ void declare_level_set(nb::module_& m, std::string type)
                                               tdim,
                                               cut_type);
                           }, "cut entities");
+
+  m.def("ghost_penalty_facets", [](std::shared_ptr<const dolfinx::fem::Function<T>>  level_set, const std::string& ls_type)
+                          {
+                            return dolfinx_wrappers::as_nbarray(cutfemx::level_set::ghost_penalty_facets(level_set, ls_type));
+                          }, "ghost penalty facets");
+
+  m.def(
+      "compute_normal",
+      [](std::shared_ptr<dolfinx::fem::Function<T>> normal, 
+      std::shared_ptr<const dolfinx::fem::Function<T>> level_set, 
+      nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> entities)
+      {
+        cutfemx::level_set::compute_normal(normal, level_set, std::span(entities.data(), entities.size())); return ;
+      });
 
 }
 

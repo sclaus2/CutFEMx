@@ -158,9 +158,15 @@ void declare_fem(nb::module_& m, std::string type)
       nb::arg("b"), nb::arg("L"), nb::arg("constants"), nb::arg("coeffs"), nb::arg("coeffs_rt"),
       "Assemble linear form into an existing vector with pre-packed constants "
       "and coefficients");
-  m.def("create_sparsity_pattern",
-        &cutfemx::fem ::create_sparsity_pattern<T, U>, nb::arg("a"),
-        "Create a sparsity pattern.");
+
+   m.def(
+      "create_sparsity_pattern",
+      [](const cutfemx::fem::CutForm<T, U>& a)
+      {
+        return cutfemx::fem::create_sparsity_pattern(a);
+      },
+      nb::arg("a"),
+      "Create a sparsity pattern.");
     m.def(
       "assemble_matrix",
       [](dolfinx::la::MatrixCSR<T>& A, const cutfemx::fem::CutForm<T, U>& a,
@@ -259,7 +265,8 @@ void declare_fem(nb::module_& m, std::string type)
       },
       nb::arg("A"), nb::arg("a"), nb::arg("constants"), nb::arg("coeffs"), nb::arg("coeffs_rt"),
       nb::arg("bcs"), "Experimental.");
-            m.def(
+
+      m.def(
       "deactivate",
       []( dolfinx::la::MatrixCSR<T>& A, std::string deactivate_domain,
           const std::shared_ptr<dolfinx::fem::Function<T,U>> level_set,

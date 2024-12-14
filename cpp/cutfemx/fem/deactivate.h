@@ -169,14 +169,14 @@ namespace cutfemx::fem
       }
     }
 
-    std::cout << "number of deactivated dofs=" << cnt << std::endl;
+    // std::cout << "number of deactivated dofs=" << cnt << std::endl;
 
-    std::cout << "deactivated dofs=";
-    for(auto& entry: rows)
-    {
-      std::cout << entry << ", ";
-    }
-    std::cout << std::endl;
+    // std::cout << "deactivated dofs=";
+    // for(auto& entry: rows)
+    // {
+    //   std::cout << entry << ", ";
+    // }
+    // std::cout << std::endl;
 
     dolfinx::fem::set_diagonal(set_fn, rows,diagonal);
 

@@ -251,8 +251,8 @@ def cut_form(
                 if s[0] == id:
                     runtime_subdomains[itg_type].append((s[0], s[1]))
 
-        print("runtime_subdomains=", runtime_subdomains)
-        print("subdomains=", subdomains)
+        # print("runtime_subdomains=", runtime_subdomains)
+        # print("subdomains=", subdomains)
 
         if entity_maps is None:
             _entity_maps = dict()

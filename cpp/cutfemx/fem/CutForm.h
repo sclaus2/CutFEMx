@@ -462,40 +462,50 @@ CutForm<T, U> create_cut_form_factory(
                              num_integrals_type[cell]);
     auto itg = integrals.insert({dolfinx::fem::IntegralType::cell, {}});
     auto sd = subdomains.find(dolfinx::fem::IntegralType::cell);
-    for (int i = 0; i < num_integrals_type[cell]; ++i)
+
+    if (sd == subdomains.end()) {
+    //integraltype not found
+    //std::cout << "no such integral type" << std::endl;
+    }
+    else
     {
-      const int id = ids[i];
-      //find if id exists
-      for(auto it = sd->second.begin(); it!=sd->second.end(); it++ )
+      std::vector<std::pair<std::int32_t, std::shared_ptr<cutfemx::quadrature::QuadratureRules<U>>>> domains = sd->second;
+      for (int i = 0; i < num_integrals_type[cell]; ++i)
       {
-        if(it->first == id)
+        const int id = ids[i];
+        //find if id exists
+        for(auto domain: domains)
         {
-          ufcx_integral* integral
-              = ufcx_form.form_integrals[integral_offsets[cell] + i];
-          assert(integral);
-
-          // Build list of active coefficients
-          std::vector<int> active_coeffs;
-          for (int j = 0; j < ufcx_form.num_coefficients; ++j)
+          if(domain.first == id)
           {
-            if (integral->enabled_coefficients[j])
-              active_coeffs.push_back(j);
+            ufcx_integral* integral
+                = ufcx_form.form_integrals[integral_offsets[cell] + i];
+            assert(integral);
+
+            // Build list of active coefficients
+            std::vector<int> active_coeffs;
+            for (int j = 0; j < ufcx_form.num_coefficients; ++j)
+            {
+              if (integral->enabled_coefficients[j])
+                active_coeffs.push_back(j);
+            }
+
+            //add vector of elements used in integral
+            std::vector<std::pair<std::shared_ptr<basix::FiniteElement<U>>, std::int32_t>> basix_elements;
+            pack_elements(integral, hash_el, basix_elements);
+
+            kern_t k = nullptr;
+            if constexpr (std::is_same_v<T, float>)
+              k = integral->tabulate_tensor_runtime_float32;
+            else if constexpr (std::is_same_v<T, double>)
+              k = integral->tabulate_tensor_runtime_float64;
+
+            itg.first->second.emplace_back(id, k, domain.second, basix_elements, active_coeffs);
           }
-
-          //add vector of elements used in integral
-          std::vector<std::pair<std::shared_ptr<basix::FiniteElement<U>>, std::int32_t>> basix_elements;
-          pack_elements(integral, hash_el, basix_elements);
-
-          kern_t k = nullptr;
-          if constexpr (std::is_same_v<T, float>)
-            k = integral->tabulate_tensor_runtime_float32;
-          else if constexpr (std::is_same_v<T, double>)
-            k = integral->tabulate_tensor_runtime_float64;
-
-          itg.first->second.emplace_back(id, k, it->second, basix_elements, active_coeffs);
         }
       }
     }
+
   }
 
   // Attach exterior facet kernels

@@ -132,6 +132,37 @@ namespace cutfemx::fem
       pattern.insert_diagonal(rows);
     }
 
+template <dolfinx::scalar T, std::floating_point U>
+void create_sparsity_pattern(const CutForm<T,U>& a, dolfinx::la::SparsityPattern& pattern)
+{
+  // Get dof maps and mesh
+  std::array<std::reference_wrapper<const dolfinx::fem::DofMap>, 2> dofmaps{
+      *a._form->function_spaces().at(0)->dofmap(),
+      *a._form->function_spaces().at(1)->dofmap()};
+
+  const std::set<dolfinx::fem::IntegralType> types = a.integral_types();
+
+  for (auto type : types)
+  {
+    std::vector<int> ids = a.integral_ids(type);
+    switch (type)
+    {
+    case dolfinx::fem::IntegralType::cell:
+      for (int id : ids)
+      {
+        std::shared_ptr<const cutfemx::quadrature::QuadratureRules<U>> quadrature_rules
+        = a.quadrature_rules(type, id);
+        dolfinx::fem::sparsitybuild::cells(
+            pattern, {quadrature_rules->_parent_map, quadrature_rules->_parent_map},
+            {{dofmaps[0], dofmaps[1]}});
+      }
+      break;
+    default:
+      throw std::runtime_error("Unsupported integral type");
+    }
+  }
+}
+
   template <dolfinx::scalar T, std::floating_point U>
 dolfinx::la::SparsityPattern create_sparsity_pattern(const CutForm<T, U>& a)
 {
@@ -144,8 +175,7 @@ dolfinx::la::SparsityPattern create_sparsity_pattern(const CutForm<T, U>& a)
   // create sparsity pattern with stadard cells
   dolfinx::la::SparsityPattern pattern = dolfinx::fem::create_sparsity_pattern(*a._form);
   init_diagonal(a,pattern);
-
-  // Get dof maps and mesh
+    // Get dof maps and mesh
   std::array<std::reference_wrapper<const dolfinx::fem::DofMap>, 2> dofmaps{
       *a._form->function_spaces().at(0)->dofmap(),
       *a._form->function_spaces().at(1)->dofmap()};
