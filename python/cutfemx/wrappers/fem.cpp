@@ -23,9 +23,13 @@
 #include <cutfemx/quadrature/quadrature.h>
 #include <cutfemx/fem/assembler.h>
 #include <cutfemx/fem/pack_coefficients.h>
+#include <cutfemx/fem/deactivate.h>
 
 #include <dolfinx/mesh/Mesh.h>
 #include <dolfinx/fem/Form.h>
+#include <dolfinx/fem/DirichletBC.h>
+#include <dolfinx/la/MatrixCSR.h>
+#include <dolfinx/la/SparsityPattern.h>
 #include <ufcx.h>
 
 
@@ -133,6 +137,142 @@ void declare_fem(nb::module_& m, std::string type)
       nb::arg("M"), nb::arg("constants"), nb::arg("coefficients"), nb::arg("coefficients runtime"),
       "Assemble functional over mesh with provided constants and "
       "coefficients");
+  m.def(
+      "assemble_vector",
+      [](nb::ndarray<T, nb::ndim<1>, nb::c_contig> b,
+         const cutfemx::fem::CutForm<T, U>& L,
+         nb::ndarray<const T, nb::ndim<1>, nb::c_contig> constants,
+         const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+                        nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
+             coefficients,
+         const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+                        nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
+             coeffs_rt)
+      {
+        cutfemx::fem::assemble_vector<T>(
+            std::span(b.data(), b.size()), L,
+            std::span(constants.data(), constants.size()),
+            py_to_cpp_coeffs(coefficients),
+            py_to_cpp_coeffs(coeffs_rt));
+      },
+      nb::arg("b"), nb::arg("L"), nb::arg("constants"), nb::arg("coeffs"), nb::arg("coeffs_rt"),
+      "Assemble linear form into an existing vector with pre-packed constants "
+      "and coefficients");
+  m.def("create_sparsity_pattern",
+        &cutfemx::fem ::create_sparsity_pattern<T, U>, nb::arg("a"),
+        "Create a sparsity pattern.");
+    m.def(
+      "assemble_matrix",
+      [](dolfinx::la::MatrixCSR<T>& A, const cutfemx::fem::CutForm<T, U>& a,
+         nb::ndarray<const T, nb::ndim<1>, nb::c_contig> constants,
+         const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+                        nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
+             coefficients,
+         const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+         nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
+             coeffs_rt,
+         const std::vector<
+             std::shared_ptr<const dolfinx::fem::DirichletBC<T, U>>>& bcs)
+      {
+        const std::array<int, 2> data_bs
+            = {a._form->function_spaces().at(0)->dofmap()->index_map_bs(),
+               a._form->function_spaces().at(1)->dofmap()->index_map_bs()};
+
+        if (data_bs[0] != data_bs[1])
+          throw std::runtime_error(
+              "Non-square blocksize unsupported in Python");
+
+        if (data_bs[0] == 1)
+        {
+          cutfemx::fem::assemble_matrix(
+              A.mat_add_values(), a,
+              std::span<const T>(constants.data(), constants.size()),
+              py_to_cpp_coeffs(coefficients),
+              py_to_cpp_coeffs(coeffs_rt), bcs);
+        }
+        else if (data_bs[0] == 2)
+        {
+          auto mat_add = A.template mat_add_values<2, 2>();
+          cutfemx::fem::assemble_matrix(
+              mat_add, a, std::span(constants.data(), constants.size()),
+              py_to_cpp_coeffs(coefficients),
+              py_to_cpp_coeffs(coeffs_rt), bcs);
+        }
+        else if (data_bs[0] == 3)
+        {
+          auto mat_add = A.template mat_add_values<3, 3>();
+          cutfemx::fem::assemble_matrix(
+              mat_add, a, std::span(constants.data(), constants.size()),
+              py_to_cpp_coeffs(coefficients),
+              py_to_cpp_coeffs(coeffs_rt), bcs);
+        }
+        else if (data_bs[0] == 4)
+        {
+          auto mat_add = A.template mat_add_values<4, 4>();
+          cutfemx::fem::assemble_matrix(
+              mat_add, a, std::span(constants.data(), constants.size()),
+              py_to_cpp_coeffs(coefficients),
+              py_to_cpp_coeffs(coeffs_rt), bcs);
+        }
+        else if (data_bs[0] == 5)
+        {
+          auto mat_add = A.template mat_add_values<5, 5>();
+          cutfemx::fem::assemble_matrix(
+              mat_add, a, std::span(constants.data(), constants.size()),
+              py_to_cpp_coeffs(coefficients),
+              py_to_cpp_coeffs(coeffs_rt), bcs);
+        }
+        else if (data_bs[0] == 6)
+        {
+          auto mat_add = A.template mat_add_values<6, 6>();
+          cutfemx::fem::assemble_matrix(
+              mat_add, a, std::span(constants.data(), constants.size()),
+              py_to_cpp_coeffs(coefficients),
+              py_to_cpp_coeffs(coeffs_rt), bcs);
+        }
+        else if (data_bs[0] == 7)
+        {
+          auto mat_add = A.template mat_add_values<7, 7>();
+          cutfemx::fem::assemble_matrix(
+              mat_add, a, std::span(constants.data(), constants.size()),
+              py_to_cpp_coeffs(coefficients),
+              py_to_cpp_coeffs(coeffs_rt), bcs);
+        }
+        else if (data_bs[0] == 8)
+        {
+          auto mat_add = A.template mat_add_values<8, 8>();
+          cutfemx::fem::assemble_matrix(
+              mat_add, a, std::span(constants.data(), constants.size()),
+              py_to_cpp_coeffs(coefficients),
+              py_to_cpp_coeffs(coeffs_rt), bcs);
+        }
+        else if (data_bs[0] == 9)
+        {
+          auto mat_add = A.template mat_add_values<9, 9>();
+          cutfemx::fem::assemble_matrix(
+              mat_add, a, std::span(constants.data(), constants.size()),
+              py_to_cpp_coeffs(coefficients),
+              py_to_cpp_coeffs(coeffs_rt), bcs);
+        }
+        else
+          throw std::runtime_error("Block size not supported in Python");
+      },
+      nb::arg("A"), nb::arg("a"), nb::arg("constants"), nb::arg("coeffs"), nb::arg("coeffs_rt"),
+      nb::arg("bcs"), "Experimental.");
+            m.def(
+      "deactivate",
+      []( dolfinx::la::MatrixCSR<T>& A, std::string deactivate_domain,
+          const std::shared_ptr<dolfinx::fem::Function<T,U>> level_set,
+          const std::shared_ptr<dolfinx::fem::FunctionSpace<U>> V,
+          const std::vector<int>& component,
+          T diagonal)
+      {
+          dolfinx::fem::Function<T,U> xi = cutfemx::fem::deactivate(A.mat_set_values(), 
+                          deactivate_domain, level_set, V, component, diagonal);
+          return xi;
+      },
+      nb::arg("A"), nb::arg("domain to deactivate"), nb::arg("level_set"), nb::arg("V"), nb::arg("component"), nb::arg("diagonal"),
+      "Deactivate part of the domain by inserting one along the diagonal.");
 
 }
 

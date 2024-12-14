@@ -234,15 +234,14 @@ template <std::floating_point T>
 void find_element_leaves(std::shared_ptr<const dolfinx::fem::FiniteElement<T>> element,
                           std::vector<std::shared_ptr<const dolfinx::fem::FiniteElement<T>>>& leaves)
 {
-  std::cout << "Entering=" << element->num_sub_elements() << std::endl;
     if (!element) return;
 
-    std::cout << "N sub elements=" << element->num_sub_elements() << std::endl;
+    //std::cout << "N sub elements=" << element->num_sub_elements() << std::endl;
 
     // If the node has no children, it's a leaf
     if (element->num_sub_elements()== 0) {
         leaves.push_back(element);
-        std::cout << "Add element:" << leaves.size() << std::endl;
+        //std::cout << "Add element:" << leaves.size() << std::endl;
     }
 
     // Recursively check all children of the current node
@@ -306,7 +305,7 @@ void find_element_leaves(std::shared_ptr<const dolfinx::fem::FiniteElement<T>> e
       elements.push_back(basix_element);
     }
 
-    std::cout << "Number of component elements identified from function spaces=" << elements.size() << std::endl;
+    //std::cout << "Number of component elements identified from function spaces=" << elements.size() << std::endl;
 
     //Now Mesh elements
     auto mesh = form->mesh();
@@ -319,7 +318,7 @@ void find_element_leaves(std::shared_ptr<const dolfinx::fem::FiniteElement<T>> e
 
     elements.push_back(basix_element);
 
-    std::cout << "Number of component elements identified from mesh=" << elements.size() << std::endl;
+    //std::cout << "Number of component elements identified from mesh=" << elements.size() << std::endl;
 
     //Now find elements in coefficients
     auto coefficients = form->coefficients();
@@ -348,7 +347,7 @@ void find_element_leaves(std::shared_ptr<const dolfinx::fem::FiniteElement<T>> e
       elements.push_back(basix_element);
     }
 
-    std::cout << "Number of component elements identified from coefficients=" << elements_coefficients.size() << std::endl;
+    //std::cout << "Number of component elements identified from coefficients=" << elements_coefficients.size() << std::endl;
   }
 
 
@@ -366,6 +365,9 @@ void pack_elements(ufcx_integral* integral,
                    std::vector<std::pair<std::shared_ptr<basix::FiniteElement<U>>, std::int32_t>>& basix_elements)
 {
   int num_elements = integral->num_fe;
+
+  if(num_elements==0)
+    throw std::runtime_error("Number of elements in generated code is zero");
 
   std::vector<std::uint64_t> element_hashes(num_elements);
   std::vector<int> element_deriv_order(num_elements);
@@ -463,36 +465,35 @@ CutForm<T, U> create_cut_form_factory(
     for (int i = 0; i < num_integrals_type[cell]; ++i)
     {
       const int id = ids[i];
-      ufcx_integral* integral
-          = ufcx_form.form_integrals[integral_offsets[cell] + i];
-      assert(integral);
-
-      // Build list of active coefficients
-      std::vector<int> active_coeffs;
-      for (int j = 0; j < ufcx_form.num_coefficients; ++j)
+      //find if id exists
+      for(auto it = sd->second.begin(); it!=sd->second.end(); it++ )
       {
-        if (integral->enabled_coefficients[j])
-          active_coeffs.push_back(j);
-      }
+        if(it->first == id)
+        {
+          ufcx_integral* integral
+              = ufcx_form.form_integrals[integral_offsets[cell] + i];
+          assert(integral);
 
-      //add vector of elements used in integral
-      std::vector<std::pair<std::shared_ptr<basix::FiniteElement<U>>, std::int32_t>> basix_elements;
-      pack_elements(integral, hash_el, basix_elements);
+          // Build list of active coefficients
+          std::vector<int> active_coeffs;
+          for (int j = 0; j < ufcx_form.num_coefficients; ++j)
+          {
+            if (integral->enabled_coefficients[j])
+              active_coeffs.push_back(j);
+          }
 
-      kern_t k = nullptr;
-      if constexpr (std::is_same_v<T, float>)
-        k = integral->tabulate_tensor_runtime_float32;
-      else if constexpr (std::is_same_v<T, double>)
-        k = integral->tabulate_tensor_runtime_float64;
+          //add vector of elements used in integral
+          std::vector<std::pair<std::shared_ptr<basix::FiniteElement<U>>, std::int32_t>> basix_elements;
+          pack_elements(integral, hash_el, basix_elements);
 
-      if (sd != subdomains.end())
-      {
-        // NOTE: This requires that pairs are sorted
-        auto it
-            = std::ranges::lower_bound(sd->second, id, std::less<>{},
-                                       [](const auto& a) { return a.first; });
-        if (it != sd->second.end() and it->first == id)
+          kern_t k = nullptr;
+          if constexpr (std::is_same_v<T, float>)
+            k = integral->tabulate_tensor_runtime_float32;
+          else if constexpr (std::is_same_v<T, double>)
+            k = integral->tabulate_tensor_runtime_float64;
+
           itg.first->second.emplace_back(id, k, it->second, basix_elements, active_coeffs);
+        }
       }
     }
   }

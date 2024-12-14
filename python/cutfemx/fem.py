@@ -7,6 +7,7 @@ import numpy as np
 import numpy.typing as npt
 import typing
 import collections
+import functools
 from itertools import chain
 
 from cutfemx import cutfemx_cpp as _cpp
@@ -20,8 +21,10 @@ from dolfinx.fem import IntegralType
 import dolfinx.cpp as dcpp
 from mpi4py import MPI
 
-from dolfinx.fem import function
+from dolfinx.fem.assemble import create_vector
+from dolfinx import la
 from dolfinx.mesh import Mesh, MeshTags
+from dolfinx.fem.bcs import DirichletBC
 
 from dolfinx.mesh import Mesh
 from dolfinx.fem import Function
@@ -34,7 +37,8 @@ __all__ = [
   "cut_form_cpp_class",
   "cut_form",
   "cut_function",
-  "assemble_scalar"
+  "assemble_scalar",
+  "assemble_vector"
 ]
 
 _ufl_to_dolfinx_domain = {
@@ -228,7 +232,7 @@ def cut_form(
             flattened_ids.sort()
             subdomain_ids_runtime[itg_type] = flattened_ids
 
-        print("subdomain ids runtime=", subdomain_ids_runtime)
+        # print("subdomain ids runtime=", subdomain_ids_runtime)
 
         # Subdomain markers (possibly empty list for some integral
         # types)
@@ -299,4 +303,93 @@ def assemble_scalar(M: CutForm, constants=None, coeffs=None, coeffs_rt=None):
 
     return _cpp.fem.assemble_scalar(M._cpp_object, constants, coeffs, coeffs_rt)
 
+def assemble_scalar(M: CutForm, constants=None, coeffs=None, coeffs_rt=None):
+    constants = constants or _pack_constants(M._form._cpp_object)
+    coeffs = coeffs or _pack_coefficients(M._form._cpp_object)
+    coeffs_rt = coeffs_rt or _cpp.fem.pack_coefficients(M._cpp_object)
 
+    return _cpp.fem.assemble_scalar(M._cpp_object, constants, coeffs, coeffs_rt)
+
+
+@functools.singledispatch
+def assemble_vector(L: typing.Any, constants=None, coeffs=None, coeffs_rt=None):
+    return _assemble_vector_form(L, constants, coeffs, coeffs_rt)
+
+
+@assemble_vector.register(CutForm)
+def _assemble_vector_form(L: CutForm, constants=None, coeffs=None, coeffs_rt=None) -> la.Vector:
+    b = create_vector(L._form)
+    b.array[:] = 0
+    constants = constants or _pack_constants(L._form._cpp_object)
+    coeffs = coeffs or _pack_coefficients(L._form._cpp_object)
+    coeffs_rt = coeffs_rt or _cpp.fem.pack_coefficients(L._cpp_object)
+    _assemble_vector_array(b.array, L, constants, coeffs, coeffs_rt)
+    return b
+
+@assemble_vector.register(np.ndarray)
+def _assemble_vector_array(b: np.ndarray, L: CutForm, constants=None, coeffs=None, coeffs_rt=None):
+    constants = _pack_constants(L._form._cpp_object) if constants is None else constants
+    coeffs = _pack_coefficients(L._form._cpp_object) if coeffs is None else coeffs
+    coeffs_rt = _cpp.fem.pack_coefficients(L._cpp_object) if coeffs_rt is None else coeffs_rt
+    _cpp.fem.assemble_vector(b, L._cpp_object, constants, coeffs, coeffs_rt)
+    return b
+
+def create_sparsity_pattern(a: CutForm):
+    return _cpp.fem.create_sparsity_pattern(a._cpp_object)
+
+def create_matrix(a: CutForm, block_mode: typing.Optional[la.BlockMode] = None) -> la.MatrixCSR:
+    sp = create_sparsity_pattern(a)
+    sp.finalize()
+    if block_mode is not None:
+        return la.matrix_csr(sp, block_mode=block_mode, dtype=a.dtype)
+    else:
+        return la.matrix_csr(sp, dtype=a.dtype)
+
+@functools.singledispatch
+def assemble_matrix(
+    a: typing.Any,
+    bcs: typing.Optional[list[DirichletBC]] = None,
+    diagonal: float = 1.0,
+    constants=None,
+    coeffs=None,
+    coeffs_rt=None,
+    block_mode: typing.Optional[la.BlockMode] = None,
+):
+    bcs = [] if bcs is None else bcs
+    A: la.MatrixCSR = create_matrix(a, block_mode)
+    _assemble_matrix_csr(A, a, bcs, diagonal, constants, coeffs, coeffs_rt)
+    return A
+
+
+@assemble_matrix.register
+def _assemble_matrix_csr(
+    A: la.MatrixCSR,
+    a: CutForm,
+    bcs: typing.Optional[list[DirichletBC]] = None,
+    diagonal: float = 1.0,
+    constants=None,
+    coeffs=None,
+    coeffs_rt=None
+) -> la.MatrixCSR:
+    bcs = [] if bcs is None else [bc._cpp_object for bc in bcs]
+    constants = _pack_constants(a._form._cpp_object) if constants is None else constants
+    coeffs = _pack_coefficients(a._form._cpp_object) if coeffs is None else coeffs
+    coeffs_rt = _cpp.fem.pack_coefficients(a._cpp_object) if coeffs_rt is None else coeffs_rt
+
+    _cpp.fem.assemble_matrix(A._cpp_object, a._cpp_object, constants, coeffs, coeffs_rt, bcs)
+
+    # If matrix is a 'diagonal'block, set diagonal entry for constrained
+    # dofs
+    if a._form.function_spaces[0] is a._form.function_spaces[1]:
+        dcpp.fem.insert_diagonal(A._cpp_object, a._form.function_spaces[0], bcs, diagonal)
+    return A
+
+def deactivate(A: la.MatrixCSR, deactivate_domain: str, level_set: Function , V: typing.Any, diagonal: float = 1.0) -> Function:
+      if(len(V)==1):
+        component = [-1]
+        xi = _cpp.fem.deactivate(A._cpp_object, deactivate_domain, level_set._cpp_object, V[0]._cpp_object, component, diagonal)
+        return xi
+      else:
+        component = [V[1]]
+        xi = _cpp.fem.deactivate(A._cpp_object, deactivate_domain, level_set._cpp_object, V[0]._cpp_object, component, diagonal)
+        return xi
