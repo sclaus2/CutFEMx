@@ -12,12 +12,14 @@ from cutfemx import cutfemx_cpp as _cpp
 from cutcells import CutCells_float32, CutCells_float64
 
 from dolfinx.fem import Function
+from dolfinx.mesh import Mesh
 
 __all__ = [
   "locate_entities",
   "locate_entities_part",
   "cut_entities",
   "ghost_penalty_facets",
+  "facet_topology",
   "compute_normal"
 ]
 
@@ -48,8 +50,14 @@ def cut_entities(
 def ghost_penalty_facets(
     level_set: Function,
     cut_type: str
-) -> typing.Union[CutCells_float32, CutCells_float64]:
+) -> npt.NDArray[np.int32]:
       return _cpp.level_set.ghost_penalty_facets(level_set._cpp_object,cut_type)
+
+def facet_topology(
+    mesh: Mesh,
+    facet_ids: npt.NDArray[np.int32]
+) -> npt.NDArray[np.int32]:
+      return _cpp.level_set.facet_topology(mesh._cpp_object,facet_ids)
 
 def compute_normal(normal: Function,level_set: Function,entities: npt.NDArray[np.int32]):
     _cpp.level_set.compute_normal(normal._cpp_object,level_set._cpp_object,entities)

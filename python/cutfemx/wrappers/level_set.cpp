@@ -13,6 +13,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/array.h>
 #include <span>
 
 #include <dolfinx/fem/Function.h>
@@ -74,10 +75,22 @@ void declare_level_set(nb::module_& m, std::string type)
                                               cut_type);
                           }, "cut entities");
 
-  m.def("ghost_penalty_facets", [](std::shared_ptr<const dolfinx::fem::Function<T>>  level_set, const std::string& ls_type)
-                          {
-                            return dolfinx_wrappers::as_nbarray(cutfemx::level_set::ghost_penalty_facets(level_set, ls_type));
-                          }, "ghost penalty facets");
+  m.def("ghost_penalty_facets", []
+  (std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
+                                            const std::string& ls_type)
+  {
+    std::vector<int32_t> facet_ids;
+    cutfemx::level_set::ghost_penalty_facets(level_set, ls_type, facet_ids);
+    return dolfinx_wrappers::as_nbarray(facet_ids);
+  }, "ghost penalty facets");
+
+  m.def("facet_topology", [](std::shared_ptr<const dolfinx::mesh::Mesh<U>> mesh,
+                             nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> facet_ids)
+  {
+    std::vector<std::int32_t> facet_topology;
+    cutfemx::level_set::facet_topology(mesh, std::span(facet_ids.data(),facet_ids.size()), facet_topology);
+    return dolfinx_wrappers::as_nbarray(facet_topology);
+  }, "obtain facet topology for interior facets");
 
   m.def(
       "compute_normal",
