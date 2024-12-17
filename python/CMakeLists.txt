@@ -75,6 +75,7 @@ nanobind_add_module(
   cutfemx/wrappers/quadrature.cpp
   cutfemx/wrappers/mesh.cpp
   cutfemx/wrappers/fem.cpp
+  cutfemx/wrappers/petsc.cpp
 )
 target_compile_definitions(cutfemx_cpp PRIVATE cxx_std_20)
 

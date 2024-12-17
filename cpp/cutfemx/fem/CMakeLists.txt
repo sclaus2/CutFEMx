@@ -10,6 +10,7 @@ set(HEADERS_fem
   ${CMAKE_CURRENT_SOURCE_DIR}/assemble_matrix.h
   ${CMAKE_CURRENT_SOURCE_DIR}/typedefs.h
   ${CMAKE_CURRENT_SOURCE_DIR}/deactivate.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/petsc.h
   PARENT_SCOPE)
 
 target_sources(cutfemx PRIVATE

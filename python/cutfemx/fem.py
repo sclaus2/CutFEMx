@@ -38,7 +38,12 @@ __all__ = [
   "cut_form",
   "cut_function",
   "assemble_scalar",
-  "assemble_vector"
+  "assemble_vector",
+  "assemble_matrix",
+  "create_sparsity_pattern",
+  "create_matrix",
+  "deactivate"
+
 ]
 
 _ufl_to_dolfinx_domain = {
