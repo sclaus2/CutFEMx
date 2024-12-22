@@ -101,8 +101,7 @@ void declare_quadrature(nb::module_& m, std::string type)
           "parent_map",
           [](cutfemx::quadrature::QuadratureRules<T>& self)
           {
-            return nb::ndarray<std::int64_t, nb::numpy>(
-                self._parent_map.data(), {self._parent_map.size()}, nb::handle());
+            return nb::ndarray<const std::int32_t, nb::numpy>(self._parent_map.data(),{self._parent_map.size()}, nb::handle());
           },
           nb::rv_policy::reference_internal,
           " Return map of quadrature rules to parent mesh cell.");

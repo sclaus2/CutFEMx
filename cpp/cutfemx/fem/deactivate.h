@@ -69,7 +69,7 @@ namespace cutfemx::fem
     assert(dofmap);
 
     //deactivate all dofs in component sub-space to re-activate some of them below
-    for(std::size_t c=0;c<num_cells;c++)
+    for(std::int32_t c=0;c<num_cells;c++)
     {
       std::span<const std::int32_t> dofs_xi = dofmap_xi->cell_dofs(c);
 
@@ -79,7 +79,7 @@ namespace cutfemx::fem
             xi_values[bs_dof_xi*dofs_xi[i]+k]=0.0;
     }
 
-    for(std::size_t c=0;c<num_cells;c++)
+    for(std::int32_t c=0;c<num_cells;c++)
     {
       int cell_index = c;
       std::span<const std::int32_t> dofs = dofmap->cell_dofs(cell_index);
@@ -142,6 +142,9 @@ namespace cutfemx::fem
       }
     }
 
+    //Communicate values of Function
+    xi.x()->scatter_fwd();
+
     //Visualize xi
     // std::string filename = "xi.pvd";
     // dolfinx::io::VTKFile file(mesh->comm(), filename, "w");
@@ -169,14 +172,14 @@ namespace cutfemx::fem
       }
     }
 
-    // std::cout << "number of deactivated dofs=" << cnt << std::endl;
+    std::cout << "number of deactivated dofs=" << cnt << std::endl;
 
-    // std::cout << "deactivated dofs=";
-    // for(auto& entry: rows)
-    // {
-    //   std::cout << entry << ", ";
-    // }
-    // std::cout << std::endl;
+    std::cout << "deactivated dofs=";
+    for(auto& entry: rows)
+    {
+      std::cout << entry << ", ";
+    }
+    std::cout << std::endl;
 
     dolfinx::fem::set_diagonal(set_fn, rows,diagonal);
 

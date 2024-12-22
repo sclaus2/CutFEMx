@@ -81,8 +81,7 @@ void assemble_cells(
   std::vector<scalar_value_type_t<T>> coordinate_dofs(3 * x_dofmap.extent(1));
 
   // Iterate over active cells
-  assert(cells0.size() == cells.size());
-  assert(cells1.size() == cells.size());
+
   for (std::size_t index = 0; index < quadrature_rules->_parent_map.size(); ++index)
   {
     // Cell index in integration domain mesh (c), test function mesh

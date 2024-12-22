@@ -73,6 +73,8 @@ void petsc_fem_module(nb::module_& m)
           const std::vector<int>& component,
           PetscScalar diagonal)
       {
+          MatAssemblyBegin(A, MAT_FLUSH_ASSEMBLY);
+          MatAssemblyEnd(A, MAT_FLUSH_ASSEMBLY);
           dolfinx::fem::Function<PetscScalar, PetscReal> xi = cutfemx::fem::deactivate(dolfinx::la::petsc::Matrix::set_fn(A, INSERT_VALUES),
                           deactivate_domain, level_set, V, component, diagonal);
           return xi;

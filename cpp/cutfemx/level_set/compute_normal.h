@@ -178,6 +178,8 @@ namespace cutfemx::level_set
         }
       }
     }
+
+    normal->x()->scatter_fwd();
   }
 
 }

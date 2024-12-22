@@ -102,6 +102,7 @@ namespace cutfemx::quadrature
     auto intersected_cells = cutfemx::level_set::locate_entities<T>(level_set,entities,tdim,"phi=0");
 
     int num_entities = intersected_cells.size();
+
     std::vector<cutcells::cell::CutCell<T>> cut_cells;
     cutfemx::level_set::cut_reference_entities<T>(level_set, std::span(intersected_cells.data(),intersected_cells.size()), tdim,
                                 entity_type,

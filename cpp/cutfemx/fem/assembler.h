@@ -25,6 +25,7 @@
 #include <dolfinx/fem/utils.h>
 #include <dolfinx/common/types.h>
 #include <dolfinx/mesh/Mesh.h>
+#include <dolfinx/la/SparsityPattern.h>
 #include <dolfinx/fem/Function.h>
 #include <dolfinx/fem/Form.h>
 #include <dolfinx/fem/Constant.h>
