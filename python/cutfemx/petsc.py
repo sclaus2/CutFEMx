@@ -31,7 +31,8 @@ __all__ = [
   "create_matrix",
   "assemble_vector",
   "assemble_matrix",
-  "deactivate"
+  "deactivate",
+  "locate_dofs"
 ]
 
 def create_matrix(a: CutForm, mat_type=None) -> PETSc.Mat:
@@ -87,4 +88,14 @@ def deactivate(A: PETSc.Mat, deactivate_domain: str, level_set: Function , V: ty
       else:
         component = [V[1]]
         xi = _cpp.fem.petsc.deactivate(A, deactivate_domain, level_set._cpp_object, V[0]._cpp_object, component, diagonal)
+        return xi
+
+def locate_dofs(deactivate_domain: str, level_set: Function , V: typing.Any) -> npt.NDArray[np.int32]:
+      if(len(V)==1):
+        component = [-1]
+        xi = _cpp.fem.petsc.locate_dofs(deactivate_domain, level_set._cpp_object, V[0]._cpp_object, component)
+        return xi
+      else:
+        component = [V[1]]
+        xi = _cpp.fem.petsc.locate_dofs(deactivate_domain, level_set._cpp_object, V[0]._cpp_object, component)
         return xi

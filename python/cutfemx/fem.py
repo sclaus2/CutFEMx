@@ -243,6 +243,7 @@ def cut_form(
         # types)
         subdomains = {}
         runtime_subdomains = {}
+        treated_ids = set()
 
         for itg_type, ids in subdomain_ids.items():
             subdomains[itg_type] = get_integration_domains(
@@ -254,7 +255,9 @@ def cut_form(
             for id in ids:
               for s in runtime_sd[itg_type][0]:
                 if s[0] == id:
-                    runtime_subdomains[itg_type].append((s[0], s[1]))
+                    if id not in treated_ids:
+                      treated_ids.add(id)
+                      runtime_subdomains[itg_type].append((s[0], s[1]))
 
         print("runtime_subdomains=", runtime_subdomains)
         print("subdomains=", subdomains)

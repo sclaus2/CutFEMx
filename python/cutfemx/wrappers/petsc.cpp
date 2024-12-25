@@ -81,6 +81,18 @@ void petsc_fem_module(nb::module_& m)
       },
       nb::arg("A"), nb::arg("domain to deactivate"), nb::arg("level_set"), nb::arg("V"), nb::arg("component"), nb::arg("diagonal"),
       "Deactivate part of the domain by inserting one along the diagonal.");
+
+  m.def(
+      "locate_dofs",
+      []( std::string deactivate_domain,
+          const std::shared_ptr<dolfinx::fem::Function<PetscScalar, PetscReal>> level_set,
+          const std::shared_ptr<dolfinx::fem::FunctionSpace<PetscReal>> V,
+          const std::vector<int>& component)
+      {
+        return dolfinx_wrappers::as_nbarray(cutfemx::fem::locate_dofs(deactivate_domain, level_set, V, component));
+      },
+      nb::arg("domain to deactivate"), nb::arg("level_set"), nb::arg("V"), nb::arg("component"),
+      "Get dofs to deactivate.");
 }
 
 } // namespace
