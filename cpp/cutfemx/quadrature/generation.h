@@ -293,7 +293,7 @@ namespace cutfemx::quadrature
       entity_map = mesh->topology()->index_map(tdim);
     }
 
-    std::int32_t num_entities = entity_map->size_local()+entity_map->num_ghosts();
+    std::int32_t num_entities = entity_map->size_local();//+entity_map->num_ghosts();
     std::vector<int32_t> entities(num_entities);
     std::iota (std::begin(entities), std::end(entities), 0);
 

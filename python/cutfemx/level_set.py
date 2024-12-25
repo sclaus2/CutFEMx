@@ -26,9 +26,10 @@ __all__ = [
 def locate_entities(
     level_set: Function,
     dim: int,
-    ls_part: str
+    ls_part: str,
+    include_ghosts: bool = False,
 ) -> npt.NDArray[np.int32]:
-  return _cpp.level_set.locate_entities(level_set._cpp_object,dim,ls_part)
+  return _cpp.level_set.locate_entities(level_set._cpp_object,dim,ls_part,include_ghosts)
 
 def locate_entities_part(
     level_set: Function,

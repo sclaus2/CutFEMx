@@ -135,6 +135,7 @@ A.assemble()
 print(A.view(viewer=PETSc.Viewer().createASCII("A.dat")))
 b = assemble_vector(L_cut)
 b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 # Set solver options
 opts = PETSc.Options()  # type: ignore

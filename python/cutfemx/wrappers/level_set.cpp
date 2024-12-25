@@ -38,9 +38,9 @@ void declare_level_set(nb::module_& m, std::string type)
 
   m.def("locate_entities", [](std::shared_ptr<const dolfinx::fem::Function<T,U>> level_set,
                                        const int& dim,
-                                       const std::string& ls_part)
+                                       const std::string& ls_part, 
+                                       bool include_ghost)
             {
-              bool include_ghost = true;
               return dolfinx_wrappers::as_nbarray(cutfemx::level_set::locate_entities(level_set,
                                        dim,
                                       ls_part,
