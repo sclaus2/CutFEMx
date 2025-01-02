@@ -39,7 +39,7 @@ namespace cutfemx::fem
 
 template <dolfinx::scalar T, std::floating_point U>
 std::pair<std::vector<T>, int>
-allocate_coefficient_storage(const CutForm<T, U>& form, dolfinx::fem::IntegralType integral_type,
+allocate_coefficient_storage(const CutForm<T, U>& form, cutfemx::fem::IntegralType integral_type,
                              int id)
 {
   // Get form coefficient offsets and dofmaps
@@ -53,8 +53,7 @@ allocate_coefficient_storage(const CutForm<T, U>& form, dolfinx::fem::IntegralTy
   {
     cstride = offsets.back();
     num_entities = form.quadrature_rules(integral_type, id)->_parent_map.size();
-    if (integral_type == dolfinx::fem::IntegralType::exterior_facet
-        or integral_type == dolfinx::fem::IntegralType::interior_facet)
+    if (integral_type == cutfemx::fem::IntegralType::interface)
     {
       num_entities /= 2;
     }
@@ -64,10 +63,10 @@ allocate_coefficient_storage(const CutForm<T, U>& form, dolfinx::fem::IntegralTy
 }
 
 template <dolfinx::scalar T, std::floating_point U>
-std::map<std::pair<dolfinx::fem::IntegralType, int>, std::pair<std::vector<T>, int>>
+std::map<std::pair<cutfemx::fem::IntegralType, int>, std::pair<std::vector<T>, int>>
 allocate_coefficient_storage(const CutForm<T, U>& form)
 {
-  std::map<std::pair<dolfinx::fem::IntegralType, int>, std::pair<std::vector<T>, int>> coeffs;
+  std::map<std::pair<cutfemx::fem::IntegralType, int>, std::pair<std::vector<T>, int>> coeffs;
   for (auto integral_type : form.integral_types())
   {
     for (int id : form.integral_ids(integral_type))
@@ -82,7 +81,7 @@ allocate_coefficient_storage(const CutForm<T, U>& form)
 }
 
 template <dolfinx::scalar T, std::floating_point U>
-void pack_coefficients(const CutForm<T, U>& form, dolfinx::fem::IntegralType integral_type,
+void pack_coefficients(const CutForm<T, U>& form, cutfemx::fem::IntegralType integral_type,
                        int id, std::span<T> c, int cstride)
 {
   // Get form coefficient offsets and dofmaps
@@ -96,13 +95,13 @@ void pack_coefficients(const CutForm<T, U>& form, dolfinx::fem::IntegralType int
   {
     switch (integral_type)
     {
-    case dolfinx::fem::IntegralType::cell:
+    case cutfemx::fem::IntegralType::cutcell:
     {
       // Get indicator for all coefficients that are active in cell
       // integrals
-      for (std::size_t i = 0; i < form.num_integrals(dolfinx::fem::IntegralType::cell); ++i)
+      for (std::size_t i = 0; i < form.num_integrals(cutfemx::fem::IntegralType::cutcell); ++i)
       {
-        for (auto idx : form.active_coeffs(dolfinx::fem::IntegralType::cell, i))
+        for (auto idx : form.active_coeffs(cutfemx::fem::IntegralType::cutcell, i))
           active_coefficient[idx] = 1;
       }
 
@@ -128,7 +127,7 @@ void pack_coefficients(const CutForm<T, U>& form, dolfinx::fem::IntegralType int
         }
 
         std::vector<std::int32_t> cells
-            = form.quadrature_rules(dolfinx::fem::IntegralType::cell, id)->_parent_map;
+            = form.quadrature_rules(cutfemx::fem::IntegralType::cutcell, id)->_parent_map;
         std::span<const std::uint32_t> cell_info
             = dolfinx::fem::impl::get_cell_orientation_info(*coefficients[coeff]);
         dolfinx::fem::impl::pack_coefficient_entity(
@@ -211,7 +210,7 @@ void pack_coefficients(const CutForm<T, U>& form, dolfinx::fem::IntegralType int
 
 template <dolfinx::scalar T, std::floating_point U>
 void pack_coefficients(const CutForm<T, U>& form,
-                       std::map<std::pair<dolfinx::fem::IntegralType, int>,
+                       std::map<std::pair<cutfemx::fem::IntegralType, int>,
                                 std::pair<std::vector<T>, int>>& coeffs)
 {
   for (auto& [key, val] : coeffs)

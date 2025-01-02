@@ -17,6 +17,8 @@
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/pair.h>
 #include <span>
+#include <map>
+#include <algorithm>
 
 #include <cutfemx/fem/CutForm.h>
 #include <cutfemx/fem/interpolate.h>
@@ -37,6 +39,28 @@ namespace nb = nanobind;
 
 namespace
 {
+
+template <typename T>
+std::map<std::pair<cutfemx::fem::IntegralType, int>,
+         std::pair<std::span<const T>, int>>
+py_to_cpp_coeffs_rt(
+    const std::map<std::pair<cutfemx::fem::IntegralType, int>,
+                   nb::ndarray<T, nb::ndim<2>, nb::c_contig>>& coeffs)
+{
+  using Key_t = typename std::remove_reference_t<decltype(coeffs)>::key_type;
+  std::map<Key_t, std::pair<std::span<const T>, int>> c;
+  std::ranges::transform(
+      coeffs, std::inserter(c, c.end()),
+      [](auto& e) -> typename decltype(c)::value_type
+      {
+        return {e.first,
+                {std::span(static_cast<const T*>(e.second.data()),
+                           e.second.shape(0)),
+                 e.second.shape(1)}};
+      });
+  return c;
+}
+
 template <typename T>
 void declare_fem(nb::module_& m, std::string type)
 {
@@ -49,7 +73,7 @@ void declare_fem(nb::module_& m, std::string type)
           "__init__",
           [](cutfemx::fem::CutForm<T, U>* fp, std::uintptr_t ufcform,
                 std::shared_ptr<const dolfinx::fem::Form<T, U>> form,
-                const std::map<dolfinx::fem::IntegralType,
+                const std::map<cutfemx::fem::IntegralType,
                 std::vector<std::pair<std::int32_t, std::shared_ptr<cutfemx::quadrature::QuadratureRules<U>>>>>&
                 subdomains)
           {
@@ -62,7 +86,7 @@ void declare_fem(nb::module_& m, std::string type)
       .def(
           "integral_ids",
           [](const cutfemx::fem::CutForm<T, U>& self,
-             dolfinx::fem::IntegralType type)
+             cutfemx::fem::IntegralType type)
           {
             auto ids = self.integral_ids(type);
             return dolfinx_wrappers::as_nbarray(std::move(ids));
@@ -72,7 +96,7 @@ void declare_fem(nb::module_& m, std::string type)
       .def(
           "quadrature_rules",
           [](const cutfemx::fem::CutForm<T, U>& self,
-             dolfinx::fem::IntegralType type, int i)
+             cutfemx::fem::IntegralType type, int i)
           {
             return self.quadrature_rules(type, i);
           },
@@ -88,7 +112,7 @@ void declare_fem(nb::module_& m, std::string type)
       "pack_coefficients",
       [](const cutfemx::fem::CutForm<T, U>& form)
       {
-        using Key_t = typename std::pair<dolfinx::fem::IntegralType, int>;
+        using Key_t = typename std::pair<cutfemx::fem::IntegralType, int>;
 
         // Pack coefficients
         std::map<Key_t, std::pair<std::vector<T>, int>> coeffs
@@ -105,7 +129,7 @@ void declare_fem(nb::module_& m, std::string type)
                   = e.second.first.empty()
                         ? 0
                         : e.second.first.size() / e.second.second;
-              return std::pair<const std::pair<dolfinx::fem::IntegralType, int>,
+              return std::pair<const std::pair<cutfemx::fem::IntegralType, int>,
                                nb::ndarray<T, nb::numpy>>(
                   e.first,
                   dolfinx_wrappers::as_nbarray(
@@ -125,14 +149,14 @@ void declare_fem(nb::module_& m, std::string type)
          const std::map<std::pair<dolfinx::fem::IntegralType, int>,
                         nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
              coefficients,
-         const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+         const std::map<std::pair<cutfemx::fem::IntegralType, int>,
                         nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
              coeffs_rt)
       {
         std::cout << "entering: ";
         return cutfemx::fem::assemble_scalar<T,U>(
             M, std::span(constants.data(), constants.size()),
-            py_to_cpp_coeffs(coefficients),py_to_cpp_coeffs(coeffs_rt));
+            py_to_cpp_coeffs(coefficients),py_to_cpp_coeffs_rt(coeffs_rt));
       },
       nb::arg("M"), nb::arg("constants"), nb::arg("coefficients"), nb::arg("coefficients runtime"),
       "Assemble functional over mesh with provided constants and "
@@ -145,7 +169,7 @@ void declare_fem(nb::module_& m, std::string type)
          const std::map<std::pair<dolfinx::fem::IntegralType, int>,
                         nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
              coefficients,
-         const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+         const std::map<std::pair<cutfemx::fem::IntegralType, int>,
                         nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
              coeffs_rt)
       {
@@ -153,7 +177,7 @@ void declare_fem(nb::module_& m, std::string type)
             std::span(b.data(), b.size()), L,
             std::span(constants.data(), constants.size()),
             py_to_cpp_coeffs(coefficients),
-            py_to_cpp_coeffs(coeffs_rt));
+            py_to_cpp_coeffs_rt(coeffs_rt));
       },
       nb::arg("b"), nb::arg("L"), nb::arg("constants"), nb::arg("coeffs"), nb::arg("coeffs_rt"),
       "Assemble linear form into an existing vector with pre-packed constants "
@@ -174,7 +198,7 @@ void declare_fem(nb::module_& m, std::string type)
     //      const std::map<std::pair<dolfinx::fem::IntegralType, int>,
     //                     nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
     //          coefficients,
-    //      const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+    //      const std::map<std::pair<cutfemx::fem::IntegralType, int>,
     //      nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
     //          coeffs_rt,
     //      const std::vector<
@@ -194,7 +218,7 @@ void declare_fem(nb::module_& m, std::string type)
     //           A.mat_add_values(), a,
     //           std::span<const T>(constants.data(), constants.size()),
     //           py_to_cpp_coeffs(coefficients),
-    //           py_to_cpp_coeffs(coeffs_rt), bcs);
+    //           py_to_cpp_coeffs_rt(coeffs_rt), bcs);
     //     }
     //     else if (data_bs[0] == 2)
     //     {
@@ -202,7 +226,7 @@ void declare_fem(nb::module_& m, std::string type)
     //       cutfemx::fem::assemble_matrix(
     //           mat_add, a, std::span(constants.data(), constants.size()),
     //           py_to_cpp_coeffs(coefficients),
-    //           py_to_cpp_coeffs(coeffs_rt), bcs);
+    //           py_to_cpp_coeffs_rt(coeffs_rt), bcs);
     //     }
     //     else if (data_bs[0] == 3)
     //     {
@@ -210,7 +234,7 @@ void declare_fem(nb::module_& m, std::string type)
     //       cutfemx::fem::assemble_matrix(
     //           mat_add, a, std::span(constants.data(), constants.size()),
     //           py_to_cpp_coeffs(coefficients),
-    //           py_to_cpp_coeffs(coeffs_rt), bcs);
+    //           py_to_cpp_coeffs_rt(coeffs_rt), bcs);
     //     }
     //     else if (data_bs[0] == 4)
     //     {
@@ -218,7 +242,7 @@ void declare_fem(nb::module_& m, std::string type)
     //       cutfemx::fem::assemble_matrix(
     //           mat_add, a, std::span(constants.data(), constants.size()),
     //           py_to_cpp_coeffs(coefficients),
-    //           py_to_cpp_coeffs(coeffs_rt), bcs);
+    //           py_to_cpp_coeffs_rt(coeffs_rt), bcs);
     //     }
     //     else if (data_bs[0] == 5)
     //     {
@@ -226,7 +250,7 @@ void declare_fem(nb::module_& m, std::string type)
     //       cutfemx::fem::assemble_matrix(
     //           mat_add, a, std::span(constants.data(), constants.size()),
     //           py_to_cpp_coeffs(coefficients),
-    //           py_to_cpp_coeffs(coeffs_rt), bcs);
+    //           py_to_cpp_coeffs_rt(coeffs_rt), bcs);
     //     }
     //     else if (data_bs[0] == 6)
     //     {
@@ -234,7 +258,7 @@ void declare_fem(nb::module_& m, std::string type)
     //       cutfemx::fem::assemble_matrix(
     //           mat_add, a, std::span(constants.data(), constants.size()),
     //           py_to_cpp_coeffs(coefficients),
-    //           py_to_cpp_coeffs(coeffs_rt), bcs);
+    //           py_to_cpp_coeffs_rt(coeffs_rt), bcs);
     //     }
     //     else if (data_bs[0] == 7)
     //     {
@@ -242,7 +266,7 @@ void declare_fem(nb::module_& m, std::string type)
     //       cutfemx::fem::assemble_matrix(
     //           mat_add, a, std::span(constants.data(), constants.size()),
     //           py_to_cpp_coeffs(coefficients),
-    //           py_to_cpp_coeffs(coeffs_rt), bcs);
+    //           py_to_cpp_coeffs_rt(coeffs_rt), bcs);
     //     }
     //     else if (data_bs[0] == 8)
     //     {
@@ -250,7 +274,7 @@ void declare_fem(nb::module_& m, std::string type)
     //       cutfemx::fem::assemble_matrix(
     //           mat_add, a, std::span(constants.data(), constants.size()),
     //           py_to_cpp_coeffs(coefficients),
-    //           py_to_cpp_coeffs(coeffs_rt), bcs);
+    //           py_to_cpp_coeffs_rt(coeffs_rt), bcs);
     //     }
     //     else if (data_bs[0] == 9)
     //     {
@@ -258,7 +282,7 @@ void declare_fem(nb::module_& m, std::string type)
     //       cutfemx::fem::assemble_matrix(
     //           mat_add, a, std::span(constants.data(), constants.size()),
     //           py_to_cpp_coeffs(coefficients),
-    //           py_to_cpp_coeffs(coeffs_rt), bcs);
+    //           py_to_cpp_coeffs_rt(coeffs_rt), bcs);
     //     }
     //     else
     //       throw std::runtime_error("Block size not supported in Python");
@@ -289,6 +313,11 @@ namespace cutfemx_wrappers
 {
   void fem(nb::module_& m)
   {
+    nb::enum_<cutfemx::fem::IntegralType>(m, "IntegralType")
+    .value("cutcell", cutfemx::fem::IntegralType::cutcell, "runtime integral on cell")
+    .value("interface", cutfemx::fem::IntegralType::interface,
+            "runtime integral on interface between two parent cells");
+
     declare_fem<float>(m, "float32");
     declare_fem<double>(m, "float64");
   }

@@ -15,7 +15,7 @@ namespace cutfemx::mesh
 {
   //return Mesh and parent cell map as this can be used for interpolation
   template <std::floating_point T>
-  CutMesh<T> create_cut_mesh(MPI_Comm comm, const int& num_local_cells, cutcells::mesh::CutCells<T>& cut_cells);
+  CutMesh<T> create_cut_mesh(MPI_Comm comm, cutcells::mesh::CutCells<T>& cut_cells);
 
   template <std::floating_point T>
   CutMesh<T> create_cut_mesh(MPI_Comm comm, cutcells::mesh::CutCells<T>& cut_cells,

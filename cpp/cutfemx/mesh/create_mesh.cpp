@@ -164,12 +164,11 @@ namespace cutfemx::mesh
   //Merge vertex coordinates
   // input: cut_cells and vertex coordinates
   // returns: updated vertex coordinates and vertex_map
-  template <std::floating_point T> void merge_vertex_coords(const int& num_local_cells, cutcells::mesh::CutCells<T>& cut_cells,
+  template <std::floating_point T> void merge_vertex_coords(cutcells::mesh::CutCells<T>& cut_cells,
                 std::vector<T>& vertex_coords,
                 std::vector<std::vector<int>>& vertex_map)
   {
     // Build list of vertex coordinates by removing any doubles
-    // and not counting vertices of ghost cells if num_local_cells does not include them
     auto gdim = cut_cells._cut_cells[0]._gdim;
     int merged_vertex_id = 0;
     int vertex_counter = 0;
@@ -184,11 +183,6 @@ namespace cutfemx::mesh
     for(auto & cut_cell : cut_cells._cut_cells)
     {
       if(cut_cell._vertex_coords.size()==0)
-      {
-        continue;
-      }
-      //skip if cut cell has ghost parent
-      if(cut_cell._parent_cell_index[0]>num_local_cells)
       {
         continue;
       }
@@ -227,7 +221,7 @@ namespace cutfemx::mesh
 
   //return Mesh and parent cell map as this can be used for interpolation
   template <std::floating_point T>
-  CutMesh<T> create_cut_mesh(MPI_Comm comm, const int& num_local_cells, cutcells::mesh::CutCells<T>& cut_cells)
+  CutMesh<T> create_cut_mesh(MPI_Comm comm, cutcells::mesh::CutCells<T>& cut_cells)
   {
     CutMesh<T> cut_mesh;
 
@@ -243,7 +237,7 @@ namespace cutfemx::mesh
     for(auto & cut_cell :  cut_cells._cut_cells)
     {
       // purpose here is to exclude ghosts
-      if((cut_cell._parent_cell_index[0]<=num_local_cells) && (cut_cell._vertex_coords.size()>0))
+      if(cut_cell._vertex_coords.size()>0)
         num_cells += cut_cell._connectivity.size();
     }
 
@@ -253,7 +247,7 @@ namespace cutfemx::mesh
     std::vector<T> vertex_coords;
     std::vector<std::vector<int>> vertex_map(cut_cells._cut_cells.size());
 
-    merge_vertex_coords(num_local_cells, cut_cells, vertex_coords, vertex_map);
+    merge_vertex_coords(cut_cells, vertex_coords, vertex_map);
 
     // Determine offset between processors
     // this is because dolfinx expects global vertex numbering
@@ -274,7 +268,7 @@ namespace cutfemx::mesh
     //Starting from new local vertex numbering and adding the offset
     for(auto & cut_cell : cut_cells._cut_cells)
     {
-      if((cut_cell._vertex_coords.size()==0)||(cut_cell._parent_cell_index[0]>num_local_cells))
+      if((cut_cell._vertex_coords.size()==0))
       {
         continue;
       }
@@ -286,7 +280,7 @@ namespace cutfemx::mesh
           cells[v_cnt] = vertex_map[cut_cell_id][cut_cell._connectivity[i][j]]+v_offset;
           v_cnt++;
         }
-        original_parent_index[c_cnt] = cut_cell._parent_cell_index[0];
+        original_parent_index[c_cnt] = cut_cells._parent_map[cut_cell_id];
         c_cnt++;
       }
       cut_cell_id++;
@@ -333,7 +327,6 @@ namespace cutfemx::mesh
     auto tdim = mesh.topology()->dim();
     std::size_t gdim = mesh.geometry().dim();
     auto entity_map = mesh.topology()->index_map(tdim);
-    int num_local_cells = entity_map->size_local();
 
     assert(tdim == cut_cells._cut_cells[0]._tdim);
     assert(gdim == cut_cells._cut_cells[0]._gdim);
@@ -368,7 +361,7 @@ namespace cutfemx::mesh
 
     // add vertices of cut_mesh and keep track of vertex map
     std::vector<std::vector<int>> vertex_map(cut_cells._cut_cells.size());
-    merge_vertex_coords(num_local_cells, cut_cells, vertex_coords, vertex_map);
+    merge_vertex_coords(cut_cells, vertex_coords, vertex_map);
 
     // at this point we have a list of vertices and two maps from the original vertex id
     // the new vertex id now we generate an offset between processors
@@ -383,7 +376,7 @@ namespace cutfemx::mesh
     for(auto & cut_cell :  cut_cells._cut_cells)
     {
       // purpose here is to exclude ghosts
-      if((cut_cell._parent_cell_index[0]<=num_local_cells) && (cut_cell._vertex_coords.size()>0))
+      if((cut_cell._vertex_coords.size()>0))
         num_cells += cut_cell._connectivity.size();
     }
 
@@ -420,7 +413,7 @@ namespace cutfemx::mesh
     //Starting from new local vertex numbering and adding the offset
     for(auto & cut_cell : cut_cells._cut_cells)
     {
-      if((cut_cell._vertex_coords.size()==0)||(cut_cell._parent_cell_index[0]>num_local_cells))
+      if((cut_cell._vertex_coords.size()==0))
       {
         continue;
       }
@@ -432,7 +425,7 @@ namespace cutfemx::mesh
           cells[v_cnt] = vertex_map[cut_cell_id][cut_cell._connectivity[i][j]]+v_offset;
           v_cnt++;
         }
-        original_parent_index[c_cnt] = cut_cell._parent_cell_index[0];
+        original_parent_index[c_cnt] = cut_cells._parent_map[cut_cell_id];
         original_is_cut_cell[c_cnt] = true;
         c_cnt++;
       }
@@ -462,10 +455,10 @@ namespace cutfemx::mesh
 
   //----------------------------------------------------------------------
   template
-  CutMesh<double> create_cut_mesh(MPI_Comm comm, const int& num_local_cells, cutcells::mesh::CutCells<double>& cut_cells);
+  CutMesh<double> create_cut_mesh(MPI_Comm comm, cutcells::mesh::CutCells<double>& cut_cells);
 
   template
-  CutMesh<float> create_cut_mesh(MPI_Comm comm, const int& num_local_cells, cutcells::mesh::CutCells<float>& cut_cells);
+  CutMesh<float> create_cut_mesh(MPI_Comm comm, cutcells::mesh::CutCells<float>& cut_cells);
 
   template
   CutMesh<double> create_cut_mesh(MPI_Comm comm, cutcells::mesh::CutCells<double>& cut_cells,

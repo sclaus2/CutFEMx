@@ -36,6 +36,14 @@
 
 namespace cutfemx::fem
 {
+
+/// @brief Type of integral
+enum class IntegralType : std::int8_t
+{
+  cutcell = 0,           ///< run time integration one parent cell -> dC
+  interface = 1,         ///< run time integration coupling two parent cells -> dI
+};
+
 template <dolfinx::scalar T, std::floating_point U = dolfinx::scalar_value_type_t<T>>
 struct runtime_integral_data
 {
@@ -95,7 +103,7 @@ public:
   template <typename X>
     requires std::is_convertible_v<
                  std::remove_cvref_t<X>,
-                 std::map<dolfinx::fem::IntegralType, std::vector<runtime_integral_data<
+                 std::map<cutfemx::fem::IntegralType, std::vector<runtime_integral_data<
                                             scalar_type, geometry_type>>>>
   CutForm(std::shared_ptr<const dolfinx::fem::Form<scalar_type, geometry_type>> form,
       X&& integrals)
@@ -158,7 +166,7 @@ public:
                      const int*, const uint8_t*,
                      const int*, const geometry_type*, const geometry_type*,
                      const scalar_type*, const size_t*)>
-  kernel(dolfinx::fem::IntegralType type, int i) const
+  kernel(cutfemx::fem::IntegralType type, int i) const
   {
     const auto& integrals = _integrals[static_cast<std::size_t>(type)];
     auto it = std::ranges::lower_bound(integrals, i, std::less<>{},
@@ -169,30 +177,30 @@ public:
       throw std::runtime_error("No kernel for requested domain index.");
   }
 
-  std::set<dolfinx::fem::IntegralType> integral_types() const
+  std::set<cutfemx::fem::IntegralType> integral_types() const
   {
-    std::set<dolfinx::fem::IntegralType> set;
+    std::set<cutfemx::fem::IntegralType> set;
     for (std::size_t i = 0; i < _integrals.size(); ++i)
     {
       if (!_integrals[i].empty())
-        set.insert(static_cast<dolfinx::fem::IntegralType>(i));
+        set.insert(static_cast<cutfemx::fem::IntegralType>(i));
     }
 
     return set;
   }
 
-  int num_integrals(dolfinx::fem::IntegralType type) const
+  int num_integrals(cutfemx::fem::IntegralType type) const
   {
     return _integrals[static_cast<std::size_t>(type)].size();
   }
 
-  std::vector<int> active_coeffs(dolfinx::fem::IntegralType type, std::size_t i) const
+  std::vector<int> active_coeffs(cutfemx::fem::IntegralType type, std::size_t i) const
   {
     assert(i < _integrals[static_cast<std::size_t>(type)].size());
     return _integrals[static_cast<std::size_t>(type)][i].coeffs;
   }
 
-  std::vector<int> integral_ids(dolfinx::fem::IntegralType type) const
+  std::vector<int> integral_ids(cutfemx::fem::IntegralType type) const
   {
     std::vector<int> ids;
     const auto& integrals = _integrals[static_cast<std::size_t>(type)];
@@ -201,7 +209,7 @@ public:
     return ids;
   }
 
-  std::shared_ptr<const cutfemx::quadrature::QuadratureRules<U>> quadrature_rules(dolfinx::fem::IntegralType type, int i) const
+  std::shared_ptr<const cutfemx::quadrature::QuadratureRules<U>> quadrature_rules(cutfemx::fem::IntegralType type, int i) const
   {
     const auto& integrals = _integrals[static_cast<std::size_t>(type)];
     auto it = std::ranges::lower_bound(integrals, i, std::less<>{},
@@ -212,7 +220,7 @@ public:
       throw std::runtime_error("No mesh entities for requested domain index.");
   }
 
-  std::vector<std::pair<std::shared_ptr<basix::FiniteElement<T>>, std::int32_t>> elements(dolfinx::fem::IntegralType type, int i) const
+  std::vector<std::pair<std::shared_ptr<basix::FiniteElement<T>>, std::int32_t>> elements(cutfemx::fem::IntegralType type, int i) const
   {
     const auto& integrals = _integrals[static_cast<std::size_t>(type)];
     auto it = std::ranges::lower_bound(integrals, i, std::less<>{},
@@ -414,7 +422,7 @@ CutForm<T, U> create_cut_form_factory(
     const ufcx_form& ufcx_form,
     std::shared_ptr<const dolfinx::fem::Form<T,U>> form,
     const std::map<
-        dolfinx::fem::IntegralType,
+        cutfemx::fem::IntegralType,
         std::vector<std::pair<std::int32_t, std::shared_ptr<cutfemx::quadrature::QuadratureRules<U>>>>>&
         subdomains)
 {
@@ -426,8 +434,8 @@ CutForm<T, U> create_cut_form_factory(
   const int tdim = topology->dim();
 
   const int* integral_offsets = ufcx_form.form_integral_offsets;
-  std::vector<int> num_integrals_type(3);
-  for (int i = 0; i < 3; ++i)
+  std::vector<int> num_integrals_type(5);
+  for (int i = 0; i < 5; ++i)
     num_integrals_type[i] = integral_offsets[i + 1] - integral_offsets[i];
 
   // Create facets, if required
@@ -445,7 +453,7 @@ CutForm<T, U> create_cut_form_factory(
                                     const int*, const uint8_t*,
                                     const int*, const U*, const U*,
                                     const T*, const size_t*)>;
-  std::map<dolfinx::fem::IntegralType, std::vector<runtime_integral_data<T, U>>> integrals;
+  std::map<cutfemx::fem::IntegralType, std::vector<runtime_integral_data<T, U>>> integrals;
 
 
   //Get all elements in form
@@ -458,10 +466,10 @@ CutForm<T, U> create_cut_form_factory(
   // Attach cell kernels
   {
     std::span<const int> ids(ufcx_form.form_integral_ids
-                                 + integral_offsets[cell],
-                             num_integrals_type[cell]);
-    auto itg = integrals.insert({dolfinx::fem::IntegralType::cell, {}});
-    auto sd = subdomains.find(dolfinx::fem::IntegralType::cell);
+                                 + integral_offsets[cutcell],
+                             num_integrals_type[cutcell]);
+    auto itg = integrals.insert({cutfemx::fem::IntegralType::cutcell, {}});
+    auto sd = subdomains.find(cutfemx::fem::IntegralType::cutcell);
 
     if (sd == subdomains.end()) {
     //integraltype not found
@@ -470,7 +478,7 @@ CutForm<T, U> create_cut_form_factory(
     else
     {
       std::vector<std::pair<std::int32_t, std::shared_ptr<cutfemx::quadrature::QuadratureRules<U>>>> domains = sd->second;
-      for (int i = 0; i < num_integrals_type[cell]; ++i)
+      for (int i = 0; i < num_integrals_type[cutcell]; ++i)
       {
         const int id = ids[i];
         //find if id exists
@@ -479,7 +487,7 @@ CutForm<T, U> create_cut_form_factory(
           if(domain.first == id)
           {
             ufcx_integral* integral
-                = ufcx_form.form_integrals[integral_offsets[cell] + i];
+                = ufcx_form.form_integrals[integral_offsets[cutcell] + i];
             assert(integral);
 
             // Build list of active coefficients
@@ -508,109 +516,6 @@ CutForm<T, U> create_cut_form_factory(
 
   }
 
-  // Attach exterior facet kernels
-  // {
-  //   std::span<const int> ids(ufcx_form.form_integral_ids
-  //                                + integral_offsets[exterior_facet],
-  //                            num_integrals_type[exterior_facet]);
-  //   auto itg = integrals.insert({dolfinx::fem::IntegralType::exterior_facet, {}});
-  //   auto sd = subdomains.find(dolfinx::fem::IntegralType::exterior_facet);
-  //   for (int i = 0; i < num_integrals_type[exterior_facet]; ++i)
-  //   {
-  //     const int id = ids[i];
-  //     ufcx_integral* integral
-  //         = ufcx_form.form_integrals[integral_offsets[exterior_facet] + i];
-  //     assert(integral);
-  //     std::vector<int> active_coeffs;
-  //     for (int j = 0; j < ufcx_form.num_coefficients; ++j)
-  //     {
-  //       if (integral->enabled_coefficients[j])
-  //         active_coeffs.push_back(j);
-  //     }
-
-  //     kern_t k = nullptr;
-  //     if constexpr (std::is_same_v<T, float>)
-  //       k = integral->tabulate_tensor_runtime_float32;
-  //     else if constexpr (std::is_same_v<T, double>)
-  //       k = integral->tabulate_tensor_runtime_float64;
-
-  //     // Build list of entities to assembler over
-  //     const std::vector bfacets = mesh::exterior_facet_indices(*topology);
-  //     auto f_to_c = topology->connectivity(tdim - 1, tdim);
-  //     assert(f_to_c);
-  //     auto c_to_f = topology->connectivity(tdim, tdim - 1);
-  //     assert(c_to_f);
-
-  //     if (sd != subdomains.end())
-  //     {
-  //       // NOTE: This requires that pairs are sorted
-  //       auto it
-  //           = std::ranges::lower_bound(sd->second, id, std::less<>{},
-  //                                      [](const auto& a) { return a.first; });
-  //       if (it != sd->second.end() and it->first == id)
-  //         itg.first->second.emplace_back(id, k, it->second, active_coeffs);
-  //     }
-  //   }
-  // }
-
-  // // Attach interior facet kernels
-  // {
-  //   std::span<const int> ids(ufcx_form.form_integral_ids
-  //                                + integral_offsets[interior_facet],
-  //                            num_integrals_type[interior_facet]);
-  //   auto itg = integrals.insert({dolfinx::fem::IntegralType::interior_facet, {}});
-  //   auto sd = subdomains.find(dolfinx::fem::IntegralType::interior_facet);
-
-  //   // Create indicator for interprocess facets
-  //   std::vector<std::int8_t> interprocess_marker;
-  //   if (num_integrals_type[interior_facet] > 0)
-  //   {
-  //     assert(topology->index_map(tdim - 1));
-  //     const std::vector<std::int32_t>& interprocess_facets
-  //         = topology->interprocess_facets();
-  //     std::int32_t num_facets = topology->index_map(tdim - 1)->size_local()
-  //                               + topology->index_map(tdim - 1)->num_ghosts();
-  //     interprocess_marker.resize(num_facets, 0);
-  //     std::ranges::for_each(interprocess_facets, [&interprocess_marker](auto f)
-  //                           { interprocess_marker[f] = 1; });
-  //   }
-
-  //   for (int i = 0; i < num_integrals_type[interior_facet]; ++i)
-  //   {
-  //     const int id = ids[i];
-  //     ufcx_integral* integral
-  //         = ufcx_form.form_integrals[integral_offsets[interior_facet] + i];
-  //     assert(integral);
-  //     std::vector<int> active_coeffs;
-  //     for (int j = 0; j < ufcx_form.num_coefficients; ++j)
-  //     {
-  //       if (integral->enabled_coefficients[j])
-  //         active_coeffs.push_back(j);
-  //     }
-
-  //     kern_t k = nullptr;
-  //     if constexpr (std::is_same_v<T, float>)
-  //       k = integral->tabulate_tensor_runtime_float32;
-  //     else if constexpr (std::is_same_v<T, double>)
-  //       k = integral->tabulate_tensor_runtime_float64;
-
-  //     // Build list of entities to assembler over
-  //     auto f_to_c = topology->connectivity(tdim - 1, tdim);
-  //     assert(f_to_c);
-  //     auto c_to_f = topology->connectivity(tdim, tdim - 1);
-  //     assert(c_to_f);
-
-  //     if (sd != subdomains.end())
-  //     {
-  //       auto it
-  //           = std::ranges::lower_bound(sd->second, id, std::less<>{},
-  //                                      [](const auto& a) { return a.first; });
-  //       if (it != sd->second.end() and it->first == id)
-  //         itg.first->second.emplace_back(id, k, it->second, active_coeffs);
-  //     }
-  //   }
-  // }
-
   return CutForm<T, U>(form, integrals);
 }
 
@@ -622,7 +527,7 @@ CutForm<T, U> create_form(
     ufcx_form* (*fptr)(),
     std::shared_ptr<const dolfinx::fem::Form<T,U>> form,
     const std::map<
-        dolfinx::fem::IntegralType,
+        cutfemx::fem::IntegralType,
         std::vector<std::pair<std::int32_t, std::shared_ptr<cutfemx::quadrature::QuadratureRules<U>>>>>&
         subdomains
 )

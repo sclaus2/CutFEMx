@@ -102,19 +102,19 @@ namespace cutfemx::fem
   T assemble_scalar(
     const fem::CutForm<T, U>& M, mdspan2_t x_dofmap,
     std::span<const scalar_value_type_t<T>> x, std::span<const T> constants,
-    const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+    const std::map<std::pair<cutfemx::fem::IntegralType, int>,
                    std::pair<std::span<const T>, int>>& coefficients)
   {
     T value = 0;
-    for (int i : M.integral_ids(dolfinx::fem::IntegralType::cell))
+    for (int i : M.integral_ids(cutfemx::fem::IntegralType::cutcell))
     {
-      auto fn = M.kernel(dolfinx::fem::IntegralType::cell, i);
+      auto fn = M.kernel(cutfemx::fem::IntegralType::cutcell, i);
       assert(fn);
-      auto& [coeffs, cstride] = coefficients.at({dolfinx::fem::IntegralType::cell, i});
+      auto& [coeffs, cstride] = coefficients.at({cutfemx::fem::IntegralType::cutcell, i});
       std::shared_ptr<const cutfemx::quadrature::QuadratureRules<U>> quadrature_rules
-          = M.quadrature_rules(dolfinx::fem::IntegralType::cell, i);
+          = M.quadrature_rules(cutfemx::fem::IntegralType::cutcell, i);
       std::vector<std::pair<std::shared_ptr<basix::FiniteElement<T>>, std::int32_t>> elements
-          = M.elements(dolfinx::fem::IntegralType::cell, i);
+          = M.elements(cutfemx::fem::IntegralType::cutcell, i);
       value += assemble_cells(x_dofmap, x, quadrature_rules, elements, fn, constants, coeffs,
                                     cstride);
     }

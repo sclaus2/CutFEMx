@@ -10,7 +10,7 @@ from cutfemx.fem import cut_form, cut_function
 
 from cutfemx.petsc import assemble_vector, assemble_matrix, deactivate, locate_dofs
 
-from dolfinx import fem, mesh, plot
+from dolfinx import fem, mesh, plot, la
 
 #from dolfinx.fem.assemble import assemble_vector, assemble_matrix
 from dolfinx.fem import form
@@ -38,7 +38,7 @@ except ModuleNotFoundError:
     print("pyvista is required for this demo")
     exit(0)
 
-N = 11
+N = 101
 
 msh = mesh.create_rectangle(
     comm=MPI.COMM_WORLD,
@@ -55,7 +55,7 @@ u = ufl.TrialFunction(V)
 v = ufl.TestFunction(V)
 f = fem.Constant(msh, PETSc.ScalarType(1.0))
 g = fem.Constant(msh, PETSc.ScalarType(0.0))
-gamma = 100
+gamma = 10
 gamma_g = 1e-1
 
 n = FacetNormal(msh)
@@ -72,13 +72,6 @@ dim = msh.topology.dim
 intersected_entities = locate_entities(level_set,dim,"phi=0")
 inside_entities = locate_entities(level_set,dim,"phi<0")
 
-cell_map = msh.topology.index_map(tdim)
-size_local = cell_map.size_local 
-num_ghosts = cell_map.num_ghosts
-
-print("num_cells=", size_local)
-print(intersected_entities)
-
 V_DG = fem.functionspace(msh, ("DG", 0, (msh.geometry.dim,)))
 n_K = fem.Function(V_DG)
 compute_normal(n_K,level_set,intersected_entities)
@@ -89,14 +82,11 @@ dof_coordinates = V.tabulate_dof_coordinates()
 cut_cells = cut_entities(level_set, dof_coordinates, intersected_entities, tdim, "phi<0")
 cut_mesh = create_cut_mesh(msh.comm,cut_cells,msh,inside_entities)
 interface_cells = cut_entities(level_set, dof_coordinates, intersected_entities, tdim, "phi=0")
-interface_mesh = create_cut_cells_mesh(msh.comm,size_local,interface_cells)
+interface_mesh = create_cut_cells_mesh(msh.comm,interface_cells)
 
 order = 2
 inside_quadrature = runtime_quadrature(level_set,"phi<0",order)
 interface_quadrature = runtime_quadrature(level_set,"phi=0",order)
-
-print("inside parent map=", inside_quadrature.parent_map)
-print("interface parent map=", interface_quadrature.parent_map)
 
 quad_domains = [(0,inside_quadrature), (1,interface_quadrature)]
 
@@ -105,7 +95,7 @@ gp_topo = facet_topology(msh,gp_ids)
 
 dx = ufl.Measure("dx", subdomain_data=[(0, inside_entities),(2, intersected_entities)], domain=msh)
 dS = ufl.Measure("dS", subdomain_data=[(0, gp_topo)], domain=msh)
-dx_rt = ufl.Measure("dx", metadata={"quadrature_rule":"runtime"} , subdomain_data=quad_domains, domain=msh)
+dx_rt = ufl.Measure("dC", subdomain_data=quad_domains, domain=msh)
 
 dxq = dx_rt(0) + dx(0)
 dsq = dx_rt(1)
@@ -132,7 +122,6 @@ bc = fem.dirichletbc(value=PETSc.ScalarType(0), dofs=dofs, V=V)
 A = assemble_matrix(a_cut, [bc])
 A.assemble()
 
-print(A.view(viewer=PETSc.Viewer().createASCII("A.dat")))
 b = assemble_vector(L_cut)
 b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
 b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
@@ -154,7 +143,7 @@ uh = fem.Function(V)
 
 # Set a monitor, solve linear system, and display the solver
 # configuration
-solver.setMonitor(lambda _, its, rnorm: print(f"Iteration: {its}, rel. residual: {rnorm}"))
+#solver.setMonitor(lambda _, its, rnorm: print(f"Iteration: {its}, rel. residual: {rnorm}"))
 solver.solve(b, uh.x.petsc_vec)
 solver.view()
 
@@ -174,56 +163,4 @@ with XDMFFile(msh.comm, "results/uh_cut.xdmf", "w") as file:
 
 with XDMFFile(msh.comm, "results/uh_I.xdmf", "w") as file:
     file.write_mesh(interface_mesh._mesh)
-
-# with XDMFFile(msh.comm, "results/xi.xdmf", "w") as file:
-#     file.write_mesh(msh)
-#     file.write_function(xi)
-
-deactivated_dofs = np.zeros(shape=(len(dofs),3))
-
-for i in range(len(dofs)):
-    for j in range(3):
-        dof = dofs[i]
-        deactivated_dofs[i][j] = dof_coordinates[dof][j]
-
-points_phys = physical_points(interface_quadrature,msh)
-
-tdim = msh.topology.dim
-cell_imap = msh.topology.index_map(tdim)
-num_cells = cell_imap.size_local + cell_imap.num_ghosts
-cell_entities = np.arange(num_cells, dtype=np.int32)
-
-plotter = pyvista.Plotter()
-cells, types, x = plot.vtk_mesh(msh,tdim,cell_entities)#(cut_mesh._mesh)
-facets, ftypes, fx = plot.vtk_mesh(msh, tdim-1, gp_ids)
-ccells, ctypes, cx = plot.vtk_mesh(cut_mesh._mesh)
-
-pset = pyvista.PointSet(points_phys)
-pset2 = pyvista.PointSet(deactivated_dofs)
-
-fname = "points_p" + str(MPI.COMM_WORLD.rank) + ".vtk"
-
-pset.cast_to_polydata().save(fname)
-
-fname = "dofs_p" + str(MPI.COMM_WORLD.rank) + ".vtk"
-pset2.cast_to_polydata().save(fname)
-
-grid = pyvista.UnstructuredGrid(cells, types, x)
-fname = "mesh_p" + str(MPI.COMM_WORLD.rank) + ".vtk"
-grid.save(fname)
-# fgrid = pyvista.UnstructuredGrid(facets, ftypes, fx)
-# cgrid = pyvista.UnstructuredGrid(ccells, ctypes, cx)
-
-# grid.point_data["u"] = uh.x.array
-# grid.plot(scalars='u')
-
-# plotter.add_mesh(grid, show_edges=True, show_scalar_bar=True, color='lightgray')
-# plotter.add_mesh(cgrid, show_edges=True, show_scalar_bar=True, color='blue')
-# plotter.add_mesh(fgrid, show_edges=True, show_scalar_bar=True, line_width=5, color='red')
-# plotter.add_points(points_phys, render_points_as_spheres=True, color='black')
-# plotter.add_points(deactivated_dofs, render_points_as_spheres=True, color='red', point_size=20)
-
-# plotter.view_xy()
-# plotter.show()
-
 

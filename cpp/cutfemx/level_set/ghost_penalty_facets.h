@@ -194,7 +194,7 @@ namespace cutfemx::level_set
     int cell_dim = mesh->geometry().dim();
     auto entity_map = mesh->topology()->index_map(cell_dim);
 
-    std::int32_t num_entities = entity_map->size_local();//+entity_map->num_ghosts();
+    std::int32_t num_entities = entity_map->size_local();
     std::vector<int32_t> entities(num_entities);
     std::iota (std::begin(entities), std::end(entities), 0);
     auto intersected_cells = cutfemx::level_set::locate_entities<T>(level_set,entities,cell_dim,"phi=0");

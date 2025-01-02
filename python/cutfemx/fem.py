@@ -16,7 +16,7 @@ from cutfemx.mesh import CutMesh
 import ufl
 from dolfinx import default_scalar_type, jit
 from dolfinx.fem import form_cpp_class, Form, form, FunctionSpace
-from dolfinx.fem import IntegralType
+from dolfinx.fem import IntegralType as dIntegralType
 
 import dolfinx.cpp as dcpp
 from mpi4py import MPI
@@ -47,10 +47,15 @@ __all__ = [
 ]
 
 _ufl_to_dolfinx_domain = {
-    "cell": IntegralType.cell,
-    "exterior_facet": IntegralType.exterior_facet,
-    "interior_facet": IntegralType.interior_facet,
-    "vertex": IntegralType.vertex,
+    "cell": dIntegralType.cell,
+    "exterior_facet": dIntegralType.exterior_facet,
+    "interior_facet": dIntegralType.interior_facet,
+    "vertex": dIntegralType.vertex,
+}
+
+_ufl_to_cutfemx_domain = {
+    "cutcell": _cpp.fem.IntegralType.cutcell,
+    "interface": _cpp.fem.IntegralType.interface,
 }
 
 class CutForm:
@@ -94,7 +99,7 @@ class CutForm:
         return self._cpp_object.integral_types
 
 def get_integration_domains(
-    integral_type: IntegralType,
+    integral_type: dIntegralType,
     subdomain: typing.Optional[typing.Union[MeshTags, list[tuple[int, np.ndarray]]]],
     subdomain_ids: list[int],
 ) -> list[tuple[int, np.ndarray]]:
@@ -103,7 +108,7 @@ def get_integration_domains(
     else:
         domains = []
         try:
-            if integral_type in (IntegralType.exterior_facet, IntegralType.interior_facet):
+            if integral_type in (dIntegralType.exterior_facet, dIntegralType.interior_facet):
                 tdim = subdomain.topology.dim  # type: ignore
                 subdomain._cpp_object.topology.create_connectivity(tdim - 1, tdim)  # type: ignore
                 subdomain._cpp_object.topology.create_connectivity(tdim, tdim - 1)  # type: ignore
@@ -158,20 +163,20 @@ def cut_form(
         runtime_sd = {}
         sd = {}
 
+        runtime_types = ["cutcell", "interface"]
+
         for integral in integrals:
-            scheme = integral.metadata().get("quadrature_rule")
-            if scheme == "runtime":
-              runtime_sd[_ufl_to_dolfinx_domain[integral.integral_type()]] = []
+            if integral.integral_type() in runtime_types:
+              runtime_sd[_ufl_to_cutfemx_domain[integral.integral_type()]] = []
             else:
               sd[_ufl_to_dolfinx_domain[integral.integral_type()]] = []
 
         #split integrals into runtime and standard
         for integral in integrals:
-            scheme = integral.metadata().get("quadrature_rule")
-            if scheme == "runtime":
-              runtime_sd[_ufl_to_dolfinx_domain[integral.integral_type()]].append(integral.subdomain_data())
+            if integral.integral_type() in runtime_types:
+              runtime_sd[_ufl_to_cutfemx_domain[integral.integral_type()]].append(integral.subdomain_data())
             else:
-                sd[_ufl_to_dolfinx_domain[integral.integral_type()]].append(integral.subdomain_data())
+              sd[_ufl_to_dolfinx_domain[integral.integral_type()]].append(integral.subdomain_data())
 
         # print("runtime_sd=", runtime_sd)
         # print("sd=", sd)
@@ -200,9 +205,8 @@ def cut_form(
         subdomain_ids = {}
         subdomain_ids_runtime = {}
         for integral in integrals:
-            scheme = integral.metadata().get("quadrature_rule")
-            if scheme == "runtime":
-              subdomain_ids_runtime[_ufl_to_dolfinx_domain[integral.integral_type()]] = []
+            if integral.integral_type() in runtime_types:
+              subdomain_ids_runtime[_ufl_to_cutfemx_domain[integral.integral_type()]] = []
             else:
               subdomain_ids[_ufl_to_dolfinx_domain[integral.integral_type()]] = []
 
@@ -219,9 +223,8 @@ def cut_form(
                 else:
                     ids = []
 
-                scheme = integral.metadata().get("quadrature_rule")
-                if scheme == "runtime":
-                  subdomain_ids_runtime[_ufl_to_dolfinx_domain[integral.integral_type()]].append(ids)
+                if integral.integral_type() in runtime_types:
+                  subdomain_ids_runtime[_ufl_to_cutfemx_domain[integral.integral_type()]].append(ids)
                 else:
                   subdomain_ids[_ufl_to_dolfinx_domain[integral.integral_type()]].append(ids)
 
@@ -259,8 +262,8 @@ def cut_form(
                       treated_ids.add(id)
                       runtime_subdomains[itg_type].append((s[0], s[1]))
 
-        print("runtime_subdomains=", runtime_subdomains)
-        print("subdomains=", subdomains)
+        # print("runtime_subdomains=", runtime_subdomains)
+        # print("subdomains=", subdomains)
 
         if entity_maps is None:
             _entity_maps = dict()

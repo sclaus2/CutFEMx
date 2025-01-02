@@ -127,7 +127,7 @@ namespace cutfemx::fem
   void assemble_vector(
       std::span<T> b, const CutForm<T, U>& L, mdspan2_t x_dofmap,
       std::span<const scalar_value_type_t<T>> x, std::span<const T> constants,
-      const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+      const std::map<std::pair<cutfemx::fem::IntegralType, int>,
                     std::pair<std::span<const T>, int>>& coefficients)
   {
     // Integration domain mesh
@@ -158,15 +158,15 @@ namespace cutfemx::fem
       cell_info0 = std::span(mesh0->topology()->get_cell_permutation_info());
     }
 
-    for (int i : L.integral_ids(dolfinx::fem::IntegralType::cell))
+    for (int i : L.integral_ids(cutfemx::fem::IntegralType::cutcell))
     {
-      auto fn = L.kernel(dolfinx::fem::IntegralType::cell, i);
+      auto fn = L.kernel(cutfemx::fem::IntegralType::cutcell, i);
       assert(fn);
-      auto& [coeffs, cstride] = coefficients.at({dolfinx::fem::IntegralType::cell, i});
+      auto& [coeffs, cstride] = coefficients.at({cutfemx::fem::IntegralType::cutcell, i});
       std::shared_ptr<const cutfemx::quadrature::QuadratureRules<U>> quadrature_rules
-          = L.quadrature_rules(dolfinx::fem::IntegralType::cell, i);
+          = L.quadrature_rules(cutfemx::fem::IntegralType::cutcell, i);
       std::vector<std::pair<std::shared_ptr<basix::FiniteElement<T>>, std::int32_t>> elements
-          = L.elements(dolfinx::fem::IntegralType::cell, i);
+          = L.elements(cutfemx::fem::IntegralType::cutcell, i);
       if (bs == 1)
       {
         assemble_cells<T, 1>(

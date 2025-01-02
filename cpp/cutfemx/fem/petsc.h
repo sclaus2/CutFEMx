@@ -48,7 +48,7 @@ namespace petsc
       std::span<const PetscScalar> constants,
       const std::map<std::pair<dolfinx::fem::IntegralType, int>,
                     std::pair<std::span<const PetscScalar>, int>>& coeffs,
-      const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+      const std::map<std::pair<cutfemx::fem::IntegralType, int>,
                     std::pair<std::span<const PetscScalar>, int>>& coeffs_rt)
   {
     Vec b_local;

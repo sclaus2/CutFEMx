@@ -64,9 +64,9 @@ void declare_mesh(nb::module_& m, std::string type)
           nb::rv_policy::reference_internal,
           " Return parent index.");
 
-  m.def("create_cut_cells_mesh", [](dolfinx_wrappers::MPICommWrapper comm, const int& num_local_cells, cutcells::mesh::CutCells<T>& cut_cells)
+  m.def("create_cut_cells_mesh", [](dolfinx_wrappers::MPICommWrapper comm, cutcells::mesh::CutCells<T>& cut_cells)
             {
-              return cutfemx::mesh::create_cut_mesh(comm.get(),num_local_cells,cut_cells);
+              return cutfemx::mesh::create_cut_mesh(comm.get(),cut_cells);
             }
             , "create dolfinx mesh from cut cells alone");
 

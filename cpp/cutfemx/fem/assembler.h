@@ -48,7 +48,7 @@ namespace cutfemx::fem
       const CutForm<T, U>& M, std::span<const T> constants,
       const std::map<std::pair<dolfinx::fem::IntegralType, int>,
                     std::pair<std::span<const T>, int>>& coefficients,
-      const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+      const std::map<std::pair<cutfemx::fem::IntegralType, int>,
                     std::pair<std::span<const T>, int>>& coeffs_rt)
   {
     std::shared_ptr<const dolfinx::mesh::Mesh<U>> mesh = M._form->mesh();
@@ -87,7 +87,7 @@ namespace cutfemx::fem
       std::span<T> b, const CutForm<T, U>& L, std::span<const T> constants,
       const std::map<std::pair<dolfinx::fem::IntegralType, int>,
                     std::pair<std::span<const T>, int>>& coefficients,
-      const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+      const std::map<std::pair<cutfemx::fem::IntegralType, int>,
                     std::pair<std::span<const T>, int>>& coeffs_rt)
   {
     std::shared_ptr<const dolfinx::mesh::Mesh<U>> mesh = L._form->mesh();
@@ -141,14 +141,14 @@ void create_sparsity_pattern(const CutForm<T,U>& a, dolfinx::la::SparsityPattern
       *a._form->function_spaces().at(0)->dofmap(),
       *a._form->function_spaces().at(1)->dofmap()};
 
-  const std::set<dolfinx::fem::IntegralType> types = a.integral_types();
+  const std::set<cutfemx::fem::IntegralType> types = a.integral_types();
 
   for (auto type : types)
   {
     std::vector<int> ids = a.integral_ids(type);
     switch (type)
     {
-    case dolfinx::fem::IntegralType::cell:
+    case cutfemx::fem::IntegralType::cutcell:
       for (int id : ids)
       {
         std::shared_ptr<const cutfemx::quadrature::QuadratureRules<U>> quadrature_rules
@@ -181,14 +181,14 @@ dolfinx::la::SparsityPattern create_sparsity_pattern(const CutForm<T, U>& a)
       *a._form->function_spaces().at(0)->dofmap(),
       *a._form->function_spaces().at(1)->dofmap()};
 
-  const std::set<dolfinx::fem::IntegralType> types = a.integral_types();
+  const std::set<cutfemx::fem::IntegralType> types = a.integral_types();
 
   for (auto type : types)
   {
     std::vector<int> ids = a.integral_ids(type);
     switch (type)
     {
-    case dolfinx::fem::IntegralType::cell:
+    case cutfemx::fem::IntegralType::cutcell:
       for (int id : ids)
       {
         std::shared_ptr<const cutfemx::quadrature::QuadratureRules<U>> quadrature_rules
@@ -212,7 +212,7 @@ void assemble_matrix(
     std::span<const T> constants,
     const std::map<std::pair<dolfinx::fem::IntegralType, int>,
                    std::pair<std::span<const T>, int>>& coefficients,
-    const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+    const std::map<std::pair<cutfemx::fem::IntegralType, int>,
                 std::pair<std::span<const T>, int>>& coeffs_rt,
     std::span<const std::int8_t> dof_marker0,
     std::span<const std::int8_t> dof_marker1)
@@ -234,7 +234,7 @@ void assemble_matrix(
     auto mat_add, const CutForm<T, U>& a, std::span<const T> constants,
     const std::map<std::pair<dolfinx::fem::IntegralType, int>,
                    std::pair<std::span<const T>, int>>& coefficients,
-    const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+    const std::map<std::pair<cutfemx::fem::IntegralType, int>,
                 std::pair<std::span<const T>, int>>& coeffs_rt,
     const std::vector<std::shared_ptr<const dolfinx::fem::DirichletBC<T, U>>>& bcs)
 {

@@ -39,10 +39,9 @@ class CutMesh:
 
 def create_cut_cells_mesh(
         comm: _MPI.Comm,
-        num_local_cells: int,
         cut_cells: typing.Union[CutCells_float32, CutCells_float64]
         )->typing.Union[_cpp.mesh.CutMesh_float32,_cpp.mesh.CutMesh_float64]:
-        cut_msh = _cpp.mesh.create_cut_cells_mesh(comm,num_local_cells,cut_cells)
+        cut_msh = _cpp.mesh.create_cut_cells_mesh(comm,cut_cells)
         return CutMesh(cut_msh)
 
 def create_cut_mesh(

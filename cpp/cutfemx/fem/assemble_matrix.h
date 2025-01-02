@@ -165,7 +165,7 @@ template <dolfinx::scalar T, std::floating_point U>
 void assemble_matrix(
     dolfinx::la::MatSet<T> auto mat_set, const CutForm<T, U>& a, mdspan2_t x_dofmap,
     std::span<const scalar_value_type_t<T>> x, std::span<const T> constants,
-    const std::map<std::pair<dolfinx::fem::IntegralType, int>,
+    const std::map<std::pair<cutfemx::fem::IntegralType, int>,
                    std::pair<std::span<const T>, int>>& coefficients,
     std::span<const std::int8_t> bc0, std::span<const std::int8_t> bc1)
 {
@@ -212,15 +212,15 @@ void assemble_matrix(
     cell_info1 = std::span(mesh1->topology()->get_cell_permutation_info());
   }
 
-  for (int i : a.integral_ids(dolfinx::fem::IntegralType::cell))
+  for (int i : a.integral_ids(cutfemx::fem::IntegralType::cutcell))
   {
-    auto fn = a.kernel(dolfinx::fem::IntegralType::cell, i);
+    auto fn = a.kernel(cutfemx::fem::IntegralType::cutcell, i);
     assert(fn);
-    auto& [coeffs, cstride] = coefficients.at({dolfinx::fem::IntegralType::cell, i});
+    auto& [coeffs, cstride] = coefficients.at({cutfemx::fem::IntegralType::cutcell, i});
     std::shared_ptr<const cutfemx::quadrature::QuadratureRules<U>> quadrature_rules
-    = a.quadrature_rules(dolfinx::fem::IntegralType::cell, i);
+    = a.quadrature_rules(cutfemx::fem::IntegralType::cutcell, i);
     std::vector<std::pair<std::shared_ptr<basix::FiniteElement<T>>, std::int32_t>> elements
-    = a.elements(dolfinx::fem::IntegralType::cell, i);
+    = a.elements(cutfemx::fem::IntegralType::cutcell, i);
     assemble_cells(
         mat_set, x_dofmap, x, quadrature_rules, elements, fn,
         {dofs0, bs0, quadrature_rules->_parent_map}, P0,
