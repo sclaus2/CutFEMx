@@ -98,6 +98,43 @@ class CutForm:
         """Integral types in the form."""
         return self._cpp_object.integral_types
 
+    def update_integration_domains(
+      self,
+      subdomains: dict[str, list[tuple[int, np.ndarray]]],
+      entity_maps: typing.Optional[dict[Mesh, np.typing.NDArray[np.int32]]] = None
+  ):
+      sd = {}
+
+      for itg_type, domains in subdomains.items():
+          sd[_ufl_to_dolfinx_domain[itg_type]] = []
+          for id, entities in domains:
+              sd[_ufl_to_dolfinx_domain[itg_type]].append((id,entities))
+
+      if entity_maps is None:
+          _entity_maps = dict()
+      else:
+          _entity_maps = {msh._cpp_object: emap for (msh, emap) in entity_maps.items()}
+
+      #subdomains : ufl typed subdomain entity data
+      self._cpp_object.update_integration_domains(sd,_entity_maps)
+
+      #update cpp object in python form
+      self._form._cpp_object = self._cpp_object.form
+
+    def update_runtime_domains(
+      self,
+      subdomains: dict[str, list[tuple[int, typing.Union[_cpp.quadrature.QuadratureRules_float32, _cpp.quadrature.QuadratureRules_float64]]]]
+    ):
+
+      sd = {}
+
+      for itg_type, domains in subdomains.items():
+          sd[_ufl_to_cutfemx_domain[itg_type]] = []
+          for id, quad_rule in domains:
+              sd[_ufl_to_cutfemx_domain[itg_type]].append((id,quad_rule))
+
+      self._cpp_object.update_runtime_domains(sd)
+
 def get_integration_domains(
     integral_type: dIntegralType,
     subdomain: typing.Optional[typing.Union[MeshTags, list[tuple[int, np.ndarray]]]],
@@ -303,9 +340,9 @@ def cut_form(
     return _create_cut_form(form)
 
 def cut_function(
-        u: Function,
-        sub_mesh: CutMesh)->Function:
-      return _cpp.fem.create_cut_function(u._cpp_object,sub_mesh._cpp_object)
+      u: Function,
+      sub_mesh: CutMesh)->Function:
+    return _cpp.fem.create_cut_function(u._cpp_object,sub_mesh._cpp_object)
 
 def assemble_scalar(M: CutForm, constants=None, coeffs=None, coeffs_rt=None):
     constants = constants or _pack_constants(M._form._cpp_object)
@@ -348,59 +385,59 @@ def _assemble_vector_array(b: np.ndarray, L: CutForm, constants=None, coeffs=Non
 def create_sparsity_pattern(a: CutForm):
     return _cpp.fem.create_sparsity_pattern(a._cpp_object)
 
-# def create_matrix(a: CutForm, block_mode: typing.Optional[la.BlockMode] = None) -> la.MatrixCSR:
-#     sp = create_sparsity_pattern(a)
-#     sp.finalize()
-#     if block_mode is not None:
-#         return la.matrix_csr(sp, block_mode=block_mode, dtype=a.dtype)
-#     else:
-#         return la.matrix_csr(sp, dtype=a.dtype)
+def create_matrix(a: CutForm, block_mode: typing.Optional[la.BlockMode] = None) -> la.MatrixCSR:
+    sp = create_sparsity_pattern(a)
+    sp.finalize()
+    if block_mode is not None:
+        return la.matrix_csr(sp, block_mode=block_mode, dtype=a.dtype)
+    else:
+        return la.matrix_csr(sp, dtype=a.dtype)
 
-# @functools.singledispatch
-# def assemble_matrix(
-#     a: typing.Any,
-#     bcs: typing.Optional[list[DirichletBC]] = None,
-#     diagonal: float = 1.0,
-#     constants=None,
-#     coeffs=None,
-#     coeffs_rt=None,
-#     block_mode: typing.Optional[la.BlockMode] = None,
-# ):
-#     bcs = [] if bcs is None else bcs
-#     A: la.MatrixCSR = create_matrix(a, block_mode)
-#     _assemble_matrix_csr(A, a, bcs, diagonal, constants, coeffs, coeffs_rt)
-#     return A
+@functools.singledispatch
+def assemble_matrix(
+    a: typing.Any,
+    bcs: typing.Optional[list[DirichletBC]] = None,
+    diagonal: float = 1.0,
+    constants=None,
+    coeffs=None,
+    coeffs_rt=None,
+    block_mode: typing.Optional[la.BlockMode] = None,
+):
+    bcs = [] if bcs is None else bcs
+    A: la.MatrixCSR = create_matrix(a, block_mode)
+    _assemble_matrix_csr(A, a, bcs, diagonal, constants, coeffs, coeffs_rt)
+    return A
 
 
-# @assemble_matrix.register
-# def _assemble_matrix_csr(
-#     A: la.MatrixCSR,
-#     a: CutForm,
-#     bcs: typing.Optional[list[DirichletBC]] = None,
-#     diagonal: float = 1.0,
-#     constants=None,
-#     coeffs=None,
-#     coeffs_rt=None
-# ) -> la.MatrixCSR:
-#     bcs = [] if bcs is None else [bc._cpp_object for bc in bcs]
-#     constants = _pack_constants(a._form._cpp_object) if constants is None else constants
-#     coeffs = _pack_coefficients(a._form._cpp_object) if coeffs is None else coeffs
-#     coeffs_rt = _cpp.fem.pack_coefficients(a._cpp_object) if coeffs_rt is None else coeffs_rt
+@assemble_matrix.register
+def _assemble_matrix_csr(
+    A: la.MatrixCSR,
+    a: CutForm,
+    bcs: typing.Optional[list[DirichletBC]] = None,
+    diagonal: float = 1.0,
+    constants=None,
+    coeffs=None,
+    coeffs_rt=None
+) -> la.MatrixCSR:
+    bcs = [] if bcs is None else [bc._cpp_object for bc in bcs]
+    constants = _pack_constants(a._form._cpp_object) if constants is None else constants
+    coeffs = _pack_coefficients(a._form._cpp_object) if coeffs is None else coeffs
+    coeffs_rt = _cpp.fem.pack_coefficients(a._cpp_object) if coeffs_rt is None else coeffs_rt
 
-#     _cpp.fem.assemble_matrix(A._cpp_object, a._cpp_object, constants, coeffs, coeffs_rt, bcs)
+    _cpp.fem.assemble_matrix(A._cpp_object, a._cpp_object, constants, coeffs, coeffs_rt, bcs)
 
-#     # If matrix is a 'diagonal'block, set diagonal entry for constrained
-#     # dofs
-#     if a._form.function_spaces[0] is a._form.function_spaces[1]:
-#         dcpp.fem.insert_diagonal(A._cpp_object, a._form.function_spaces[0], bcs, diagonal)
-#     return A
+    # If matrix is a 'diagonal'block, set diagonal entry for constrained
+    # dofs
+    if a._form.function_spaces[0] is a._form.function_spaces[1]:
+        dcpp.fem.insert_diagonal(A._cpp_object, a._form.function_spaces[0], bcs, diagonal)
+    return A
 
-# def deactivate(A: la.MatrixCSR, deactivate_domain: str, level_set: Function , V: typing.Any, diagonal: float = 1.0) -> Function:
-#       if(len(V)==1):
-#         component = [-1]
-#         xi = _cpp.fem.deactivate(A._cpp_object, deactivate_domain, level_set._cpp_object, V[0]._cpp_object, component, diagonal)
-#         return xi
-#       else:
-#         component = [V[1]]
-#         xi = _cpp.fem.deactivate(A._cpp_object, deactivate_domain, level_set._cpp_object, V[0]._cpp_object, component, diagonal)
-#         return xi
+def deactivate(A: la.MatrixCSR, deactivate_domain: str, level_set: Function , V: typing.Any, diagonal: float = 1.0) -> Function:
+      if(len(V)==1):
+        component = [-1]
+        xi = _cpp.fem.deactivate(A._cpp_object, deactivate_domain, level_set._cpp_object, V[0]._cpp_object, component, diagonal)
+        return xi
+      else:
+        component = [V[1]]
+        xi = _cpp.fem.deactivate(A._cpp_object, deactivate_domain, level_set._cpp_object, V[0]._cpp_object, component, diagonal)
+        return xi

@@ -107,9 +107,9 @@ int main(int argc, char* argv[])
   }
   std::cout << std::endl;
 
-  std::map< dolfinx::fem::IntegralType,
+  std::map< cutfemx::fem::IntegralType,
         std::vector<std::pair<std::int32_t, std::shared_ptr<cutfemx::quadrature::QuadratureRules<T>>>>>
-        subdomains = {{dolfinx::fem::IntegralType::cell, {std::make_pair(0, runtime_rules)}}};
+        subdomains = {{cutfemx::fem::IntegralType::cutcell, {std::make_pair(0, runtime_rules)}}};
 
   auto L_cut = std::make_shared<cutfemx::fem::CutForm<T,T>>(cutfemx::fem::create_cut_form_factory<T,T>(*form_scalar_L, L, subdomains));
 

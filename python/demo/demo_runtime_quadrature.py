@@ -40,7 +40,6 @@ dof_coordinates = V.tabulate_dof_coordinates()
 
 cut_cells = cut_entities(level_set, dof_coordinates, intersected_entities, tdim, "phi<0")
 
-num_local_cells = msh.topology.index_map(tdim).size_local
 cut_mesh = create_cut_mesh(msh.comm,cut_cells,msh,inside_entities)
 
 order = 2

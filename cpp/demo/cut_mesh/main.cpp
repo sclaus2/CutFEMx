@@ -79,9 +79,8 @@ int main(int argc, char* argv[])
   file_sigma.write_mesh(submesh);
 
   auto entity_map = mesh->topology()->index_map(tdim);
-  int num_local_cells = entity_map->size_local();
 
-  const auto cut_cells_inside = cutfemx::mesh::create_cut_mesh<T>(mesh->comm(), num_local_cells, cut_cells);
+  const auto cut_cells_inside = cutfemx::mesh::create_cut_mesh<T>(mesh->comm(), cut_cells);
   io::XDMFFile file_cut_mesh(mesh->comm(), "cut_cells.xdmf", "w");
   file_cut_mesh.write_mesh(*cut_cells_inside._cut_mesh);
 

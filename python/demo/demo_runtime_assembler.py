@@ -46,7 +46,7 @@ dof_coordinates = V.tabulate_dof_coordinates()
 cut_cells = cut_entities(level_set, dof_coordinates, intersected_entities, tdim, "phi<0")
 cut_mesh = create_cut_mesh(msh.comm,cut_cells,msh,inside_entities)
 
-order = 1
+order = 2
 inside_quadrature = runtime_quadrature(level_set,"phi<0",order)
 interface_quadrature = runtime_quadrature(level_set,"phi=0",order)
 
@@ -62,7 +62,7 @@ dsq = dx_rt(1)
 
 L_area = alpha*dxq
 
-jit_options = {"cache_dir": os.getcwd()}
+#jit_options = {"cache_dir": os.getcwd()}
 L_area_form = cut_form(L_area, jit_options=jit_options)
 
 area = assemble_scalar(L_area_form)
@@ -79,13 +79,14 @@ print("value theoretical circumference=", 2*0.5*np.pi)
 
 #Plot runtime quadrature points on cut mesh
 points_phys = physical_points(inside_quadrature,msh)
+points_phys_interface = physical_points(interface_quadrature,msh)
 
 plotter = pyvista.Plotter()
 cells, types, x = plot.vtk_mesh(cut_mesh._mesh)
 grid = pyvista.UnstructuredGrid(cells, types, x)
 plotter.add_mesh(grid, show_edges=True, show_scalar_bar=True, color='lightgray')
 plotter.add_points(points_phys, render_points_as_spheres=True, color='black')
+plotter.add_points(points_phys_interface, render_points_as_spheres=True, color='red')
 plotter.view_xy()
-plotter.save_graphic("quadrature.svg")
 plotter.show()
 

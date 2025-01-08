@@ -157,6 +157,11 @@ public:
     return _form->function_spaces();
   }
 
+  std::shared_ptr<const dolfinx::fem::Form<scalar_type, geometry_type>> form() const
+  {
+    return _form;
+  }
+
   /// @brief Get the kernel function for integral `i` on given domain
   /// type.
   /// @param[in] type Integral type.
@@ -231,9 +236,82 @@ public:
       throw std::runtime_error("No mesh entities for requested domain index.");
   }
 
+  void update_integration_domains(const std::map<
+        dolfinx::fem::IntegralType,
+        std::vector<std::pair<std::int32_t, std::span<const std::int32_t>>>>&
+        subdomains,
+        const std::map<std::shared_ptr<const dolfinx::mesh::Mesh<geometry_type>>,
+                     std::span<const std::int32_t>>& entity_maps = {})
+  {
+
+    std::map<dolfinx::fem::IntegralType, std::vector<dolfinx::fem::integral_data<T, U>>> integrals;
+
+    std::vector<dolfinx::fem::IntegralType> itg_types = {dolfinx::fem::IntegralType::cell,
+                                                         dolfinx::fem::IntegralType::exterior_facet,
+                                                         dolfinx::fem::IntegralType::interior_facet};
+
+    for(auto& itg_type : itg_types)
+    {
+      auto ids = _form->integral_ids(itg_type);
+      auto itg = integrals.insert({itg_type, {}});
+      auto sd = subdomains.find(itg_type);
+
+      for(auto& id : ids)
+      {
+          // see if id is in subdomains to update
+          auto it = std::ranges::find(sd->second, id,
+                            &std::pair<std::int32_t, std::span<const std::int32_t>>::first);
+
+          if(it!=sd->second.end())
+          {
+            //std::cout << "update id: " << id << std::endl;
+            itg.first->second.emplace_back(id, _form->kernel(itg_type, id), it->second, _form->active_coeffs(itg_type, id));
+          }
+          else //do not update and leave as is
+          {
+            itg.first->second.emplace_back(id, _form->kernel(itg_type, id), _form->domain(itg_type, id), _form->active_coeffs(itg_type, id));
+          }
+      }
+    }
+
+    std::shared_ptr<dolfinx::fem::Form<T,U>> new_form = std::make_shared<dolfinx::fem::Form<T, U>>(_form->function_spaces(), integrals, _form->coefficients(), _form->constants(),
+                    _form->needs_facet_permutations(), entity_maps, _form->mesh());
+
+    ///@todo: make sure previous form is destroyed
+    _form = new_form;
+  }
+
+  void update_runtime_domains(const std::map<
+        cutfemx::fem::IntegralType,
+        std::vector<std::pair<std::int32_t, std::shared_ptr<cutfemx::quadrature::QuadratureRules<U>>>>>&
+        quaddomains)
+  {
+    std::vector<cutfemx::fem::IntegralType> itg_types = {cutfemx::fem::IntegralType::cutcell,
+                                                      cutfemx::fem::IntegralType::interface};
+
+    for(auto& itg_type : itg_types)
+    {
+      auto sd = quaddomains.find(itg_type);
+      auto& integrals = _integrals[static_cast<std::size_t>(itg_type)];
+
+      for(auto& [id, quad_rule] : sd->second)
+      {
+        for(auto& integral: integrals)
+        {
+          //if id is same as input replace quadrature rule in integral
+          if(integral.id == id)
+          {
+            //std::cout << "update rule: " << id << std::endl;
+            integral.quadrature_rules = quad_rule;
+          }
+        }
+      }
+    }
+  }
+
   std::shared_ptr<const dolfinx::fem::Form<scalar_type, geometry_type>> _form;
 
-  std::array<std::vector<runtime_integral_data<scalar_type, geometry_type>>, 4>
+  std::array<std::vector<runtime_integral_data<scalar_type, geometry_type>>, 2>
       _integrals;
 
 };
