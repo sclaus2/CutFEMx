@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.21)
 
 project(cutfemx_nanobind)
 
+message(STATUS "Pythonpath $ENV{PYTHONPATH}")
+
 if(WIN32)
   # Windows requires all symbols to be manually exported. This flag exports all
   # symbols automatically, as in Unix.
@@ -40,18 +42,12 @@ execute_process(
 
 if(NOT DOLFINX_PY_WRAPPERS_COMMAND_RESULT)
   message(STATUS "Found DOLFINx python wrappers at ${DOLFINX_PY_WRAPPERS_DIR}")
+elseif(EXISTS $ENV{DOLFINX_PY_WRAPPERS_DIR})
+  set(DOLFINX_PY_WRAPPERS_DIR $ENV{DOLFINX_PY_WRAPPERS_DIR})
+  message(STATUS "Found DOLFINx python wrappers at ${DOLFINX_PY_WRAPPERS_DIR}")
 else()
-  message(FATAL_ERROR "DOLFINx python wrappers could not be found.")
+  message(FATAL_ERROR "DOLFINx python wrappers could not be found. Please try specifying DOLFIN_PY_WRAPPERS_DIR env variable via dolfinx.get_include()")
 endif()
-
-# Check for petsc4py
-execute_process(
-  COMMAND ${Python_EXECUTABLE} -c
-          "import petsc4py; print(petsc4py.get_include())"
-  OUTPUT_VARIABLE PETSC4PY_INCLUDE_DIR
-  RESULT_VARIABLE PETSC4PY_COMMAND_RESULT
-  ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE
-)
 
 find_package(CutCells REQUIRED CONFIG)
 if(CutCells_FOUND)
@@ -79,12 +75,21 @@ nanobind_add_module(
 )
 target_compile_definitions(cutfemx_cpp PRIVATE cxx_std_20)
 
+# Check for petsc4py
+execute_process(
+  COMMAND ${Python_EXECUTABLE} -c
+          "import petsc4py; print(petsc4py.get_include())"
+  OUTPUT_VARIABLE PETSC4PY_INCLUDE_DIR
+  RESULT_VARIABLE PETSC4PY_COMMAND_RESULT
+  ERROR_VARIABLE PETSC4PY_COMMAND_ERROR OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
 if(NOT PETSC4PY_COMMAND_RESULT)
   message(STATUS "Found petsc4py include directory at ${PETSC4PY_INCLUDE_DIR}")
   target_include_directories(cutfemx_cpp PRIVATE ${PETSC4PY_INCLUDE_DIR})
   target_compile_definitions(cutfemx_cpp PRIVATE HAS_PETSC4PY)
 else()
-  message(STATUS "petsc4py not found.")
+  message(STATUS "petsc4py not found with error: ${PETSC4PY_COMMAND_ERROR}")
 endif()
 
 # Check for mpi4py
@@ -108,7 +113,7 @@ target_compile_definitions(cutfemx_cpp PRIVATE HAS_PETSC4PY)
 # Add DOLFINx libraries
 target_link_libraries(cutfemx_cpp PRIVATE dolfinx)
 target_link_libraries(cutfemx_cpp PRIVATE CUTCELLS::cutcells)
-target_link_libraries(cutfemx_cpp PRIVATE cutfemx)
+target_link_libraries(cutfemx_cpp PRIVATE CUTFEMX::cutfemx)
 
 # Add DOLFINx python, petsc4py and mpi4py include directories (with DOLFINx C++
 # ones already being added by target_link_libraries)
