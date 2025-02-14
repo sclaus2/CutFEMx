@@ -18,6 +18,7 @@ include(FeatureSummary)
 # Find DOLFINx config file
 find_package(CutCells REQUIRED)
 find_package(DOLFINX REQUIRED)
+find_package(spdlog REQUIRED)
 
 # Enable testing
 #enable_testing()

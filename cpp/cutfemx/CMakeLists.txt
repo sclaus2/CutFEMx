@@ -30,3 +30,4 @@ target_include_directories(cutfemx PUBLIC
 # dolfinx
 target_link_libraries(cutfemx PUBLIC CUTCELLS::cutcells)
 target_link_libraries(cutfemx PUBLIC dolfinx)
+target_link_libraries(cutfemx PUBLIC spdlog::spdlog)

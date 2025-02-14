@@ -13,6 +13,7 @@
 #include <concepts>
 #include <cstdint>
 #include <ufcx.h>
+#include <spdlog/spdlog.h>
 
 #include <basix/finite-element.h>
 
@@ -43,6 +44,35 @@ enum class IntegralType : std::int8_t
   cutcell = 0,           ///< run time integration one parent cell -> dC
   interface = 1,         ///< run time integration coupling two parent cells -> dI
 };
+
+std::string integralTypeToString(dolfinx::fem::IntegralType type)
+{
+  switch (type)
+  {
+  case dolfinx::fem::IntegralType::cell:
+    return "cell";
+  case dolfinx::fem::IntegralType::exterior_facet:
+    return "exterior_facet";
+  case dolfinx::fem::IntegralType::interior_facet:
+    return "interior_facet";
+  default:
+    return "unknown";
+  }
+}
+
+std::string integralTypeToString(cutfemx::fem::IntegralType type)
+{
+  switch (type)
+  {
+  case cutfemx::fem::IntegralType::cutcell:
+    return "cutcell";
+  case cutfemx::fem::IntegralType::interface:
+    return "interface";
+  default:
+    return "unknown";
+  }
+}
+
 
 template <dolfinx::scalar T, std::floating_point U = dolfinx::scalar_value_type_t<T>>
 struct runtime_integral_data
@@ -108,6 +138,7 @@ public:
   CutForm(std::shared_ptr<const dolfinx::fem::Form<scalar_type, geometry_type>> form,
       X&& integrals)
   {
+    spdlog::info("Creating CutForm with {} integrals", integrals.size());
     _form = form;
 
     // Store kernels, looping over integrals by domain type (dimension)
@@ -236,6 +267,8 @@ public:
       throw std::runtime_error("No mesh entities for requested domain index.");
   }
 
+  
+
   void update_integration_domains(const std::map<
         dolfinx::fem::IntegralType,
         std::vector<std::pair<std::int32_t, std::span<const std::int32_t>>>>&
@@ -243,7 +276,7 @@ public:
         const std::map<std::shared_ptr<const dolfinx::mesh::Mesh<geometry_type>>,
                      std::span<const std::int32_t>>& entity_maps = {})
   {
-
+    spdlog::info("Updating standard integration domains");
     std::map<dolfinx::fem::IntegralType, std::vector<dolfinx::fem::integral_data<T, U>>> integrals;
 
     std::vector<dolfinx::fem::IntegralType> itg_types = {dolfinx::fem::IntegralType::cell,
@@ -256,6 +289,22 @@ public:
       auto itg = integrals.insert({itg_type, {}});
       auto sd = subdomains.find(itg_type);
 
+      if(sd==subdomains.end())
+      {
+        spdlog::info("No subdomains to update for integral type: " + integralTypeToString(itg_type));
+        continue;
+      }
+
+      //Check if ids given in update exit in integral_ids
+      for(auto& [id, subdomain] : sd->second)
+      {
+        auto it = std::ranges::find(ids, id);
+        if(it==ids.end())
+        {
+          throw std::runtime_error("Integral " + integralTypeToString(itg_type) + " with id " + std::to_string(id) + " to update not found in form with rank: " + std::to_string(_form->rank()) + ". Please recompile form.");
+        }
+      }
+
       for(auto& id : ids)
       {
           // see if id is in subdomains to update
@@ -264,16 +313,18 @@ public:
 
           if(it!=sd->second.end())
           {
-            //std::cout << "update id: " << id << std::endl;
+            spdlog::info("Updating standard integral " + integralTypeToString(itg_type) + ": " + std::to_string(id) );
             itg.first->second.emplace_back(id, _form->kernel(itg_type, id), it->second, _form->active_coeffs(itg_type, id));
           }
           else //do not update and leave as is
           {
+            spdlog::info("Keeping standard integral " + integralTypeToString(itg_type) + ": " + std::to_string(id) );
             itg.first->second.emplace_back(id, _form->kernel(itg_type, id), _form->domain(itg_type, id), _form->active_coeffs(itg_type, id));
           }
       }
     }
 
+    spdlog::info("Creating new form with updated integration domains");
     std::shared_ptr<dolfinx::fem::Form<T,U>> new_form = std::make_shared<dolfinx::fem::Form<T, U>>(_form->function_spaces(), integrals, _form->coefficients(), _form->constants(),
                     _form->needs_facet_permutations(), entity_maps, _form->mesh());
 
@@ -286,13 +337,33 @@ public:
         std::vector<std::pair<std::int32_t, std::shared_ptr<cutfemx::quadrature::QuadratureRules<U>>>>>&
         quaddomains)
   {
+    spdlog::info("Updating runtime domains");
     std::vector<cutfemx::fem::IntegralType> itg_types = {cutfemx::fem::IntegralType::cutcell,
                                                       cutfemx::fem::IntegralType::interface};
 
     for(auto& itg_type : itg_types)
     {
       auto sd = quaddomains.find(itg_type);
+
+
+      if(sd==quaddomains.end())
+      {
+        spdlog::info("No quadrature rule to update for integral type: " + integralTypeToString(itg_type));
+        continue;
+      }
+
       auto& integrals = _integrals[static_cast<std::size_t>(itg_type)];
+      auto ids = this->integral_ids(itg_type);
+
+      //Check if ids given in update exit in integral_ids
+      for(auto& [id, subdomain] : sd->second)
+      {
+        auto it = std::ranges::find(ids, id);
+        if(it==ids.end())
+        {
+          throw std::runtime_error("Runtime integral " + integralTypeToString(itg_type) + " with id " + std::to_string(id) + " to update not found in form with rank: " + std::to_string(_form->rank()) + ". Please recompile form.");
+        }
+      }
 
       for(auto& [id, quad_rule] : sd->second)
       {
@@ -301,12 +372,15 @@ public:
           //if id is same as input replace quadrature rule in integral
           if(integral.id == id)
           {
+            spdlog::info("Updating runtime integral " + integralTypeToString(itg_type) + ": " + std::to_string(id) );
             //std::cout << "update rule: " << id << std::endl;
             integral.quadrature_rules = quad_rule;
+            spdlog::info("Updated " + integralTypeToString(itg_type) + ": " + std::to_string(id) );
           }
         }
       }
     }
+    spdlog::info("Runtime Integrals have been updated.");
   }
 
   std::shared_ptr<const dolfinx::fem::Form<scalar_type, geometry_type>> _form;
@@ -615,5 +689,6 @@ CutForm<T, U> create_form(
   std::free(form);
   return L;
 }
+
 
 } // namespace cutfemx::fem
