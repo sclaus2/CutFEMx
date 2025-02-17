@@ -60,7 +60,7 @@ std::string integralTypeToString(dolfinx::fem::IntegralType type)
   }
 }
 
-std::string integralTypeToString(cutfemx::fem::IntegralType type)
+std::string rtIntegralTypeToString(cutfemx::fem::IntegralType type)
 {
   switch (type)
   {
@@ -348,7 +348,7 @@ public:
 
       if(sd==quaddomains.end())
       {
-        spdlog::info("No quadrature rule to update for integral type: " + integralTypeToString(itg_type));
+        spdlog::info("No quadrature rule to update for integral type: " + rtIntegralTypeToString(itg_type));
         continue;
       }
 
@@ -361,7 +361,7 @@ public:
         auto it = std::ranges::find(ids, id);
         if(it==ids.end())
         {
-          throw std::runtime_error("Runtime integral " + integralTypeToString(itg_type) + " with id " + std::to_string(id) + " to update not found in form with rank: " + std::to_string(_form->rank()) + ". Please recompile form.");
+          throw std::runtime_error("Runtime integral " + rtIntegralTypeToString(itg_type) + " with id " + std::to_string(id) + " to update not found in form with rank: " + std::to_string(_form->rank()) + ". Please recompile form.");
         }
       }
 
@@ -372,10 +372,10 @@ public:
           //if id is same as input replace quadrature rule in integral
           if(integral.id == id)
           {
-            spdlog::info("Updating runtime integral " + integralTypeToString(itg_type) + ": " + std::to_string(id) );
+            spdlog::info("Updating runtime integral " + rtIntegralTypeToString(itg_type) + ": " + std::to_string(id) );
             //std::cout << "update rule: " << id << std::endl;
             integral.quadrature_rules = quad_rule;
-            spdlog::info("Updated " + integralTypeToString(itg_type) + ": " + std::to_string(id) );
+            spdlog::info("Updated " + rtIntegralTypeToString(itg_type) + ": " + std::to_string(id) );
           }
         }
       }
