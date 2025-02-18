@@ -45,7 +45,7 @@ enum class IntegralType : std::int8_t
   interface = 1,         ///< run time integration coupling two parent cells -> dI
 };
 
-std::string integralTypeToString(dolfinx::fem::IntegralType type)
+static std::string integralTypeToString(dolfinx::fem::IntegralType type)
 {
   switch (type)
   {
@@ -60,7 +60,7 @@ std::string integralTypeToString(dolfinx::fem::IntegralType type)
   }
 }
 
-std::string rtIntegralTypeToString(cutfemx::fem::IntegralType type)
+static std::string rtIntegralTypeToString(cutfemx::fem::IntegralType type)
 {
   switch (type)
   {
