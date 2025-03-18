@@ -1,6 +1,6 @@
 # CutFEMx
 
-A cut finite element library for FEniCSx. The current version supports FEniCSx 0.9 with a customised ffcx version for runtime quadrature at [ffcx-runtime](https://github.com/sclaus2/ffcx).
+A cut finite element library for FEniCSx. The current version supports FEniCSx 0.9 with a customised ffcx version for runtime quadrature at [ffcx-runtime]([https://github.com/sclaus2/ffcx-runtime-0.9.0]).
 
 ![SVG Image](quadrature.svg)
 
