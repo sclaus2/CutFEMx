@@ -56,9 +56,8 @@ The CutFEMx library requires a FEniCSx installation version 0.9.0 with an extend
 
 6. Install runtime integral extended FFCX:
     ```bash
-    git clone git@github.com:sclaus2/ffcx.git
+    git clone git@github.com:sclaus2/ffcx-runtime-0.9.0.git
     cd ffcx
-    git checkout sclaus/custom-integrals
     pip install .
     ```
 
