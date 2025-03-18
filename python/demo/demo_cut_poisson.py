@@ -76,7 +76,7 @@ gp_topo = facet_topology(msh,gp_ids)
 
 dx = ufl.Measure("dx", subdomain_data=[(0, inside_entities)], domain=msh)
 dS = ufl.Measure("dS", subdomain_data=[(0, gp_topo)], domain=msh)
-dx_rt = ufl.Measure("dx", metadata={"quadrature_rule":"runtime"} , subdomain_data=quad_domains, domain=msh)
+dx_rt = ufl.Measure("dx", subdomain_data=quad_domains, domain=msh)
 
 dxq = dx_rt(0) + dx(0)
 dsq = dx_rt(1)
