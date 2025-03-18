@@ -126,11 +126,12 @@ while t<T:
 
   subdomain_data={"cell": [(0, inside_entities)], "interior_facet": [(0, gp_topo)]}
   quad_domains = {"cutcell": [(0,inside_quadrature), (1,interface_quadrature)]}
+  subdomain_data_L={"cell": [(0, inside_entities)]}
 
   a_cut.update_integration_domains(subdomain_data)
   a_cut.update_runtime_domains(quad_domains)
 
-  L_cut.update_integration_domains(subdomain_data)
+  L_cut.update_integration_domains(subdomain_data_L)
   L_cut.update_runtime_domains(quad_domains)
 
   compute_normal(n_K,level_set,intersected_entities)
