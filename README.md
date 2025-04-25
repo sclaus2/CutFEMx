@@ -1,6 +1,9 @@
-# CutFEMx
+<p align="center">
+<img src="img/cutfemx_logo.png" alt="CutFEMx Logo" style="width:50%;" />
+</p>
 
-CutFEMx is a cut finite element library for FEniCSx. It is developed to support cut finite element methods as described in 
+CutFEMx is a cut finite element library for FEniCSx. 
+It is developed to support cut finite element methods as described in 
 
 ```bash
 @article{CutFEM2015,
@@ -17,9 +20,9 @@ CutFEMx is a cut finite element library for FEniCSx. It is developed to support 
 
 The current version supports FEniCSx 0.9 with a customised ffcx version for runtime quadrature at [ffcx-runtime](https://github.com/sclaus2/ffcx-runtime-0.9.0).
 
-![SVG Image](quadrature.svg)
+![SVG Image](img/quadrature.svg)
 
-![image info](cut_poisson_2.png)
+![image info](img/cut_poisson_2.png)
 Poisson problem in a circular domain described by a level set function.
 
 ## Installation Instructions
