@@ -7,7 +7,7 @@ add_library(cutfemx)
 
 # ------------------------------------------------------------------------------
 # Add source files to the target
-set(CUTFEMX_DIRS level_set fem mesh quadrature)
+set(CUTFEMX_DIRS level_set fem mesh quadrature extensions)
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.h.in version.h)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})

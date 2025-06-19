@@ -5,7 +5,9 @@
 # SPDX-License-Identifier:    MIT
 
 """Main module for CutFEMx"""
-from cutfemx import level_set, quadrature, mesh, fem
+
+from cutfemx import level_set, quadrature, mesh, fem, extensions
+
 
 def get_include(user=False):
     import os
@@ -17,4 +19,3 @@ def get_include(user=False):
     else:
         # Package is from a source directory
         return os.path.join(os.path.dirname(d), "src")
-

@@ -14,6 +14,7 @@ void level_set(nb::module_& m);
 void quadrature(nb::module_& m);
 void mesh(nb::module_& m);
 void fem(nb::module_& m);
+void extensions(nb::module_& m);
 void petsc(nb::module_& m);
 } // namespace cutfemx_wrappers
 
@@ -41,6 +42,10 @@ NB_MODULE(cutfemx_cpp, m)
   // Create fem submodule
   nb::module_ fem = m.def_submodule("fem", "FEM module");
   cutfemx_wrappers::fem(fem);
+
+  // Create extensions submodule
+  nb::module_ extensions = m.def_submodule("extensions", "Extensions module");
+  cutfemx_wrappers::extensions(extensions);
 
 #if defined(HAS_PETSC) && defined(HAS_PETSC4PY)
   // PETSc-specific wrappers
