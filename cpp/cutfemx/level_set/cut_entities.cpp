@@ -193,6 +193,13 @@ namespace cutfemx::level_set
       assert(level_set->function_space()->mesh());
       std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh = level_set->function_space()->mesh();
 
+      // Extract degree information from the level set function
+      auto basix_element = level_set->function_space()->element()->basix_element();
+      int degree = basix_element.degree();
+      basix::element::family family = basix_element.family();
+      if(family!=basix::element::family::P)
+        throw std::invalid_argument( "Only Lagrange elements are supported for cutting algorithm" );
+
       int gdim = mesh->geometry().dim();
 
       // Construct a map from entity to dofs in order of entities vector
@@ -204,7 +211,7 @@ namespace cutfemx::level_set
       cutcells::cell::type cutcells_cell_type = mesh::dolfinx_to_cutcells_cell_type(bg_cell_type);
 
       //get reference cell geometry (vertex coordinates in reference space of parent cell)
-      auto [xdata, xshape] = basix::cell::geometry<T>(basix_cell_type);
+      auto [xdata, xshape] = basix_element.points();
 
       // compute the cut of all intersected cells
       cut_cells.resize(num_entities);
@@ -220,10 +227,23 @@ namespace cutfemx::level_set
 
           // get level set values in cell
           std::vector<T> ls_vals(dofs.size());
-          for (std::size_t i = 0; i < dofs.size(); ++i)
-              ls_vals[i] = ls_values[dofs[i]];
+          for (std::size_t j = 0; j < dofs.size(); ++j)
+              ls_vals[j] = ls_values[dofs[j]];
 
-          cutcells::cell::cut<T>(cutcells_cell_type,xdata,gdim,ls_vals,cut_type,cut_cells[i],triangulate);
+          switch(degree)
+          {
+            case 1: {
+                        cutcells::cell::cut<T>(cutcells_cell_type,xdata,gdim,ls_vals,cut_type,cut_cells[i],triangulate);
+                        break;
+                    }
+            case 2: {
+                        cut_cells[i] = cutcells::cell::higher_order_cut<T>(cutcells_cell_type,xdata,gdim,ls_vals,cut_type,triangulate);
+                        break;
+                    }
+            default:{
+                      throw std::invalid_argument( "Cut routines are only implemented for linear and quadratic elements" );
+                    }
+          }
       }
     }
 
