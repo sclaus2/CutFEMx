@@ -27,7 +27,7 @@ Poisson problem in a circular domain described by a level set function.
 
 ## Installation Instructions
 
-The CutFEMx library requires a FEniCSx installation version 0.9.0 with an extended version of ffcx from here `git clone git@github.com:sclaus2/ffcx-runtime-0.9.0.git` . CutFEMx also requires CutCells. The installation instructions using conda to manage the dependencies are detailed below. 
+The CutFEMx library requires a FEniCSx installation version 0.9.0 with an extended version of ffcx from here `git clone git@github.com:sclaus2/ffcx-runtime-0.9.0.git` . CutFEMx also requires CutCells. The installation instructions using conda to manage the dependencies are detailed below. Make sure to use python 3.12. 
 
 1. Create and activate a new conda environment:
     ```bash
@@ -44,8 +44,8 @@ The CutFEMx library requires a FEniCSx installation version 0.9.0 with an extend
     ```bash
     conda install -c conda-forge numpy scipy sympy numba pyvista pytest
     conda install -c conda-forge blas blas-devel lapack libblas libcblas liblapack liblapacke libtmglib
-    conda install -c conda-forge mpi mpich kahip libboost-devel parmetis libscotch libptscotch pugixml
-    conda install -c conda-forge mpi4py petsc4py slepc4py scikit-build-core
+    conda install -c conda-forge mpi mpich kahip libboost-devel parmetis libscotch libptscotch pugixml spdlog
+    conda install -c conda-forge mpi4py petsc4py slepc4py scikit-build-core 
     conda install -c conda-forge 'hdf5=*=mpi*' 'petsc=*=*real*' 'slepc=*=*real*' 'libadios2=*=mpi*'
     ```
 
