@@ -2,26 +2,7 @@
 Demo: Free Function Approach for Discrete Extension
 
 This demo showcases the new free function approach for building root-to-cut mappings:
-1. build_root_to_cut_mapping - builds mapping from    # Plot 2: Badly cut cells ONLY with level set contour
-    plotter.subplot(0, 1)
-    # Create a specific color map for badly cut cells
-    badly_cut_colors = np.zeros(num_cells)
-    badly_cut_colors[badly_cut_parents] = 1  # Badly cut cells = 1
-
-    # Create a dedicated grid for badly cut cells to avoid interference
-    badly_cut_grid = grid.copy()
-    badly_cut_grid.cell_data.clear()  # Clear all cell data
-    badly_cut_grid.cell_data["Badly_Cut"] = badly_cut_colors  # Add only badly cut data
-
-    plotter.add_mesh(
-        badly_cut_grid, scalars="Badly_Cut", show_edges=True,
-        categories=True, cmap=["lightgray", "red"]
-    )
-    contour_mesh = badly_cut_grid.contour([0], scalars="Level_Set")
-    plotter.add_mesh(contour_mesh, color="black", line_width=3)
-    plotter.add_title(f"Badly Cut Cells ONLY ({len(badly_cut_parents)} red cells)")
-    plotter.view_xy()
-    plotter.camera.parallel_projection = Truenterior cells
+1. build_root_to_cut_mapping - builds mapping from badly cut cells to interior cells
 
 Based on the Burman-Hansbo approach for extending values from interior to badly cut cells.
 The new design uses free functions instead of classes for better modularity and performance.
@@ -35,7 +16,9 @@ from dolfinx import fem, mesh, plot
 from cutfemx.level_set import locate_entities, cut_entities
 from cutfemx.extensions import (
     get_badly_cut_parent_indices,
-    build_root_to_cut_mapping,
+    build_root_mapping,
+    create_root_to_cell_map,
+    build_dof_to_cells_mapping,
 )
 
 try:
@@ -130,28 +113,160 @@ def main():
     # Test 1: Build root-to-cut mapping using free function
     print("\n=== Testing build_root_to_cut_mapping ===")
     try:
-        # Build the mapping from badly cut parents to interior cells
-        root_to_cut_mapping = build_root_to_cut_mapping(
-            badly_cut_parents, interior_cells, msh, cut_cells
-        )
+        # Build the mapping from all cut cell parents to interior cells
+        root_to_cut_mapping = build_root_mapping(badly_cut_parents, interior_cells, msh, cut_cells)
         print("Built root-to-cut mapping")
         print(
-            f"Mapping vector length: {len(root_to_cut_mapping)} "
-            + f"(should be 2 * {len(badly_cut_parents)})"
+            f"Mapping dictionary size: {len(root_to_cut_mapping)} "
+            + f"(maps ALL cut cells, not just {len(badly_cut_parents)} badly cut cells)"
         )
-
-        # Print some mapping details (first few entries)
-        if len(root_to_cut_mapping) > 0:
-            print("Sample mappings (badly_cut -> interior):")
-            for i in range(0, min(10, len(root_to_cut_mapping)), 2):
-                if i + 1 < len(root_to_cut_mapping):
-                    badly_cut = root_to_cut_mapping[i]
-                    interior = root_to_cut_mapping[i + 1]
-                    print(f"  {badly_cut} -> {interior}")
 
     except Exception as e:
         print(f"build_root_to_cut_mapping test failed: {e}")
-        root_to_cut_mapping = []  # Set empty for visualization
+        root_to_cut_mapping = {}  # Set empty for visualization
+
+    # Test 2: Create inverse mapping from root cells to cut cells
+    print("\n=== Testing create_root_to_cell_map ===")
+    inverse_mapping = {}  # Initialize empty for scope
+    if len(root_to_cut_mapping) > 0:
+        try:
+            inverse_mapping = create_root_to_cell_map(root_to_cut_mapping)
+            print("Created inverse mapping (root cells → cut cells)")
+            print(f"Inverse mapping size: {len(inverse_mapping)} root cells")
+
+            # Print some sample inverse mappings
+            print("Sample inverse mappings (root_cell -> [cut_cells]):")
+            count = 0
+            for root_cell, cut_cells_list in inverse_mapping.items():
+                if count >= 40:  # Show first 5 mappings
+                    break
+                print(f"  {root_cell} -> {cut_cells_list}")
+                count += 1
+
+            # Verify the mapping consistency
+            total_cut_cells_in_inverse = sum(
+                len(cut_cells_list) for cut_cells_list in inverse_mapping.values()
+            )
+            print(f"Total cut cells in inverse mapping: {total_cut_cells_in_inverse}")
+            print(f"Original mapping size: {len(root_to_cut_mapping)}")
+
+            if total_cut_cells_in_inverse == len(root_to_cut_mapping):
+                print("✓ Inverse mapping is consistent with original mapping")
+            else:
+                print(
+                    "⚠ Inverse mapping size mismatch - some root cells may map "
+                    "to multiple cut cells"
+                )
+
+        except Exception as e:
+            print(f"create_root_to_cell_map test failed: {e}")
+    else:
+        print("Skipping inverse mapping test (no root mapping available)")
+
+    # Diagnostic: Check if all cut cells are mapped
+    print("\n=== Diagnostic Information ===")
+
+    # Get all unique cut cell parents from cut_cells.parent_map
+    all_cut_cell_parents_from_map = list(set(cut_cells.parent_map))
+    mapped_cut_cells = set(root_to_cut_mapping.keys())
+    unmapped_cut_cells = set(all_cut_cell_parents_from_map) - mapped_cut_cells
+
+    print(f"Total unique cut cell parents in parent_map: {len(all_cut_cell_parents_from_map)}")
+    print(f"Cut cells mapped by algorithm: {len(mapped_cut_cells)}")
+    print(f"Unmapped cut cells: {len(unmapped_cut_cells)}")
+
+    if unmapped_cut_cells:
+        print(f"Unmapped cut cell IDs: {sorted(list(unmapped_cut_cells))}")
+
+        # Check if unmapped cells are interior, cut, or isolated
+        unmapped_in_cut_entities = [
+            cell for cell in unmapped_cut_cells if cell in cut_cell_entities
+        ]
+        unmapped_in_interior = [cell for cell in unmapped_cut_cells if cell in interior_cells]
+
+        print(
+            f"  - Unmapped cells that are also in cut_cell_entities: "
+            f"{len(unmapped_in_cut_entities)}"
+        )
+        print(f"  - Unmapped cells that are also in interior_cells: {len(unmapped_in_interior)}")
+
+        # These might be isolated cut cells with no path to interior cells
+        print(
+            "This suggests some cut cells are isolated and cannot reach "
+            "interior cells via connectivity."
+        )
+
+    # Test 3: Build dof-to-cells mapping
+    print("\n=== Testing build_dof_to_cells_mapping ===")
+    dof_to_cells_mapping = {}  # Initialize empty for scope
+    if len(root_to_cut_mapping) > 0:
+        try:
+            dof_to_cells_mapping = build_dof_to_cells_mapping(cut_cells, root_to_cut_mapping, V)
+            print("Created dof-to-cells mapping (cut boundary DOFs only)")
+            print(f"Dof-to-cells mapping size: {len(dof_to_cells_mapping)} DOFs")
+
+            # Print some sample dof mappings
+            print("Sample dof mappings (cut boundary DOF -> [cut cells]):")
+            count = 0
+            for dof_id, cells_list in dof_to_cells_mapping.items():
+                if count >= 10:  # Show first 10 mappings
+                    break
+                print(f"  DOF {dof_id} -> {cells_list} ({len(cells_list)} cells)")
+                count += 1
+
+            # Verify the mapping statistics
+            total_dof_cell_pairs = sum(
+                len(cells_list) for cells_list in dof_to_cells_mapping.values()
+            )
+            max_cells_per_dof = (
+                max(len(cells_list) for cells_list in dof_to_cells_mapping.values())
+                if dof_to_cells_mapping
+                else 0
+            )
+            avg_cells_per_dof = (
+                total_dof_cell_pairs / len(dof_to_cells_mapping) if dof_to_cells_mapping else 0
+            )
+
+            print(f"Total dof-cell pairs: {total_dof_cell_pairs}")
+            print(f"Average cells per DOF: {avg_cells_per_dof:.2f}")
+            print(f"Maximum cells per DOF: {max_cells_per_dof}")
+
+        except Exception as e:
+            print(f"build_dof_to_cells_mapping test failed: {e}")
+    else:
+        print("Skipping dof-to-cells mapping test (no root mapping available)")
+
+    # DOF Visualization
+    print("\n=== DOF Visualization ===")
+    if len(dof_to_cells_mapping) > 0:
+        try:
+            # Get DOF coordinates for the function space
+            dof_coords = V.tabulate_dof_coordinates()
+            print(f"Total DOFs in function space: {len(dof_coords)}")
+
+            # Extract coordinates of the mapped DOFs (cut boundary DOFs)
+            mapped_dof_indices = list(dof_to_cells_mapping.keys())
+            mapped_dof_coords = dof_coords[mapped_dof_indices]
+
+            print(f"Cut boundary DOFs being mapped: {len(mapped_dof_coords)}")
+            print(f"Mapped DOF indices (first 20): {mapped_dof_indices[:20]}")
+
+            # Create a simple point cloud for the mapped DOFs
+            dof_point_cloud = pyvista.PolyData(mapped_dof_coords)
+
+            # Add information about how many cells each DOF maps to
+            cells_per_dof = [len(dof_to_cells_mapping[dof_idx]) for dof_idx in mapped_dof_indices]
+            dof_point_cloud.point_data["Cells_Per_DOF"] = cells_per_dof
+
+            print(f"DOF point cloud created with {len(mapped_dof_coords)} points")
+            print(f"Cells per DOF range: {min(cells_per_dof)} to {max(cells_per_dof)}")
+
+        except Exception as e:
+            print(f"DOF visualization preparation failed: {e}")
+            dof_point_cloud = None
+    else:
+        print("No DOF mapping available for visualization")
+        dof_point_cloud = None
 
     # Visualization
     print("\n=== Visualization ===")
@@ -173,21 +288,22 @@ def main():
 
     grid.cell_data["Cell_Type"] = cell_colors
 
-    # Create pair visualization data
+    # Create pair visualization data using inverse mapping
     pair_colors = np.zeros(num_cells)
-    if len(root_to_cut_mapping) > 0:
-        # Assign pair IDs to cells (limit to 20 pairs for distinct colors)
-        max_pairs = 20
+    if len(inverse_mapping) > 0:
+        # Assign colors based on inverse mapping (limit to 20 colors for distinct visualization)
+        max_colors = 40
 
-        for i in range(0, min(len(root_to_cut_mapping), max_pairs * 2), 2):
-            if i + 1 < len(root_to_cut_mapping):
-                badly_cut = root_to_cut_mapping[i]
-                interior = root_to_cut_mapping[i + 1]
-                pair_id = (i // 2) + 1  # Pair ID starting from 1
+        for color_id, (root_cell, cut_cells_list) in enumerate(inverse_mapping.items(), start=1):
+            if color_id > max_colors:
+                break
 
-                # Assign same color to both cells in the pair
-                pair_colors[badly_cut] = pair_id
-                pair_colors[interior] = pair_id
+            # Assign the same color to the root cell and all its cut cells
+            pair_colors[root_cell] = color_id + 1
+            for cut_cell in cut_cells_list:
+                pair_colors[cut_cell] = color_id + 1
+
+        print(f"Assigned colors to {min(len(inverse_mapping), max_colors)} root-cut cell groups")
 
     grid.cell_data["Pair_Colors"] = pair_colors
 
@@ -198,7 +314,7 @@ def main():
     grid.point_data["Test_Function"] = test_values
 
     # Plot
-    plotter = pyvista.Plotter(shape=(2, 2), window_size=(1400, 1400))
+    plotter = pyvista.Plotter(shape=(2, 3), window_size=(2000, 1400))
 
     # Plot 1: Level set
     plotter.subplot(0, 0)
@@ -226,30 +342,26 @@ def main():
     plotter.view_xy()
     plotter.camera.parallel_projection = True
 
-    # Plot 3: Badly cut to interior cell pairs with level set contour
+    # Plot 3: Root-to-cut cell groups with level set contour (using inverse mapping)
     plotter.subplot(1, 0)
-    if len(root_to_cut_mapping) > 0:
-        # Create a copy of the grid for the pairs plot to avoid interference
-        pairs_grid = grid.copy()
-        plotter.add_mesh(pairs_grid, scalars="Pair_Colors", show_edges=True, cmap="tab20")
-        contour_mesh = pairs_grid.contour([0], scalars="Level_Set")
+    if len(inverse_mapping) > 0:
+        # Create a copy of the grid for the groups plot to avoid interference
+        groups_grid = grid.copy()
+        plotter.add_mesh(groups_grid, scalars="Pair_Colors", show_edges=True, cmap="tab20")
+        contour_mesh = groups_grid.contour([0], scalars="Level_Set")
         plotter.add_mesh(contour_mesh, color="black", line_width=3)
-        plotter.add_title(
-            f"Pairs: {len(root_to_cut_mapping) // 2} badly cut + "
-            + f"{len(root_to_cut_mapping) // 2} interior"
-        )
+        plotter.add_title(f"Root-Cut Cell Groups: {len(inverse_mapping)} root cells")
 
-        # Add text annotations for the first few pairs
-        pair_count = min(5, len(root_to_cut_mapping) // 2)
-        print(f"\nShowing first {pair_count} pairs in visualization:")
-        for i in range(0, pair_count * 2, 2):
-            if i + 1 < len(root_to_cut_mapping):
-                badly_cut = root_to_cut_mapping[i]
-                interior = root_to_cut_mapping[i + 1]
-                print(
-                    f"  Pair {i // 2 + 1}: Cell {badly_cut} (badly cut) → "
-                    + f"Cell {interior} (interior)"
-                )
+        # Add text annotations for the first few groups
+        group_count = min(5, len(inverse_mapping))
+        print(f"\nShowing first {group_count} root-cut cell groups in visualization:")
+        for i, (root_cell, cut_cells_list) in enumerate(inverse_mapping.items()):
+            if i >= group_count:
+                break
+            print(
+                f"  Group {i + 1}: Root cell {root_cell} → "
+                + f"Cut cells {cut_cells_list} ({len(cut_cells_list)} cells)"
+            )
     else:
         # Fallback to showing badly cut cells
         plotter.add_mesh(
@@ -257,9 +369,132 @@ def main():
         )
         contour_mesh = grid.contour([0], scalars="Level_Set")
         plotter.add_mesh(contour_mesh, color="black", line_width=3)
-        plotter.add_title("No Pairs Found")
-    # plotter.view_xy()
-    # plotter.camera.parallel_projection = True
+        plotter.add_title("No Root-Cut Groups Found")
+    plotter.view_xy()
+    plotter.camera.parallel_projection = True
+
+    # Plot 4: Root cells only (interior cells that serve as extension sources)
+    plotter.subplot(1, 1)
+    if len(inverse_mapping) > 0:
+        # Create root cell visualization
+        root_colors = np.zeros(num_cells)
+        for color_id, root_cell in enumerate(inverse_mapping.keys(), start=1):
+            # Only color the root cells, not the cut cells
+            root_colors[root_cell] = color_id
+
+        # Create a dedicated grid for root cells
+        root_grid = grid.copy()
+        root_grid.cell_data.clear()
+        root_grid.cell_data["Root_Colors"] = root_colors
+
+        plotter.add_mesh(root_grid, scalars="Root_Colors", show_edges=True, cmap="tab20")
+        contour_mesh = root_grid.contour([0], scalars="Level_Set")
+        plotter.add_mesh(contour_mesh, color="black", line_width=3)
+        plotter.add_title(f"Root Cells Only: {len(inverse_mapping)} interior extension sources")
+
+        # Print statistics about root cell distribution
+        cut_cells_per_root = [len(cut_cells_list) for cut_cells_list in inverse_mapping.values()]
+        avg_cuts_per_root = np.mean(cut_cells_per_root) if cut_cells_per_root else 0
+        max_cuts_per_root = max(cut_cells_per_root) if cut_cells_per_root else 0
+        print(
+            f"Root cell statistics: avg {avg_cuts_per_root:.1f} cut cells per root, "
+            f"max {max_cuts_per_root} cut cells per root"
+        )
+    else:
+        # Fallback to showing interior cells
+        interior_colors = np.zeros(num_cells)
+        interior_colors[interior_cells] = 1
+        plotter.add_mesh(
+            grid,
+            scalars=interior_colors,
+            show_edges=True,
+            categories=True,
+            cmap=["lightgray", "blue"],
+        )
+        contour_mesh = grid.contour([0], scalars="Level_Set")
+        plotter.add_mesh(contour_mesh, color="black", line_width=3)
+        plotter.add_title("Interior Cells (No Root Mapping)")
+    plotter.view_xy()
+    plotter.camera.parallel_projection = True
+
+    # Plot 5: DOF mapping visualization - mesh with DOF points overlaid
+    plotter.subplot(0, 2)
+    if dof_point_cloud is not None:
+        # Show the mesh as background with cut cells highlighted
+        dof_mesh_grid = grid.copy()
+        plotter.add_mesh(
+            dof_mesh_grid,
+            scalars="Cell_Type",
+            show_edges=True,
+            categories=True,
+            cmap=["lightgray", "yellow", "red"],
+            opacity=0.7,
+        )
+
+        # Add level set contour
+        contour_mesh = dof_mesh_grid.contour([0], scalars="Level_Set")
+        plotter.add_mesh(contour_mesh, color="black", line_width=2)
+
+        # Overlay the DOF points
+        plotter.add_mesh(
+            dof_point_cloud,
+            scalars="Cells_Per_DOF",
+            point_size=15,
+            render_points_as_spheres=True,
+            cmap="viridis",
+            clim=[1, max(cells_per_dof)],
+        )
+
+        plotter.add_title(f"Cut Boundary DOFs: {len(mapped_dof_coords)} DOFs")
+    else:
+        # Fallback - show regular mesh
+        plotter.add_mesh(
+            grid,
+            scalars="Cell_Type",
+            show_edges=True,
+            categories=True,
+            cmap=["lightgray", "yellow", "red"],
+        )
+        contour_mesh = grid.contour([0], scalars="Level_Set")
+        plotter.add_mesh(contour_mesh, color="black", line_width=3)
+        plotter.add_title("No DOF Data Available")
+    plotter.view_xy()
+    plotter.camera.parallel_projection = True
+
+    # Plot 6: DOF points only with color based on connectivity
+    plotter.subplot(1, 2)
+    if dof_point_cloud is not None:
+        # Show just the DOF points
+        plotter.add_mesh(
+            dof_point_cloud,
+            scalars="Cells_Per_DOF",
+            point_size=20,
+            render_points_as_spheres=True,
+            cmap="plasma",
+            clim=[1, max(cells_per_dof)],
+        )
+
+        # Add a background grid for reference
+        plotter.add_mesh(grid, style="wireframe", color="lightgray", opacity=0.3, line_width=1)
+
+        # Add level set contour for reference
+        contour_mesh = grid.contour([0], scalars="Level_Set")
+        plotter.add_mesh(contour_mesh, color="black", line_width=2)
+
+        dof_range = f"{min(cells_per_dof)}-{max(cells_per_dof)}"
+        plotter.add_title(f"DOF Connectivity: {dof_range} cells per DOF")
+
+        # Print some statistics about DOF distribution
+        print("DOF connectivity statistics:")
+        print(f"  - DOFs connected to 1 cell: {sum(1 for c in cells_per_dof if c == 1)}")
+        print(f"  - DOFs connected to 2 cells: {sum(1 for c in cells_per_dof if c == 2)}")
+        print(f"  - DOFs connected to 3+ cells: {sum(1 for c in cells_per_dof if c >= 3)}")
+    else:
+        # Fallback - show regular mesh
+        plotter.add_mesh(grid, style="wireframe", color="gray")
+        plotter.add_title("No DOF Point Cloud Available")
+    plotter.view_xy()
+    plotter.camera.parallel_projection = True
 
     plotter.show()
 
@@ -270,7 +505,19 @@ def main():
     print(f"  - Badly cut cells: {len(badly_cut_parents)}")
     print(f"  - Well-cut cells: {len(well_cut_parents)}")
     print(f"  - Interior cells: {len(interior_cells)}")
-    print(f"  - Successfully mapped pairs: {len(root_to_cut_mapping) // 2}")
+    print(f"  - Cut cells mapped to roots: {len(root_to_cut_mapping)} (all cut cells)")
+    print(f"  - Root cells (extension sources): {len(inverse_mapping)}")
+    if len(inverse_mapping) > 0:
+        total_cut_cells_mapped = sum(
+            len(cut_cells_list) for cut_cells_list in inverse_mapping.values()
+        )
+        print(f"  - Verification: {total_cut_cells_mapped} cut cells assigned to roots")
+    if len(dof_to_cells_mapping) > 0:
+        total_dofs = len(V.tabulate_dof_coordinates())
+        mapped_dofs = len(dof_to_cells_mapping)
+        print(f"  - Total DOFs in function space: {total_dofs}")
+        print(f"  - Cut boundary DOFs requiring extension: {mapped_dofs}")
+        print(f"  - DOF mapping coverage: {mapped_dofs / total_dofs * 100:.1f}%")
     print(f"  - Threshold factor: {threshold_factor}")
 
 

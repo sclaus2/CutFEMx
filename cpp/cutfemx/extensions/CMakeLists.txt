@@ -3,7 +3,6 @@
 
 set(HEADERS_extensions
   ${CMAKE_CURRENT_SOURCE_DIR}/discrete_extension.h
-  ${CMAKE_CURRENT_SOURCE_DIR}/discrete_extension_impl.h
   PARENT_SCOPE)
 
 # Source files will be added here as we create them

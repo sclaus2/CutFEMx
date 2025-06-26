@@ -9,6 +9,8 @@
 #include <dolfinx/common/types.h>
 #include <dolfinx/la/MatrixCSR.h>
 #include <dolfinx/la/Vector.h>
+#include <dolfinx/fem/FunctionSpace.h>
+#include <dolfinx/fem/DofMap.h>
 
 #include <cutcells/cell_flags.h>
 #include <cutcells/cut_mesh.h>
@@ -20,6 +22,7 @@
 #include <memory>
 #include <concepts>
 #include <unordered_set>
+#include <unordered_map>
 #include <spdlog/spdlog.h>
 
 namespace cutfemx::extensions
@@ -34,6 +37,7 @@ namespace cutfemx::extensions
   /// @param threshold_factor Factor to multiply with mesh size (default 0.1 for Ch threshold)
   /// @return Vector of parent cell indices for badly cut cells
   /// @note The CutCells must be triangulated for accurate volume computation
+  /// @todo Implement computation of volume for different cell shapes (currently assumes triangular cells)
   template <std::floating_point U>
   std::vector<std::int32_t>
   get_badly_cut_parent_indices(const cutcells::mesh::CutCells<U>& cut_cells,
@@ -64,19 +68,29 @@ namespace cutfemx::extensions
     return badly_cut_parent_indices;
   }
 
-/// @brief Build mapping from badly cut parents to interior cells
+/// @brief Build mapping from cut cell parents to interior cells using propagation algorithm
+/// @param badly_cut_parents Vector of parent indices for badly cut cells (not used in new algorithm)
+/// @param interior_cells Vector of interior cell indices
+/// @param mesh DOLFINx mesh object
+/// @param cut_cells CutCells object containing cut cell information
+/// @param root Output mapping from cut cell parent to interior cell
+/// @param max_iterations Maximum iterations for propagation (default: 10)
+/// 
+/// Algorithm:
+/// 1. Use cut_cells._parent_map directly (no copying) and create efficient lookup set
+/// 2. Find cut cells that directly share facets with interior cells - these get direct mapping
+/// 3. Iteratively propagate: find unmapped cut cells connected to mapped cut cells via facets
+/// 4. Continue until all cut cells are mapped or max iterations reached
 template <std::floating_point U>
-void build_root_to_cut_mapping(const std::vector<std::int32_t>& badly_cut_parents,
+void build_root_mapping(const std::vector<std::int32_t>& badly_cut_parents,
                                const std::vector<std::int32_t>& interior_cells,
                                const dolfinx::mesh::Mesh<U>& mesh,
                                const cutcells::mesh::CutCells<U>& cut_cells,
-                               std::vector<std::int32_t>& root_to_cut_mapping)
-{
-  // Reserve memory for efficiency - we store 2 elements per badly cut parent
-  root_to_cut_mapping.reserve(2 * badly_cut_parents.size());
-  
+                               std::unordered_map<std::int32_t, std::int32_t>& root,
+                               int max_iterations = 10)
+{ 
   // Build connectivity information for finding neighboring cells
-  auto topology = mesh.topology_mutable();  // Get mutable topology
+  auto topology = mesh.topology_mutable();
   const int tdim = topology->dim();
   
   // Ensure we have cell-to-cell connectivity via facets
@@ -89,364 +103,290 @@ void build_root_to_cut_mapping(const std::vector<std::int32_t>& badly_cut_parent
   // For efficient lookup of interior cells
   std::unordered_set<std::int32_t> interior_set(interior_cells.begin(), interior_cells.end());
   
-  // Create set of all cut cell parent indices for efficient lookup
-  std::unordered_set<std::int32_t> cut_cell_parents;
-  for (std::size_t i = 0; i < cut_cells._parent_map.size(); ++i)
-  {
-    cut_cell_parents.insert(cut_cells._parent_map[i]);
-  }
+  // Create set of cut cell parents for efficient lookup (directly from parent_map)
+  std::unordered_set<std::int32_t> cut_cell_parent_set(cut_cells._parent_map.begin(), cut_cells._parent_map.end());
   
-  // For each badly cut parent, find exactly one nearby interior cell
-  int successful_mappings = 0;
-  int fallback_used = 0;
+  // Track which cut cell parents have been treated
+  std::unordered_set<std::int32_t> treated_cut_cells;
   
-  for (std::size_t idx = 0; idx < badly_cut_parents.size(); ++idx)
+  spdlog::info("Starting root mapping for {} cut cell parents with {} interior cells", 
+               cut_cell_parent_set.size(), interior_cells.size());
+  
+  // Phase 1: Find cut cell parents that share a facet with interior cells
+  int direct_mappings = 0;
+  
+  for (std::int32_t cut_cell_parent : cut_cell_parent_set)
   {
-    std::int32_t badly_cut_parent = badly_cut_parents[idx];
+    // Get facets of this cut cell parent
+    auto facets = c_to_f->links(cut_cell_parent);
+    
+    // Look for interior cells sharing these facets
     std::int32_t found_interior = -1;
-    std::unordered_set<std::int32_t> visited;
-    std::vector<std::int32_t> to_visit = {badly_cut_parent};
-    visited.insert(badly_cut_parent);
     
-    int search_depth = 0;
-    
-    // Phase 1: Breadth-first search to find interior neighbors via facets
-    while (!to_visit.empty() && found_interior == -1)
+    for (auto facet : facets)
     {
-      std::vector<std::int32_t> current_level = std::move(to_visit);
-      to_visit.clear();
-      search_depth++;
+      auto cells_on_facet = f_to_c->links(facet);
       
-      for (std::int32_t current_cell : current_level)
+      for (auto neighbor_cell : cells_on_facet)
       {
-        // Check if current cell is interior (skip the badly cut parent itself)
-        if (current_cell != badly_cut_parent && interior_set.find(current_cell) != interior_set.end())
+        if (neighbor_cell != cut_cell_parent && 
+            interior_set.find(neighbor_cell) != interior_set.end())
         {
-          found_interior = current_cell;
+          found_interior = neighbor_cell;
           break;
         }
-        
-        // Add neighbors to search via facets
-        auto facets = c_to_f->links(current_cell);
-        
-        for (auto facet : facets)
-        {
-          auto cells = f_to_c->links(facet);
-          for (auto neighbor : cells)
-          {
-            // Only add neighbor to search if it is a cut cell or interior cell
-            bool is_cut_cell = cut_cell_parents.find(neighbor) != cut_cell_parents.end();
-            bool is_interior_cell = interior_set.find(neighbor) != interior_set.end();
-            
-            if (neighbor != current_cell && visited.find(neighbor) == visited.end() && 
-                (is_cut_cell || is_interior_cell))
-            {
-              visited.insert(neighbor);
-              to_visit.push_back(neighbor);
-            }
-          }
-        }
       }
       
-      if (found_interior != -1) break;
-      
-      if (search_depth > 10) // Prevent infinite search
-      {
+      if (found_interior != -1)
         break;
-      }
     }
     
-    
-    // Phase 3: Fallback - use the first interior cell if no connection found
-    if (found_interior == -1 && !interior_cells.empty())
-    {
-      found_interior = interior_cells[0];
-      fallback_used++;
-    }
-    
-    // Store the mapping (only if an interior cell was found)
+    // If we found a directly connected interior cell, store the mapping
     if (found_interior != -1)
     {
-      root_to_cut_mapping.push_back(badly_cut_parent);
-      root_to_cut_mapping.push_back(found_interior);
-      successful_mappings++;
+      root[cut_cell_parent] = found_interior;
+      treated_cut_cells.insert(cut_cell_parent);
+      direct_mappings++;
+      
+      spdlog::debug("Direct mapping: cut cell parent {} → interior cell {}", 
+                   cut_cell_parent, found_interior);
     }
   }
   
-  // Summary output using spdlog
-  spdlog::info("build_root_to_cut_mapping: Mapped {}/{} badly cut cells ({} interior cells available, {} fallbacks used)", 
-               successful_mappings, badly_cut_parents.size(), interior_cells.size(), fallback_used);
+  spdlog::info("Phase 1 complete: {} direct mappings to interior cells", direct_mappings);
+  
+  // Phase 2: For remaining cut cell parents, find connections to already-mapped cut cell parents
+  int propagated_mappings = 0;
+  bool progress_made = true;
+  int iteration = 0;
+  
+  while (progress_made && iteration < max_iterations)
+  {
+    progress_made = false;
+    iteration++;
+    int mappings_this_iteration = 0;
+    
+    spdlog::debug("Phase 2, iteration {}: {} cut cell parents still need mapping", 
+                 iteration, cut_cell_parent_set.size() - treated_cut_cells.size());
+    
+    for (std::int32_t cut_cell_parent : cut_cell_parent_set)
+    {
+      if (treated_cut_cells.find(cut_cell_parent) != treated_cut_cells.end())
+        continue; // Already treated
+        
+      // Get facets of this cut cell parent
+      auto facets = c_to_f->links(cut_cell_parent);
+      
+      // Look for already-mapped cut cell parents sharing these facets
+      std::int32_t found_root = -1;
+      
+      for (auto facet : facets)
+      {
+        auto cells_on_facet = f_to_c->links(facet);
+        
+        for (auto neighbor_cell : cells_on_facet)
+        {
+          if (neighbor_cell != cut_cell_parent && 
+              cut_cell_parent_set.find(neighbor_cell) != cut_cell_parent_set.end() &&
+              treated_cut_cells.find(neighbor_cell) != treated_cut_cells.end())
+          {
+            // This neighbor is a cut cell parent that has already been mapped
+            found_root = root[neighbor_cell];
+            break;
+          }
+        }
+        
+        if (found_root != -1)
+          break;
+      }
+      
+      // If we found a connected cut cell parent with a root, use the same root
+      if (found_root != -1)
+      {
+        root[cut_cell_parent] = found_root;
+        treated_cut_cells.insert(cut_cell_parent);
+        propagated_mappings++;
+        mappings_this_iteration++;
+        progress_made = true;
+        
+        spdlog::debug("Propagated mapping: cut cell parent {} → root cell {} (iteration {})", 
+                     cut_cell_parent, found_root, iteration);
+      }
+    }
+    
+    spdlog::info("Iteration {}: {} new propagated mappings", iteration, mappings_this_iteration);
+  }
+  
+  spdlog::info("Phase 2 complete: {} propagated mappings over {} iterations", 
+               propagated_mappings, iteration);
+  
+  // Phase 3: Fallback for any remaining unmapped cut cells
+  int fallback_mappings = 0;
+  int remaining_unmapped = cut_cell_parent_set.size() - (direct_mappings + propagated_mappings);
+  
+  if (remaining_unmapped > 0 && !interior_cells.empty())
+  {
+    spdlog::info("Phase 3: Applying fallback mapping for {} isolated cut cell parents", remaining_unmapped);
+    
+    // Use the closest interior cell (for simplicity, use the first one)
+    std::int32_t fallback_interior = interior_cells[0];
+    
+    for (std::int32_t cut_cell_parent : cut_cell_parent_set)
+    {
+      if (treated_cut_cells.find(cut_cell_parent) == treated_cut_cells.end())
+      {
+        root[cut_cell_parent] = fallback_interior;
+        treated_cut_cells.insert(cut_cell_parent);
+        fallback_mappings++;
+        
+        spdlog::debug("Fallback mapping: isolated cut cell parent {} → interior cell {}", 
+                     cut_cell_parent, fallback_interior);
+      }
+    }
+    
+    spdlog::info("Phase 3 complete: {} fallback mappings applied", fallback_mappings);
+  }
+  
+  // Summary statistics
+  int total_mappings = direct_mappings + propagated_mappings + fallback_mappings;
+  int unmapped_cells = cut_cell_parent_set.size() - total_mappings;
+  
+  spdlog::info("build_root_mapping complete: {}/{} cut cell parents mapped ({} direct, {} propagated, {} fallback, {} unmapped)", 
+               total_mappings, cut_cell_parent_set.size(), direct_mappings, propagated_mappings, fallback_mappings, unmapped_cells);
+  
+  if (unmapped_cells > 0)
+  {
+    spdlog::warn("{} cut cell parents could not be mapped to interior cells", unmapped_cells);
+  }
 }
     
-// template <std::floating_point U>
-// void build_extension_matrix(
-//     const std::shared_ptr<const dolfinx::fem::FunctionSpace<U>>& function_space,
-//     const std::vector<std::int32_t>& root_to_cut_mapping,
-//     dolfinx::la::MatrixCSR<U>& extension_matrix)
-// {
-//   // Get DOF map and index map
-//   auto dofmap = function_space->dofmap();
-//   auto index_map = dofmap->index_map;
-//   const int bs = dofmap->index_map_bs();
-  
-//   // Create sparsity pattern for extension matrix
-//   std::vector<std::vector<std::int32_t>> sparsity_pattern(index_map->size_local());
-  
-//   // For each badly cut cell, create entries linking to its single interior cell
-//   // Flat vector format: [badly_cut_0, interior_0, badly_cut_1, interior_1, ...]
-//   for (std::size_t i = 0; i < root_to_cut_mapping.size(); i += 2)
-//   {
-//     std::int32_t badly_cut_parent = root_to_cut_mapping[i];
-//     std::int32_t interior_cell = root_to_cut_mapping[i + 1];
+/// @brief Create inverse mapping from interior cells to cut cells
+/// @param cell_to_root_mapping Input mapping from cut cells to interior cells
+/// @return Inverse mapping from interior cells to vectors of cut cells
+/// @note Each interior cell can map to multiple cut cells
+std::unordered_map<std::int32_t, std::vector<std::int32_t>>
+create_root_to_cell_map(const std::unordered_map<std::int32_t, std::int32_t>& cell_to_root_mapping)
+{
+    std::unordered_map<std::int32_t, std::vector<std::int32_t>> root_to_cells;
     
-//     // Get DOFs for badly cut cell
-//     auto badly_cut_dofs = dofmap->cell_dofs(badly_cut_parent);
+    // Reserve space for efficiency
+    root_to_cells.reserve(cell_to_root_mapping.size() / 2); // Estimate
     
-//     // Get DOFs for the single interior cell
-//     auto interior_dofs = dofmap->cell_dofs(interior_cell);
+    spdlog::info("Creating inverse mapping from {} cut-to-root entries", cell_to_root_mapping.size());
     
-//     // Add connections in sparsity pattern
-//     for (auto badly_cut_dof : badly_cut_dofs)
-//     {
-//       for (auto interior_dof : interior_dofs)
-//       {
-//         sparsity_pattern[badly_cut_dof].push_back(interior_dof);
-//       }
-//     }
-//   }
-  
-//   // Remove duplicates and sort
-//   for (auto& row : sparsity_pattern)
-//   {
-//     std::sort(row.begin(), row.end());
-//     row.erase(std::unique(row.begin(), row.end()), row.end());
-//   }
-  
-//   // Build the matrix with harmonic extension weights
-//   // For now, use simple averaging weights (can be improved later)
-//   std::vector<U> values;
-//   std::vector<std::int32_t> row_ptr = {0};
-//   std::vector<std::int32_t> col_indices;
-  
-//   for (std::size_t i = 0; i < sparsity_pattern.size(); ++i)
-//   {
-//     const auto& row = sparsity_pattern[i];
+    // Iterate through original mapping and build inverse
+    for (const auto& [cut_cell, root_cell] : cell_to_root_mapping)
+    {
+        // Add the cut cell to the vector of cells mapped to this root
+        root_to_cells[root_cell].push_back(cut_cell);
+    }
     
-//     // Check if this DOF belongs to a badly cut cell
-//     bool is_badly_cut_dof = false;
-//     for (const auto& [badly_cut_parent, interior_cell] : root_to_cut_mapping)
-//     {
-//       auto dofs = dofmap->cell_dofs(badly_cut_parent);
-//       if (std::find(dofs.begin(), dofs.end(), i) != dofs.end())
-//       {
-//         is_badly_cut_dof = true;
-//         break;
-//       }
-//     }
+    // Log statistics
+    std::size_t total_mapped_cells = 0;
+    std::size_t max_cells_per_root = 0;
+    for (const auto& [root_cell, cut_cells] : root_to_cells)
+    {
+        total_mapped_cells += cut_cells.size();
+        max_cells_per_root = std::max(max_cells_per_root, cut_cells.size());
+    }
     
-//     if (is_badly_cut_dof && !row.empty())
-//     {
-//       // Use equal weights for averaging (harmonic extension would require solving)
-//       U weight = U(1.0) / static_cast<U>(row.size());
-//       for (auto col : row)
-//       {
-//         col_indices.push_back(col);
-//         values.push_back(weight);
-//       }
-//     }
-//     else
-//     {
-//       // Identity mapping for non-badly-cut DOFs
-//       col_indices.push_back(static_cast<std::int32_t>(i));
-//       values.push_back(U(1.0));
-//     }
+    double avg_cells_per_root = root_to_cells.empty() ? 0.0 : 
+                               static_cast<double>(total_mapped_cells) / root_to_cells.size();
     
-//     row_ptr.push_back(static_cast<std::int32_t>(col_indices.size()));
-//   }
-  
-//   // Create the sparse matrix
-//   _extension_matrix = dolfinx::la::MatrixCSR<U>(
-//       dolfinx::MPI::comm_world, 
-//       {index_map->size_local(), index_map->size_local()},
-//       {row_ptr, col_indices, values}
-//   );
-// }
-//     // Root-to-cut cell mapping: flat vector [badly_cut_0, interior_0, badly_cut_1, interior_1, ...]
-//     std::vector<std::int32_t> _root_to_cut_mapping;
+    spdlog::info("Inverse mapping created: {} root cells, {} total mapped cells, "
+                 "avg {:.2f} cells per root, max {} cells per root", 
+                 root_to_cells.size(), total_mapped_cells, avg_cells_per_root, max_cells_per_root);
     
-//     // Sparse extension matrix
-//     dolfinx::la::MatrixCSR<U> _extension_matrix;
+    return root_to_cells;
+}
 
-
-
+/// @brief Build dof-to-cells mapping from cut cells and root cells
+/// @tparam T Floating point type for geometry
+/// @param cut_cells CutCells object containing all cut cells
+/// @param root Mapping from cut cell parents to root cells
+/// @param function_space Function space for which to build the dof mapping
+/// @return Mapping from DOF indices to vectors of cell indices containing that DOF
+/// @note This function iterates over all cut cells and their corresponding root cells
+///       to collect which cells contain each DOF. This is the inverse of the cell_dofs mapping.
+template <std::floating_point T>
+std::unordered_map<std::int32_t, std::vector<std::int32_t>>
+build_dof_to_cells_mapping(
+    const cutcells::mesh::CutCells<T>& cut_cells,
+    const std::unordered_map<std::int32_t, std::int32_t>& root,
+    const dolfinx::fem::FunctionSpace<T>& function_space)
+{
+    std::unordered_map<std::int32_t, std::vector<std::int32_t>> dof_to_cells;
     
-//     /// @brief Build the sparse extension matrix
-//     void _build_extension_matrix();
-
-
-//   /// @brief Averaging projector class for DOF-level averaging
-//   /// @tparam U Floating point type for geometry
-//   template <std::floating_point U>
-//   class AveragingProjector
-//   {
-//   public:
-//     /// @brief Constructor
-//     /// @param function_space DOLFINx function space
-//     /// @param extension_operator Discrete extension operator
-//     AveragingProjector(
-//         std::shared_ptr<const dolfinx::fem::FunctionSpace<U>> function_space,
-//         const DiscreteExtensionOperator<U>& extension_operator)
-//         : _function_space(function_space), _extension_operator(extension_operator)
-//     {
-//       _build_averaging_matrix();
-//     }
-
-//     /// @brief Get the full embedding matrix
-//     const dolfinx::la::MatrixCSR<U>& embedding_matrix() const { return _embedding_matrix; }
-
-//     /// @brief Apply averaging projection
-//     /// @param extended_values Extended values from DiscreteExtensionOperator
-//     /// @return Averaged DOF values
-//     dolfinx::la::Vector<U> apply(const dolfinx::la::Vector<U>& extended_values) const;
-
-//     /// @brief Construct full embedding from interior function to extended function
-//     /// @param u_interior Function defined on interior nodes
-//     /// @return Function defined on both interior and exterior nodes
-//     dolfinx::fem::Function<U, U> embed(const dolfinx::fem::Function<U, U>& u_interior) const;
-
-//   private:
-//     std::shared_ptr<const dolfinx::fem::FunctionSpace<U>> _function_space;
-//     const DiscreteExtensionOperator<U>& _extension_operator;
+    // Get the dofmap from the function space
+    auto dofmap = function_space.dofmap();
+    if (!dofmap)
+    {
+        spdlog::error("Function space does not have a valid dofmap");
+        return dof_to_cells;
+    }
     
-//     // Full embedding matrix combining extension and averaging
-//     dolfinx::la::MatrixCSR<U> _embedding_matrix;
-
-//     /// @brief Build the averaging matrix for DOF-level contributions
-//     void _build_averaging_matrix();
-//   };
-
-//   /// @brief Patch extension solver using local variational problems
-//   /// @tparam U Floating point type for geometry
-//   template <std::floating_point U>
-//   class PatchExtensionSolver
-//   {
-//   public:
-//     /// @brief Constructor
-//     /// @param function_space DOLFINx function space
-//     /// @param cut_cells CutCells object containing cut cell information
-//     /// @param badly_cut_parents Vector of parent indices for badly cut cells
-//     /// @param well_cut_parents Vector of parent indices for well cut cells
-//     /// @param patch_radius Radius for patch construction (default: 1)
-//     PatchExtensionSolver(
-//         std::shared_ptr<const dolfinx::fem::FunctionSpace<U>> function_space,
-//         const cutcells::mesh::CutCells<U>& cut_cells,
-//         const std::vector<std::int32_t>& badly_cut_parents,
-//         const std::vector<std::int32_t>& well_cut_parents,
-//         int patch_radius = 1)
-//         : _function_space(function_space), _cut_cells(cut_cells),
-//           _badly_cut_parents(badly_cut_parents), _well_cut_parents(well_cut_parents),
-//           _patch_radius(patch_radius)
-//     {
-//       _build_patches();
-//       _precompute_local_problems();
-//     }
-
-//     /// @brief Solve local patch problems for extension
-//     /// @param u_interior Function defined on interior nodes
-//     /// @return Extended function
-//     dolfinx::fem::Function<U, U> solve(const dolfinx::fem::Function<U, U>& u_interior) const;
-
-//     /// @brief Get precomputed extension matrix (if available)
-//     /// @return Extension matrix for patch-based method
-//     const dolfinx::la::MatrixCSR<U>& extension_matrix() const { return _extension_matrix; }
-
-//     /// @brief Build extension matrix by solving all local problems
-//     void build_extension_matrix();
-
-//   private:
-//     std::shared_ptr<const dolfinx::fem::FunctionSpace<U>> _function_space;
-//     const cutcells::mesh::CutCells<U>& _cut_cells;
-//     std::vector<std::int32_t> _badly_cut_parents;
-//     std::vector<std::int32_t> _well_cut_parents;
-//     int _patch_radius;
+    spdlog::info("Building dof-to-cells mapping for {} cut cells and {} root mappings", 
+                 cut_cells._cut_cells.size(), root.size());
     
-//     // Patch information: maps badly cut cell to its patch
-//     std::map<std::int32_t, std::vector<std::int32_t>> _patches;
+    std::unordered_set<std::int32_t> processed_cells;
     
-//     // Precomputed extension matrix
-//     dolfinx::la::MatrixCSR<U> _extension_matrix;
+    // Iterate over all cut cell parents from the cut_cells
+    for (std::size_t i = 0; i < cut_cells._cut_cells.size(); ++i)
+    {
+        std::int32_t cut_cell_parent = cut_cells._parent_map[i];
+        
+        // Find the root cell for this cut cell parent
+        auto root_it = root.find(cut_cell_parent);
+        if (root_it == root.end())
+        {
+            spdlog::warn("Cut cell parent {} not found in root mapping, skipping", cut_cell_parent);
+            continue;
+        }
+        std::int32_t root_cell = root_it->second;
+        
+        // Skip if we've already processed this cut cell parent
+        if (processed_cells.find(cut_cell_parent) != processed_cells.end())
+            continue;
+        processed_cells.insert(cut_cell_parent);
+        
+        // Get DOFs for the cut cell parent
+        std::span<const std::int32_t> cut_cell_dofs = dofmap->cell_dofs(cut_cell_parent);
+        std::span<const std::int32_t> root_cell_dofs = dofmap->cell_dofs(root_cell);
+        
+        // Add the cut cell parent to each DOF's cell list
+        for (std::int32_t dof : cut_cell_dofs)
+        {
+            //check if DOF is in root cell in which case we skip it as dof is interior and does not need to be constrained
+            if (std::find(root_cell_dofs.begin(), root_cell_dofs.end(), dof) != root_cell_dofs.end())
+                continue;
 
-//     /// @brief Build patches around badly cut cells
-//     void _build_patches();
+            // Add the cut cell parent to the list of cells for this DOF
+            dof_to_cells[dof].push_back(cut_cell_parent);
+        }
+    }
     
-//     /// @brief Precompute local variational problems for each patch
-//     void _precompute_local_problems();
+    // Log statistics
+    std::size_t total_dofs = dof_to_cells.size();
+    std::size_t total_dof_cell_pairs = 0;
+    std::size_t max_cells_per_dof = 0;
     
-//     /// @brief Solve harmonic extension on a single patch
-//     /// @param patch_cells Cells in the patch
-//     /// @param badly_cut_cell The badly cut cell to extend to
-//     /// @param interior_values Values on interior boundary of patch
-//     /// @return Extended values on the patch
-//     std::vector<U> _solve_patch_problem(
-//         const std::vector<std::int32_t>& patch_cells,
-//         std::int32_t badly_cut_cell,
-//         const std::map<std::int32_t, U>& interior_values) const;
-//   };
-
-  // TODO: Implement these utility functions later
-  /*
-  /// @brief Extend a function from interior nodes to exterior nodes of the domain
-  /// @tparam T Scalar type for the function values
-  /// @tparam U Floating point type for geometry
-  /// @param u_interior Function defined on interior nodes
-  /// @param cut_mesh Cut mesh containing interior/exterior node information
-  /// @param extension_method Method for extension (e.g., "harmonic", "constant")
-  /// @return Extended function defined on both interior and exterior nodes
-  template <dolfinx::scalar T, std::floating_point U>
-  dolfinx::fem::Function<T, U> extend_to_exterior(
-    const dolfinx::fem::Function<T, U>& u_interior,
-    const cutfemx::mesh::CutMesh<U>& cut_mesh,
-    const std::string& extension_method = "harmonic");
-
-  /// @brief Identify interior and exterior nodes based on level set function
-  /// @tparam T Scalar type for the level set function
-  /// @tparam U Floating point type for geometry
-  /// @param mesh Background mesh
-  /// @param level_set Level set function (negative inside, positive outside)
-  /// @return Pair of vectors containing interior and exterior node indices
-  template <dolfinx::scalar T, std::floating_point U>
-  std::pair<std::vector<std::int32_t>, std::vector<std::int32_t>>
-  classify_interior_exterior_nodes(
-    const dolfinx::mesh::Mesh<U>& mesh,
-    const dolfinx::fem::Function<T, U>& level_set);
-
-  /// @brief Compute extension weights for exterior nodes
-  /// @tparam U Floating point type
-  /// @param mesh Background mesh
-  /// @param interior_nodes Vector of interior node indices
-  /// @param exterior_nodes Vector of exterior node indices
-  /// @param extension_method Method for computing weights
-  /// @return Matrix of extension weights
-  template <std::floating_point U>
-  std::vector<std::vector<U>> compute_extension_weights(
-    const dolfinx::mesh::Mesh<U>& mesh,
-    const std::vector<std::int32_t>& interior_nodes,
-    const std::vector<std::int32_t>& exterior_nodes,
-    const std::string& extension_method = "harmonic");
-
-  /// @brief Apply extension operator to extend values from interior to exterior
-  /// @tparam T Scalar type for function values
-  /// @tparam U Floating point type for geometry
-  /// @param interior_values Values at interior nodes
-  /// @param extension_weights Pre-computed extension weights
-  /// @return Extended values at exterior nodes
-  template <dolfinx::scalar T, std::floating_point U>
-  std::vector<T> apply_extension_operator(
-    const std::span<const T>& interior_values,
-    const std::vector<std::vector<U>>& extension_weights);
-  */
-
+    for (const auto& [dof, cells] : dof_to_cells)
+    {
+        total_dof_cell_pairs += cells.size();
+        max_cells_per_dof = std::max(max_cells_per_dof, cells.size());
+    }
+    
+    double avg_cells_per_dof = total_dofs > 0 ? 
+                              static_cast<double>(total_dof_cell_pairs) / total_dofs : 0.0;
+    
+    spdlog::info("Dof-to-cells mapping created: {} unique DOFs, {} total dof-cell pairs, "
+                 "avg {:.2f} cells per DOF, max {} cells per DOF", 
+                 total_dofs, total_dof_cell_pairs, avg_cells_per_dof, max_cells_per_dof);
+    
+    return dof_to_cells;
+}
+    
 } // namespace cutfemx::extensions
 
-// Include template implementations
-#include "discrete_extension_impl.h"
+
+

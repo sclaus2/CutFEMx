@@ -15,9 +15,12 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/unordered_map.h>
+#include <nanobind/stl/pair.h>
 #include <span>
 
 #include <dolfinx/fem/Function.h>
+#include <dolfinx/fem/FunctionSpace.h>
 #include <dolfinx/common/types.h>
 
 #include <cutcells/cut_cell.h>
@@ -47,55 +50,64 @@ void declare_extensions(nb::module_& m, std::string type)
         "The CutCells must be triangulated for accurate volume computation.");
 
   // Build root-to-cut mapping function
-  m.def(("build_root_to_cut_mapping_" + type).c_str(),
+  m.def(("build_root_mapping_" + type).c_str(),
         [](const std::vector<std::int32_t>& badly_cut_parents,
            const std::vector<std::int32_t>& interior_cells,
            const dolfinx::mesh::Mesh<T>& mesh,
            const cutcells::mesh::CutCells<T>& cut_cells)
         {
-          std::vector<std::int32_t> root_to_cut_mapping;
-          cutfemx::extensions::build_root_to_cut_mapping(
-              badly_cut_parents, interior_cells, mesh, cut_cells, root_to_cut_mapping);
-          return root_to_cut_mapping;
+          std::unordered_map<std::int32_t, std::int32_t> root_mapping;
+          cutfemx::extensions::build_root_mapping(
+              badly_cut_parents, interior_cells, mesh, cut_cells, root_mapping);
+          return root_mapping;
         },
-        "Build mapping from badly cut parent cells to interior cells. "
-        "Returns flat vector [badly_cut_0, interior_0, badly_cut_1, interior_1, ...]");
+        "Build mapping from badly cut parent cells to interior cells using two-phase algorithm. "
+        "Phase 1: Direct mapping for badly cut cells sharing facets with interior cells. "
+        "Phase 2: Propagation to remaining badly cut cells via connections to already-mapped badly cut cells. "
+        "Returns dictionary mapping badly cut parent indices to interior cell indices.");
 
-  // AveragingProjector class (commented out - moved to free functions)
-  // nb::class_<cutfemx::extensions::AveragingProjector<T>>(m, 
-  //     ("AveragingProjector_" + type).c_str())
-  //     .def(nb::init<std::shared_ptr<const dolfinx::fem::FunctionSpace<T>>,
-  //                   const cutfemx::extensions::DiscreteExtensionOperator<T>&>(),
-  //          "Create averaging projector")
-  //     .def("apply", &cutfemx::extensions::AveragingProjector<T>::apply,
-  //          "Apply averaging projection")
-  //     .def("embed", &cutfemx::extensions::AveragingProjector<T>::embed,
-  //          "Construct full embedding from interior function to extended function")
-  //     .def_property_readonly("embedding_matrix", 
-  //          &cutfemx::extensions::AveragingProjector<T>::embedding_matrix,
-  //          "Get the full embedding matrix");
-
-  // PatchExtensionSolver class (commented out - moved to free functions)
-  // nb::class_<cutfemx::extensions::PatchExtensionSolver<T>>(m, 
-  //     ("PatchExtensionSolver_" + type).c_str())
-  //     .def(nb::init<std::shared_ptr<const dolfinx::fem::FunctionSpace<T>>,
-  //                   const cutcells::mesh::CutCells<T>&,
-  //                   const std::vector<std::int32_t>&,
-  //                   const std::vector<std::int32_t>&,
-  //                   int>(),
-  //          "Create patch extension solver", nb::arg("function_space"), 
-  //          nb::arg("cut_cells"), nb::arg("badly_cut_parents"), 
-  //          nb::arg("well_cut_parents"), nb::arg("patch_radius") = 1)
-  //     .def("solve", &cutfemx::extensions::PatchExtensionSolver<T>::solve,
-  //          "Solve local patch problems for extension")
-  //     .def("build_extension_matrix", 
-  //          &cutfemx::extensions::PatchExtensionSolver<T>::build_extension_matrix,
-  //          "Build extension matrix by solving all local problems")
-  //     .def_property_readonly("extension_matrix", 
-  //          &cutfemx::extensions::PatchExtensionSolver<T>::extension_matrix,
-  //          "Get precomputed extension matrix");
-}
-
+  // Create inverse mapping function
+  m.def(("create_root_to_cell_map_" + type).c_str(),
+        [](const std::unordered_map<std::int32_t, std::int32_t>& cell_to_root_mapping)
+        {
+          return cutfemx::extensions::create_root_to_cell_map(cell_to_root_mapping);
+        },
+        "Create inverse mapping from interior (root) cells to vectors of cut cells. "
+        "Input: mapping from cut cells to interior cells. "
+        "Output: mapping from interior cells to vectors of cut cells that map to them.");
+        
+  // Convenience function for int32 mappings
+  m.def("create_root_to_cells_mapping",
+        [](const std::unordered_map<std::int32_t, std::int32_t>& cell_to_root_mapping)
+        {
+          return cutfemx::extensions::create_root_to_cell_map(cell_to_root_mapping);
+        },
+        "Convenience function to create inverse mapping from root cells to cut cells for int32 types. "
+        "Input: mapping from cut cells to interior cells. "
+        "Output: mapping from interior cells to vectors of cut cells that map to them.");
+        
+  // Direct function without type suffix for Python convenience
+  m.def("create_root_to_cell_map",
+        [](const std::unordered_map<std::int32_t, std::int32_t>& cell_to_root_mapping)
+        {
+          return cutfemx::extensions::create_root_to_cell_map(cell_to_root_mapping);
+        },
+        "Create inverse mapping from interior (root) cells to vectors of cut cells. "
+        "Input: mapping from cut cells to interior cells. "
+        "Output: mapping from interior cells to vectors of cut cells that map to them.");
+        
+  // Build dof-to-cells mapping function
+  m.def(("build_dof_to_cells_mapping_" + type).c_str(),
+        [](const cutcells::mesh::CutCells<T>& cut_cells,
+           const std::unordered_map<std::int32_t, std::int32_t>& root,
+           const std::shared_ptr<dolfinx::fem::FunctionSpace<T>> function_space)
+        {
+          return cutfemx::extensions::build_dof_to_cells_mapping(cut_cells, root, *function_space);
+        },
+        "Build mapping from DOF indices to vectors of cell indices containing that DOF. "
+        "Input: cut cells, root mapping, and function space. "
+        "Output: mapping from DOF indices to vectors of cut cells that contain each DOF.");
+    }
 } // namespace
 
 namespace cutfemx_wrappers
@@ -105,6 +117,18 @@ void extensions(nb::module_& m)
 {
   declare_extensions<float>(m, "float32");
   declare_extensions<double>(m, "float64");
+  
+  // Add direct function binding without type suffix for Python convenience
+  m.def("build_dof_to_cells_mapping",
+        [](const cutcells::mesh::CutCells<double>& cut_cells,
+           const std::unordered_map<std::int32_t, std::int32_t>& root,
+           const std::shared_ptr<dolfinx::fem::FunctionSpace<double>> function_space)
+        {
+          return cutfemx::extensions::build_dof_to_cells_mapping(cut_cells, root, *function_space);
+        },
+        "Build mapping from DOF indices to vectors of cell indices containing that DOF. "
+        "Input: cut cells, root mapping, and function space. "
+        "Output: mapping from DOF indices to vectors of cut cells that contain each DOF.");
 }
 
 } // end of namespace cutfemx_wrappers
