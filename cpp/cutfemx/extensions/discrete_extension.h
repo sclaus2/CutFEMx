@@ -6,6 +6,7 @@
 #pragma once
 
 #include <dolfinx/mesh/Mesh.h>
+#include <dolfinx/mesh/utils.h>
 #include <dolfinx/common/types.h>
 #include <dolfinx/la/MatrixCSR.h>
 #include <dolfinx/la/Vector.h>
@@ -72,12 +73,12 @@ namespace cutfemx::extensions
 /// @param badly_cut_parents Vector of parent indices for badly cut cells (not used in new algorithm)
 /// @param interior_cells Vector of interior cell indices
 /// @param mesh DOLFINx mesh object
-/// @param cut_cells CutCells object containing cut cell information
+/// @param cut_cell_parents Vector of cut cell parent IDs (from cut_cells._parent_map)
 /// @param root Output mapping from cut cell parent to interior cell
 /// @param max_iterations Maximum iterations for propagation (default: 10)
 /// 
 /// Algorithm:
-/// 1. Use cut_cells._parent_map directly (no copying) and create efficient lookup set
+/// 1. Use cut_cell_parents directly and create efficient lookup set
 /// 2. Find cut cells that directly share facets with interior cells - these get direct mapping
 /// 3. Iteratively propagate: find unmapped cut cells connected to mapped cut cells via facets
 /// 4. Continue until all cut cells are mapped or max iterations reached
@@ -85,7 +86,7 @@ template <std::floating_point U>
 void build_root_mapping(const std::vector<std::int32_t>& badly_cut_parents,
                                const std::vector<std::int32_t>& interior_cells,
                                const dolfinx::mesh::Mesh<U>& mesh,
-                               const cutcells::mesh::CutCells<U>& cut_cells,
+                               const std::vector<std::int32_t>& cut_cell_parents,
                                std::unordered_map<std::int32_t, std::int32_t>& root,
                                int max_iterations = 10)
 { 
@@ -103,8 +104,8 @@ void build_root_mapping(const std::vector<std::int32_t>& badly_cut_parents,
   // For efficient lookup of interior cells
   std::unordered_set<std::int32_t> interior_set(interior_cells.begin(), interior_cells.end());
   
-  // Create set of cut cell parents for efficient lookup (directly from parent_map)
-  std::unordered_set<std::int32_t> cut_cell_parent_set(cut_cells._parent_map.begin(), cut_cells._parent_map.end());
+  // Create set of cut cell parents for efficient lookup (directly from cut_cell_parents)
+  std::unordered_set<std::int32_t> cut_cell_parent_set(cut_cell_parents.begin(), cut_cell_parents.end());
   
   // Track which cut cell parents have been treated
   std::unordered_set<std::int32_t> treated_cut_cells;
@@ -302,16 +303,16 @@ create_root_to_cell_map(const std::unordered_map<std::int32_t, std::int32_t>& ce
 
 /// @brief Build dof-to-cells mapping from cut cells and root cells
 /// @tparam T Floating point type for geometry
-/// @param cut_cells CutCells object containing all cut cells
+/// @param cut_cell_parents Vector of cut cell parent IDs (from cut_cells._parent_map)
 /// @param root Mapping from cut cell parents to root cells
 /// @param function_space Function space for which to build the dof mapping
 /// @return Mapping from DOF indices to vectors of cell indices containing that DOF
-/// @note This function iterates over all cut cells and their corresponding root cells
+/// @note This function iterates over all cut cell parents and their corresponding root cells
 ///       to collect which cells contain each DOF. This is the inverse of the cell_dofs mapping.
 template <std::floating_point T>
 std::unordered_map<std::int32_t, std::vector<std::int32_t>>
 build_dof_to_cells_mapping(
-    const cutcells::mesh::CutCells<T>& cut_cells,
+    const std::vector<std::int32_t>& cut_cell_parents,
     const std::unordered_map<std::int32_t, std::int32_t>& root,
     const dolfinx::fem::FunctionSpace<T>& function_space)
 {
@@ -325,16 +326,14 @@ build_dof_to_cells_mapping(
         return dof_to_cells;
     }
     
-    spdlog::info("Building dof-to-cells mapping for {} cut cells and {} root mappings", 
-                 cut_cells._cut_cells.size(), root.size());
+    spdlog::info("Building dof-to-cells mapping for {} cut cell parents and {} root mappings", 
+                 cut_cell_parents.size(), root.size());
     
     std::unordered_set<std::int32_t> processed_cells;
     
-    // Iterate over all cut cell parents from the cut_cells
-    for (std::size_t i = 0; i < cut_cells._cut_cells.size(); ++i)
+    // Iterate over all cut cell parents
+    for (std::int32_t cut_cell_parent : cut_cell_parents)
     {
-        std::int32_t cut_cell_parent = cut_cells._parent_map[i];
-        
         // Find the root cell for this cut cell parent
         auto root_it = root.find(cut_cell_parent);
         if (root_it == root.end())
@@ -384,6 +383,104 @@ build_dof_to_cells_mapping(
                  total_dofs, total_dof_cell_pairs, avg_cells_per_dof, max_cells_per_dof);
     
     return dof_to_cells;
+}
+
+/// @brief Build dof-to-root mapping by selecting the closest root cell for each DOF
+/// @tparam T Floating point type for geometry
+/// @param dof_to_cells_mapping Mapping from DOF indices to vectors of cut cell indices
+/// @param cut_cell_to_root_mapping Mapping from cut cell parents to root cells
+/// @param dof_coords Vector of DOF coordinates (flattened, 3 components per DOF)
+/// @param function_space Function space for DOF coordinate information
+/// @param mesh Mesh object for computing cell midpoints
+/// @return Mapping from DOF indices to closest root cell indices
+/// @note For each DOF, this function finds all possible root cells (via the cut cells that contain the DOF),
+///       computes the distance from the DOF coordinate to each root cell midpoint, and selects the closest one.
+template <std::floating_point T>
+std::unordered_map<std::int32_t, std::int32_t>
+build_dof_to_root_mapping(
+    const std::unordered_map<std::int32_t, std::vector<std::int32_t>>& dof_to_cells_mapping,
+    const std::unordered_map<std::int32_t, std::int32_t>& root_mapping,
+    const std::vector<T>& dof_coords,
+    const dolfinx::fem::FunctionSpace<T>& function_space,
+    const dolfinx::mesh::Mesh<T>& mesh)
+{
+    std::unordered_map<std::int32_t, std::int32_t> dof_to_root;
+    
+    if (dof_to_cells_mapping.empty())
+    {
+        spdlog::info("Empty dof_to_cells_mapping, returning empty dof_to_root mapping");
+        return dof_to_root;
+    }
+    
+    // Use provided DOF coordinates
+    const int gdim = 3; // DOLFINx always stores coordinates as 3D
+    
+    spdlog::info("Building dof-to-root mapping for {} DOFs", dof_to_cells_mapping.size());
+    
+    // Process each DOF
+    for (const auto& [dof_index, cut_cells] : dof_to_cells_mapping)
+    {
+        // Get DOF coordinate
+        std::array<T, 3> dof_coord;
+        for (int d = 0; d < gdim; ++d)
+        {
+            dof_coord[d] = dof_coords[dof_index * gdim + d];
+        }
+        
+        // Find all unique root cells for this DOF's cut cells
+        std::unordered_set<std::int32_t> candidate_roots;
+        for (std::int32_t cut_cell : cut_cells)
+        {
+            auto root_it = root_mapping.find(cut_cell);
+            if (root_it != root_mapping.end())
+            {
+                candidate_roots.insert(root_it->second);
+            }
+        }
+        
+        if (candidate_roots.empty())
+        {
+            spdlog::warn("No root cells found for DOF {}, skipping", dof_index);
+            continue;
+        }
+        
+        // Convert to vector for midpoint computation
+        std::vector<std::int32_t> root_cells(candidate_roots.begin(), candidate_roots.end());
+        
+        // Compute midpoints of candidate root cells
+        std::vector<T> midpoints = dolfinx::mesh::compute_midpoints(mesh, mesh.topology()->dim(), root_cells);
+        
+        // Find root cell with midpoint closest to DOF
+        std::int32_t closest_root = root_cells[0];
+        T min_distance_sq = std::numeric_limits<T>::max();
+        
+        for (std::size_t i = 0; i < root_cells.size(); ++i)
+        {
+            // Compute squared distance from DOF to root cell midpoint
+            T distance_sq = 0.0;
+            for (int d = 0; d < gdim; ++d)
+            {
+                T diff = dof_coord[d] - midpoints[i * gdim + d];
+                distance_sq += diff * diff;
+            }
+            
+            if (distance_sq < min_distance_sq)
+            {
+                min_distance_sq = distance_sq;
+                closest_root = root_cells[i];
+            }
+        }
+        
+        // Store the mapping
+        dof_to_root[dof_index] = closest_root;
+        
+        spdlog::debug("DOF {} mapped to root cell {} (distance: {:.6f})", 
+                     dof_index, closest_root, std::sqrt(min_distance_sq));
+    }
+    
+    spdlog::info("Dof-to-root mapping created: {} DOF-root pairs", dof_to_root.size());
+    
+    return dof_to_root;
 }
     
 } // namespace cutfemx::extensions

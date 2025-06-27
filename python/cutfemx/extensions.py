@@ -10,6 +10,7 @@ from cutfemx.cutfemx_cpp import extensions
 
 __all__ = [
     "build_dof_to_cells_mapping",
+    "build_dof_to_root_mapping",
     "build_root_mapping",
     "create_root_to_cell_map",
     "get_badly_cut_parent_indices",
@@ -48,7 +49,7 @@ def build_root_mapping(badly_cut_parents, interior_cells, mesh, cut_cells):
 
     This function implements a propagation algorithm for mapping ALL cut cells to interior cells:
 
-    1. Start with all cut_cells.parent_map cells (not just badly cut ones)
+    1. Start with all cut_cells.parent_map cells (extracted automatically)
     2. Find cut cells that directly share facets with interior cells - these get direct mapping
     3. Iteratively propagate: find unmapped cut cells connected to mapped cut cells via facets
     4. Continue until all cut cells are mapped or max iterations reached
@@ -66,7 +67,7 @@ def build_root_mapping(badly_cut_parents, interior_cells, mesh, cut_cells):
     mesh : dolfinx.mesh.Mesh
         DOLFINx mesh object
     cut_cells : CutCells
-        CutCells object containing cut cell information
+        CutCells object containing cut cell information (used to extract parent_map)
 
     Returns
     -------
@@ -75,22 +76,25 @@ def build_root_mapping(badly_cut_parents, interior_cells, mesh, cut_cells):
         Each cut cell is mapped to exactly one interior cell that serves
         as the extension source. All cut cells from cut_cells.parent_map are processed.
     """
+    # Extract the parent map from cut_cells
+    cut_cell_parents = cut_cells.parent_map
+
     # Determine the floating point type from mesh and get the underlying C++ object
     if hasattr(mesh, "geometry") and hasattr(mesh.geometry, "x"):
         mesh_cpp = mesh._cpp_object  # Get the underlying C++ mesh object
         if mesh.geometry.x.dtype.name == "float32":
             return extensions.build_root_mapping_float32(
-                badly_cut_parents, interior_cells, mesh_cpp, cut_cells
+                badly_cut_parents, interior_cells, mesh_cpp, cut_cell_parents
             )
         else:
             return extensions.build_root_mapping_float64(
-                badly_cut_parents, interior_cells, mesh_cpp, cut_cells
+                badly_cut_parents, interior_cells, mesh_cpp, cut_cell_parents
             )
     else:
         # Default to float64
         mesh_cpp = mesh._cpp_object  # Get the underlying C++ mesh object
         return extensions.build_root_mapping_float64(
-            badly_cut_parents, interior_cells, mesh_cpp, cut_cells
+            badly_cut_parents, interior_cells, mesh_cpp, cut_cell_parents
         )
 
 
@@ -120,14 +124,14 @@ def build_dof_to_cells_mapping(cut_cells, root, function_space):
     """
     Build mapping from DOF indices to vectors of cell indices containing that DOF.
 
-    This function iterates over all cut cells and their corresponding root cells
+    This function iterates over all cut cell parents and their corresponding root cells
     to collect which cells contain each DOF that are specific to cut cells (not shared
     with the interior/root cells).
 
     Parameters
     ----------
     cut_cells : CutCells
-        CutCells object containing all cut cells
+        CutCells object containing all cut cells (used to extract parent_map)
     root : dict[int, int]
         Mapping from cut cell parents to root cells (from build_root_mapping)
     function_space : dolfinx.fem.FunctionSpace
@@ -141,10 +145,81 @@ def build_dof_to_cells_mapping(cut_cells, root, function_space):
 
     Notes
     -----
-    The function processes cut cells and filters out DOFs that are shared with the
+    The function processes cut cell parents and filters out DOFs that are shared with the
     corresponding root cells. This gives a mapping of boundary/cut-specific DOFs to
     the cut cells that contain them.
     """
+    # Extract the parent map from cut_cells
+    cut_cell_parents = cut_cells.parent_map
+
     # Extract the underlying C++ FunctionSpace object
     function_space_cpp = function_space._cpp_object
-    return extensions.build_dof_to_cells_mapping(cut_cells, root, function_space_cpp)
+    return extensions.build_dof_to_cells_mapping(cut_cell_parents, root, function_space_cpp)
+
+
+def build_dof_to_root_mapping(dof_to_cells_mapping, cut_cell_to_root_mapping, function_space, mesh):
+    """
+    Build mapping from DOF indices to closest root cell indices.
+
+    For each DOF, this function finds all possible root cells (via the cut cells that
+    contain the DOF), computes the distance from the DOF coordinate to each root cell
+    midpoint, and selects the closest one.
+
+    Parameters
+    ----------
+    dof_to_cells_mapping : dict[int, list[int]]
+        Mapping from DOF indices to lists of cut cell indices (from build_dof_to_cells_mapping)
+    cut_cell_to_root_mapping : dict[int, int]
+        Mapping from cut cell parents to root cells (from build_root_mapping)
+    function_space : dolfinx.fem.FunctionSpace
+        Function space for DOF coordinate information
+    mesh : dolfinx.mesh.Mesh
+        Mesh object for computing cell midpoints
+
+    Returns
+    -------
+    dict[int, int]
+        Dictionary mapping DOF indices to closest root cell indices.
+        Each DOF is mapped to exactly one root cell - the one whose midpoint
+        is closest to the DOF coordinate.
+
+    Notes
+    -----
+    This function uses geometric distance to select the most appropriate root cell
+    for each DOF, which is useful for extension operations where the spatial
+    relationship between DOFs and root cells matters.
+    """
+    # Extract the underlying C++ objects
+    function_space_cpp = function_space._cpp_object
+    mesh_cpp = mesh._cpp_object
+
+    # Get DOF coordinates
+    dof_coords = function_space.tabulate_dof_coordinates()
+
+    # Determine the floating point type from mesh
+    if hasattr(mesh, "geometry") and hasattr(mesh.geometry, "x"):
+        if mesh.geometry.x.dtype.name == "float32":
+            return extensions.build_dof_to_root_mapping_float32(
+                dof_to_cells_mapping,
+                cut_cell_to_root_mapping,
+                dof_coords.flatten(),
+                function_space_cpp,
+                mesh_cpp,
+            )
+        else:
+            return extensions.build_dof_to_root_mapping_float64(
+                dof_to_cells_mapping,
+                cut_cell_to_root_mapping,
+                dof_coords.flatten(),
+                function_space_cpp,
+                mesh_cpp,
+            )
+    else:
+        # Default to float64
+        return extensions.build_dof_to_root_mapping_float64(
+            dof_to_cells_mapping,
+            cut_cell_to_root_mapping,
+            dof_coords.flatten(),
+            function_space_cpp,
+            mesh_cpp,
+        )

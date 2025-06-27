@@ -54,11 +54,11 @@ void declare_extensions(nb::module_& m, std::string type)
         [](const std::vector<std::int32_t>& badly_cut_parents,
            const std::vector<std::int32_t>& interior_cells,
            const dolfinx::mesh::Mesh<T>& mesh,
-           const cutcells::mesh::CutCells<T>& cut_cells)
+           const std::vector<std::int32_t>& cut_cell_parents)
         {
           std::unordered_map<std::int32_t, std::int32_t> root_mapping;
           cutfemx::extensions::build_root_mapping(
-              badly_cut_parents, interior_cells, mesh, cut_cells, root_mapping);
+              badly_cut_parents, interior_cells, mesh, cut_cell_parents, root_mapping);
           return root_mapping;
         },
         "Build mapping from badly cut parent cells to interior cells using two-phase algorithm. "
@@ -98,15 +98,31 @@ void declare_extensions(nb::module_& m, std::string type)
         
   // Build dof-to-cells mapping function
   m.def(("build_dof_to_cells_mapping_" + type).c_str(),
-        [](const cutcells::mesh::CutCells<T>& cut_cells,
+        [](const std::vector<std::int32_t>& cut_cell_parents,
            const std::unordered_map<std::int32_t, std::int32_t>& root,
            const std::shared_ptr<dolfinx::fem::FunctionSpace<T>> function_space)
         {
-          return cutfemx::extensions::build_dof_to_cells_mapping(cut_cells, root, *function_space);
+          return cutfemx::extensions::build_dof_to_cells_mapping(cut_cell_parents, root, *function_space);
         },
         "Build mapping from DOF indices to vectors of cell indices containing that DOF. "
-        "Input: cut cells, root mapping, and function space. "
+        "Input: cut cell parents, root mapping, and function space. "
         "Output: mapping from DOF indices to vectors of cut cells that contain each DOF.");
+
+  // Build dof-to-root mapping function
+  m.def(("build_dof_to_root_mapping_" + type).c_str(),
+        [](const std::unordered_map<std::int32_t, std::vector<std::int32_t>>& dof_to_cells_mapping,
+           const std::unordered_map<std::int32_t, std::int32_t>& cut_cell_to_root_mapping,
+           const std::vector<T>& dof_coords,
+           const std::shared_ptr<dolfinx::fem::FunctionSpace<T>> function_space,
+           const dolfinx::mesh::Mesh<T>& mesh)
+        {
+          return cutfemx::extensions::build_dof_to_root_mapping(
+              dof_to_cells_mapping, cut_cell_to_root_mapping, dof_coords, *function_space, mesh);
+        },
+        "Build mapping from DOF indices to closest root cell indices. "
+        "For each DOF, finds all possible root cells and selects the one whose midpoint is closest to the DOF coordinate. "
+        "Input: dof-to-cells mapping, cut-cell-to-root mapping, dof coordinates, function space, and mesh. "
+        "Output: mapping from DOF indices to closest root cell indices.");
     }
 } // namespace
 
@@ -120,15 +136,30 @@ void extensions(nb::module_& m)
   
   // Add direct function binding without type suffix for Python convenience
   m.def("build_dof_to_cells_mapping",
-        [](const cutcells::mesh::CutCells<double>& cut_cells,
+        [](const std::vector<std::int32_t>& cut_cell_parents,
            const std::unordered_map<std::int32_t, std::int32_t>& root,
            const std::shared_ptr<dolfinx::fem::FunctionSpace<double>> function_space)
         {
-          return cutfemx::extensions::build_dof_to_cells_mapping(cut_cells, root, *function_space);
+          return cutfemx::extensions::build_dof_to_cells_mapping(cut_cell_parents, root, *function_space);
         },
         "Build mapping from DOF indices to vectors of cell indices containing that DOF. "
-        "Input: cut cells, root mapping, and function space. "
+        "Input: cut cell parents, root mapping, and function space. "
         "Output: mapping from DOF indices to vectors of cut cells that contain each DOF.");
+
+  m.def("build_dof_to_root_mapping",
+        [](const std::unordered_map<std::int32_t, std::vector<std::int32_t>>& dof_to_cells_mapping,
+           const std::unordered_map<std::int32_t, std::int32_t>& cut_cell_to_root_mapping,
+           const std::vector<double>& dof_coords,
+           const std::shared_ptr<dolfinx::fem::FunctionSpace<double>> function_space,
+           const dolfinx::mesh::Mesh<double>& mesh)
+        {
+          return cutfemx::extensions::build_dof_to_root_mapping(
+              dof_to_cells_mapping, cut_cell_to_root_mapping, dof_coords, *function_space, mesh);
+        },
+        "Build mapping from DOF indices to closest root cell indices. "
+        "For each DOF, finds all possible root cells and selects the one whose midpoint is closest to the DOF coordinate. "
+        "Input: dof-to-cells mapping, cut-cell-to-root mapping, dof coordinates, function space, and mesh. "
+        "Output: mapping from DOF indices to closest root cell indices.");
 }
 
 } // end of namespace cutfemx_wrappers
