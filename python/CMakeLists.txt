@@ -1,6 +1,16 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(cutfemx_nanobind)
+# Include version information
+include(${CMAKE_CURRENT_SOURCE_DIR}/../VERSION.cmake)
+
+project(cutfemx_nanobind VERSION ${CUTFEMX_VERSION})
+
+# Configure Python version file
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cutfemx/_version.py.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cutfemx/_version.py"
+    @ONLY
+)
 
 message(STATUS "Pythonpath $ENV{PYTHONPATH}")
 

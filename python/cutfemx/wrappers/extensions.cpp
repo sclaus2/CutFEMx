@@ -26,7 +26,8 @@
 #include <cutcells/cut_cell.h>
 #include <cutcells/cut_mesh.h>
 
-#include <cutfemx/extensions/discrete_extension.h>
+#include <cutfemx/extensions/cell_root_mapping.h>
+#include <cutfemx/extensions/dof_root_mapping.h>
 
 namespace nb = nanobind;
 

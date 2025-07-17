@@ -1,52 +1,69 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.21)
 
-# ------------------------------------------------------------------------------
-# Set project name and version number
-project(CUTFEMX VERSION "0.1.0" LANGUAGES CXX C)
+# Include version information
+include(${CMAKE_CURRENT_SOURCE_DIR}/../VERSION.cmake)
 
-# Use C++20
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+# Define project with version
+project(CUTFEMX 
+    VERSION ${CUTFEMX_VERSION}
+    DESCRIPTION "Cut Finite Element Methods for FEniCSx"
+    LANGUAGES C CXX)
 
-# Options
-option(BUILD_SHARED_LIBS "Build cutfemx with shared libraries." ON)
-#add_feature_info(BUILD_SHARED_LIBS BUILD_SHARED_LIBS "Build cutfemx with shared libraries.")
-
-include(FeatureSummary)
-
-# Find DOLFINx config file
-find_package(CutCells REQUIRED)
+# Find required dependencies
+find_package(PkgConfig REQUIRED)
+find_package(MPI REQUIRED COMPONENTS C CXX)
 find_package(DOLFINX REQUIRED)
+
+# Find CUTCELLS (required dependency)
+find_package(CUTCELLS REQUIRED)
+if(CUTCELLS_FOUND)
+    message(STATUS "CUTCELLS found at: ${CUTCELLS_DIR}")
+    if(TARGET CUTCELLS::cutcells)
+        get_target_property(CUTCELLS_LOCATION CUTCELLS::cutcells LOCATION)
+        message(STATUS "CUTCELLS target location: ${CUTCELLS_LOCATION}")
+    endif()
+else()
+    message(STATUS "CUTCELLS not found - will try to find as cutcells")
+    find_package(cutcells REQUIRED)
+    if(cutcells_FOUND)
+        message(STATUS "cutcells found at: ${cutcells_DIR}")
+        if(TARGET cutcells)
+            get_target_property(CUTCELLS_LOCATION cutcells LOCATION)
+            message(STATUS "cutcells target location: ${CUTCELLS_LOCATION}")
+        endif()
+    endif()
+endif()
+
+# Find spdlog (required dependency)
 find_package(spdlog REQUIRED)
+if(spdlog_FOUND)
+    message(STATUS "spdlog found at: ${spdlog_DIR}")
+    if(TARGET spdlog::spdlog)
+        get_target_property(SPDLOG_LOCATION spdlog::spdlog LOCATION)
+        message(STATUS "spdlog target location: ${SPDLOG_LOCATION}")
+    endif()
+endif()
 
-# Enable testing
-#enable_testing()
-
-# Source files
+# Add the cutfemx subdirectory which will create the library and add sources
 add_subdirectory(cutfemx)
 
-# Install the cutfemx library
-install(TARGETS cutfemx
-  EXPORT CUTFEMXTargets
-  PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  PRIVATE_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/cutfemx
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT RuntimeExecutables
-  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT RuntimeLibraries
-  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT Development)
+# Configure version header AFTER the library is created
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cutfemx/version.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/cutfemx/version.h"
+    @ONLY
+)
 
-# Configure CMake helpers
-include(CMakePackageConfigHelpers)
-write_basic_package_version_file(CUTFEMXConfigVersion.cmake VERSION ${PACKAGE_VERSION}
-  COMPATIBILITY AnyNewerVersion)
-configure_package_config_file(CUTFEMXConfig.cmake.in ${CMAKE_CURRENT_BINARY_DIR}/CUTFEMXConfig.cmake
-  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/cutfemx)
+# Add the configured version header to the target's include directories
+target_include_directories(cutfemx PUBLIC 
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+    $<INSTALL_INTERFACE:include>
+)
 
-# Install CMake files
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/CUTFEMXConfig.cmake ${CMAKE_CURRENT_BINARY_DIR}/CUTFEMXConfigVersion.cmake
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/cutfemx COMPONENT Development)
-install(EXPORT CUTFEMXTargets FILE CUTFEMXTargets.cmake NAMESPACE CUTFEMX::
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/cutfemx)
+# Installation rules for the version header
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/cutfemx/version.h"
+    DESTINATION include/cutfemx
+)
 
 
 

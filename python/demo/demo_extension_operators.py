@@ -19,6 +19,7 @@ from cutfemx.extensions import (
     build_root_mapping,
     create_root_to_cell_map,
     build_dof_to_cells_mapping,
+    build_dof_to_root_mapping,
 )
 
 try:
@@ -236,6 +237,49 @@ def main():
     else:
         print("Skipping dof-to-cells mapping test (no root mapping available)")
 
+    # Test 4: Build dof-to-root mapping
+    print("\n=== Testing build_dof_to_root_mapping ===")
+    dof_to_root_mapping = {}  # Initialize empty for scope
+    if len(dof_to_cells_mapping) > 0 and len(root_to_cut_mapping) > 0:
+        try:
+            dof_to_root_mapping = build_dof_to_root_mapping(
+                dof_to_cells_mapping, root_to_cut_mapping, V, msh
+            )
+            print("Created dof-to-root mapping (closest root for each DOF)")
+            print(f"Dof-to-root mapping size: {len(dof_to_root_mapping)} DOFs")
+
+            # Print some sample dof-to-root mappings
+            print("Sample dof-to-root mappings (DOF -> closest root cell):")
+            count = 0
+            for dof_id, root_cell in dof_to_root_mapping.items():
+                if count >= 10:  # Show first 10 mappings
+                    break
+                print(f"  DOF {dof_id} -> Root cell {root_cell}")
+                count += 1
+
+            # Verify the mapping statistics
+            unique_roots_used = len(set(dof_to_root_mapping.values()))
+            total_possible_roots = len(inverse_mapping) if inverse_mapping else 0
+
+            print(f"Unique root cells used: {unique_roots_used}/{total_possible_roots}")
+
+            # Count how many DOFs map to each root
+            root_dof_count = {}
+            for root_cell in dof_to_root_mapping.values():
+                root_dof_count[root_cell] = root_dof_count.get(root_cell, 0) + 1
+
+            max_dofs_per_root = max(root_dof_count.values()) if root_dof_count else 0
+            avg_dofs_per_root = (
+                len(dof_to_root_mapping) / len(root_dof_count) if root_dof_count else 0
+            )
+
+            print(f"DOFs per root: avg {avg_dofs_per_root:.2f}, max {max_dofs_per_root}")
+
+        except Exception as e:
+            print(f"build_dof_to_root_mapping test failed: {e}")
+    else:
+        print("Skipping dof-to-root mapping test (no dof-to-cells or root mapping available)")
+
     # DOF Visualization
     print("\n=== DOF Visualization ===")
     if len(dof_to_cells_mapping) > 0:
@@ -314,7 +358,7 @@ def main():
     grid.point_data["Test_Function"] = test_values
 
     # Plot
-    plotter = pyvista.Plotter(shape=(2, 3), window_size=(2000, 1400))
+    plotter = pyvista.Plotter(shape=(2, 4), window_size=(2400, 1400))
 
     # Plot 1: Level set
     plotter.subplot(0, 0)
@@ -494,6 +538,162 @@ def main():
         plotter.add_mesh(grid, style="wireframe", color="gray")
         plotter.add_title("No DOF Point Cloud Available")
     plotter.view_xy()
+    plotter.camera.parallel_projection = True
+
+    # Plot 7: DOF-to-Root Mapping Visualization
+    plotter.subplot(0, 3)
+    if dof_to_root_mapping and dof_point_cloud is not None:
+        # Create color mapping for DOF-to-root visualization
+        # We'll assign colors based on root cell indices, starting from 1
+        unique_root_cells = list(set(dof_to_root_mapping.values()))
+        root_cell_to_color = {root_cell: i + 1 for i, root_cell in enumerate(unique_root_cells)}
+        
+        # Create color array for DOFs based on their assigned root cells
+        dof_colors = []
+        mapped_dof_coords_for_coloring = []
+        
+        for dof_id, mapped_cut_cells in dof_to_cells_mapping.items():
+            if dof_id in dof_to_root_mapping:
+                root_cell = dof_to_root_mapping[dof_id]
+                color_value = root_cell_to_color[root_cell]  # Same integer as root cell
+                dof_colors.append(color_value)
+                
+                # Get DOF coordinates
+                dof_coord = V.tabulate_dof_coordinates()[dof_id]
+                mapped_dof_coords_for_coloring.append(dof_coord)
+        
+        # Create point cloud for colored DOFs
+        if mapped_dof_coords_for_coloring:
+            colored_dof_coords = np.array(mapped_dof_coords_for_coloring)
+            colored_dof_point_cloud = pyvista.PolyData(colored_dof_coords)
+            colored_dof_point_cloud["Root_Cell_Color"] = np.array(dof_colors)
+            
+            # Show mesh as background with root cells highlighted
+            root_colors = np.zeros(num_cells)
+            for root_cell in unique_root_cells:
+                if root_cell < len(root_colors):  # Safety check
+                    color_value = root_cell_to_color[root_cell]  # Same integer as DOFs
+                    root_colors[root_cell] = color_value
+            
+            dof_root_grid = grid.copy()
+            dof_root_grid.cell_data["Root_Cell_Colors"] = root_colors
+            
+            # Add mesh with root cells colored
+            plotter.add_mesh(
+                dof_root_grid,
+                scalars="Root_Cell_Colors",
+                show_edges=True,
+                cmap="hsv",  # PERFECT colormap for 35 distinct colors (35/35 coverage)
+                opacity=0.7,
+                clim=[1, len(unique_root_cells)]  # Explicit color range starting from 1
+            )
+            
+            # Add level set contour
+            contour_mesh = dof_root_grid.contour([0], scalars="Level_Set")
+            plotter.add_mesh(contour_mesh, color="black", line_width=2)
+            
+            # Overlay DOF points with matching colors
+            plotter.add_mesh(
+                colored_dof_point_cloud,
+                scalars="Root_Cell_Color",
+                point_size=20,
+                render_points_as_spheres=True,
+                cmap="hsv",  # Same perfect colormap for 35 distinct colors
+                clim=[1, len(unique_root_cells)]  # Same color range as cells
+            )
+            
+            plotter.add_title(f"DOF-Root Mapping: {len(unique_root_cells)} root cells")
+            
+            # Print some example mappings
+            print("\nDOF-to-Root color mapping (first 5 examples):")
+            example_count = min(5, len(dof_to_root_mapping))
+            for i, (dof_id, root_cell) in enumerate(dof_to_root_mapping.items()):
+                if i >= example_count:
+                    break
+                color_value = root_cell_to_color[root_cell]
+                dof_coord = V.tabulate_dof_coordinates()[dof_id]
+                print(f"  DOF {dof_id} at ({dof_coord[0]:.3f}, {dof_coord[1]:.3f}) → "
+                      f"Root cell {root_cell} (color {color_value})")
+        else:
+            # Fallback
+            plotter.add_mesh(grid, style="wireframe", color="gray")
+            plotter.add_title("No DOF-Root Data Available")
+    else:
+        # Fallback
+        plotter.add_mesh(grid, style="wireframe", color="gray")
+        plotter.add_title("No DOF-Root Mapping Available")
+    plotter.view_xy()
+    plotter.camera.parallel_projection = True
+
+    # Plot 8: DOF-Root Distance Analysis
+    plotter.subplot(1, 3)
+    if dof_to_root_mapping and len(dof_to_root_mapping) > 0:
+        # Calculate distances from DOFs to their assigned root cells
+        distances = []
+        dof_coords_all = V.tabulate_dof_coordinates()
+        
+        # Get cell midpoints for distance calculation
+        mesh_coords = msh.geometry.x
+        cells = msh.topology.connectivity(tdim, 0).array.reshape(-1, 3)  # triangular cells
+        
+        for dof_id, root_cell in dof_to_root_mapping.items():
+            dof_coord = dof_coords_all[dof_id]
+            
+            # Calculate root cell midpoint
+            if root_cell < len(cells):
+                cell_vertices = cells[root_cell]
+                cell_coords = mesh_coords[cell_vertices]
+                root_midpoint = np.mean(cell_coords, axis=0)
+                
+                # Calculate distance
+                distance = np.linalg.norm(dof_coord - root_midpoint)
+                distances.append(distance)
+        
+        if distances:
+            # Create point cloud with distance colors
+            distance_dof_coords = []
+            for dof_id in dof_to_root_mapping.keys():
+                dof_coord = dof_coords_all[dof_id]
+                distance_dof_coords.append(dof_coord)
+            
+            if distance_dof_coords:
+                distance_point_cloud = pyvista.PolyData(np.array(distance_dof_coords))
+                distance_point_cloud["Distance_to_Root"] = distances
+                
+                # Add background grid
+                plotter.add_mesh(grid, style="wireframe", color="lightgray", opacity=0.3)
+                
+                # Add level set contour
+                contour_mesh = grid.contour([0], scalars="Level_Set")
+                plotter.add_mesh(contour_mesh, color="black", line_width=2)
+                
+                # Add DOF points colored by distance
+                plotter.add_mesh(
+                    distance_point_cloud,
+                    scalars="Distance_to_Root",
+                    point_size=15,
+                    render_points_as_spheres=True,
+                    cmap="coolwarm"
+                )
+                
+                avg_distance = np.mean(distances)
+                max_distance = np.max(distances)
+                title = f"DOF-Root Distances: avg {avg_distance:.3f}, max {max_distance:.3f}"
+                plotter.add_title(title)
+                
+                print("\nDOF-to-Root distance statistics:")
+                print(f"  - Average distance: {avg_distance:.4f}")
+                print(f"  - Maximum distance: {max_distance:.4f}")
+                print(f"  - Minimum distance: {np.min(distances):.4f}")
+            else:
+                plotter.add_mesh(grid, style="wireframe", color="gray")
+                plotter.add_title("No Distance Data Available")
+        else:
+            plotter.add_mesh(grid, style="wireframe", color="gray")
+            plotter.add_title("No Valid Distances Calculated")
+    else:
+        plotter.add_mesh(grid, style="wireframe", color="gray")
+        plotter.add_title("No DOF-Root Mapping for Distance Analysis")
     plotter.camera.parallel_projection = True
 
     plotter.show()

@@ -122,3 +122,30 @@ The CutFEMx library requires a FEniCSx installation version 0.9.0 with an extend
     pip install --check-build-dependencies --no-build-isolation .
     pip install --no-build-isolation .
     ```
+
+## 📚 Documentation
+
+Visit our comprehensive documentation at **[docs/](docs/)** for:
+
+### 🚀 [Getting Started](docs/getting-started/)
+- **[Installation Guide](docs/getting-started/installation.md)** - Detailed installation instructions
+- **[Quick Start Tutorial](docs/getting-started/quickstart.md)** - Your first CutFEMx program
+- **[Basic Concepts](docs/getting-started/concepts.md)** - Understanding cut finite element methods
+
+### 📖 [User Guide](docs/user-guide/)
+- **[Cut Mesh Generation](docs/user-guide/cut-meshes.md)** - Creating cut meshes from level set functions
+- **[DOF Constraints](docs/user-guide/dof-constraints.md)** - Applying constraints and stabilization
+- **[Quadrature Rules](docs/user-guide/quadrature.md)** - Numerical integration on cut elements
+
+### 💡 [Examples Gallery](docs/examples/)
+- **[Basic Examples](docs/examples/basic/)** - Simple introductory examples
+- **[Interactive Notebooks](docs/examples/notebooks/)** - Jupyter notebook tutorials
+- **[Advanced Applications](docs/examples/advanced/)** - Complex multi-physics problems
+
+### 🔧 [API Reference](docs/api/)
+- **[Core API](docs/api/core.md)** - Main CutFEMx classes and functions
+- **[Matrix Operations](docs/api/matrix-operations.md)** - Linear algebra utilities for constraints
+
+### 🛠️ [Developer Guide](docs/developer/)
+- **[Contributing](docs/developer/contributing.md)** - How to contribute to CutFEMx
+- **[Architecture](docs/developer/architecture.md)** - Code organization and design patterns
