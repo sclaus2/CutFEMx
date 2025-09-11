@@ -42,22 +42,47 @@ if(DOLFINX_FOUND)
 endif()
 
 #Check for DOLFINx python wrappers
-execute_process(
-  COMMAND ${Python_EXECUTABLE} -c "import dolfinx; print(dolfinx.get_include())"
-  OUTPUT_VARIABLE DOLFINX_PY_WRAPPERS_DIR
-  RESULT_VARIABLE DOLFINX_PY_WRAPPERS_COMMAND_RESULT
-  ERROR_VARIABLE DOLFINX_PY_WRAPPERS_COMMAND_ERROR
-  OUTPUT_STRIP_TRAILING_WHITESPACE
-)
+# --- BEGIN: DOLFINx Python wrappers detection (robust & MPI-safe) ---
+# Accept a user-provided path, or ENV var, or auto-detect via importlib (no import side effects).
+# Also ensure we use the same Python interpreter as the build backend.
+cmake_minimum_required(VERSION 3.21)  # you already require this or higher
 
-if(NOT DOLFINX_PY_WRAPPERS_COMMAND_RESULT)
-  message(STATUS "Found DOLFINx python wrappers at ${DOLFINX_PY_WRAPPERS_DIR}")
-elseif(EXISTS $ENV{DOLFINX_PY_WRAPPERS_DIR})
-  set(DOLFINX_PY_WRAPPERS_DIR $ENV{DOLFINX_PY_WRAPPERS_DIR})
-  message(STATUS "Found DOLFINx python wrappers at ${DOLFINX_PY_WRAPPERS_DIR}")
-else()
-  message(FATAL_ERROR "DOLFINx python wrappers could not be found. Please try specifying DOLFIN_PY_WRAPPERS_DIR env variable via dolfinx.get_include()")
+# Find Python interpreter (scikit-build-core provides it, but be explicit)
+find_package(Python 3.8 REQUIRED COMPONENTS Interpreter Development.Module)
+
+# Cache var so -DDOLFIN_PY_WRAPPERS_DIR=... is recorded & visible in GUIs
+set(DOLFINX_PY_WRAPPERS_DIR "${DOLFINX_PY_WRAPPERS_DIR}" CACHE PATH "Path to DOLFINx Python wrappers (dolfinx/wrappers)")
+
+# If not provided, try environment
+if(NOT DOLFINX_PY_WRAPPERS_DIR AND DEFINED ENV{DOLFINX_PY_WRAPPERS_DIR})
+  set(DOLFINX_PY_WRAPPERS_DIR "$ENV{DOLFINX_PY_WRAPPERS_DIR}")
 endif()
+
+# If still not set, auto-detect WITHOUT importing dolfinx (so mpi4py won't call MPI_Init)
+if(NOT DOLFINX_PY_WRAPPERS_DIR)
+  # Use cmake -E env to set MPI4PY_RC_INITIALIZE=0, then Python -c to locate package
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env MPI4PY_RC_INITIALIZE=0
+            "${Python_EXECUTABLE}" -c
+            "import importlib.util, pathlib, sys; s=importlib.util.find_spec('dolfinx'); (print((pathlib.Path(s.origin).parent/'wrappers')) if s and s.origin else sys.exit(2))"
+    OUTPUT_VARIABLE _WRAP_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_VARIABLE _WRAP_ERR
+    RESULT_VARIABLE _WRAP_RC
+  )
+  if(_WRAP_RC EQUAL 0 AND EXISTS "${_WRAP_DIR}")
+    set(DOLFINX_PY_WRAPPERS_DIR "${_WRAP_DIR}")
+  else()
+    message(FATAL_ERROR
+      "DOLFINx python wrappers could not be found.\n"
+      "  Set -DDOLFINX_PY_WRAPPERS_DIR=/path/to/site-packages/dolfinx/wrappers\n"
+      "  or export DOLFINX_PY_WRAPPERS_DIR in the environment.\n"
+      "  Auto-detect error: ${_WRAP_ERR}")
+  endif()
+endif()
+
+message(STATUS "Found DOLFINx python wrappers at ${DOLFINX_PY_WRAPPERS_DIR}")
+
 
 find_package(CutCells REQUIRED CONFIG)
 if(CutCells_FOUND)
