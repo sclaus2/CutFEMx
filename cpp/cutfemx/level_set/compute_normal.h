@@ -83,6 +83,13 @@ namespace cutfemx::level_set
     // at dof coordinate points of normal space in reference element
     e0->tabulate(basis_b, X, Xshape, 1);
 
+    // Tabulate coordinate map basis derivatives at interpolation points
+    // This is needed for computing the Jacobian correctly
+    std::array<std::size_t, 4> cmap_basis_shape = cmap.tabulate_shape(1, Xshape[0]);
+    std::vector<U> cmap_basis_b(
+        std::reduce(cmap_basis_shape.begin(), cmap_basis_shape.end(), 1, std::multiplies{}));
+    cmap.tabulate(1, X, {Xshape[0], Xshape[1]}, cmap_basis_b);
+
     //allocate memory for Jacobian and inverse of Jacobian
     std::vector<U> J_b(gdim * tdim);
     mdspan2_t<U> J(J_b.data(), gdim, tdim);
@@ -125,9 +132,17 @@ namespace cutfemx::level_set
         auto basis_deriv = MDSPAN_IMPL_STANDARD_NAMESPACE::submdspan(
           basis, std::pair(1, tdim + 1), p,
           MDSPAN_IMPL_STANDARD_NAMESPACE::full_extent, 0);
+        
+        // Use coordinate map basis derivatives for Jacobian computation
+        // cmap_basis_shape is [tdim+1, Xshape[0], num_dofs_g, gdim]
+        cmdspan4_t cmap_basis(cmap_basis_b.data(), cmap_basis_shape);
+        auto cmap_basis_deriv = MDSPAN_IMPL_STANDARD_NAMESPACE::submdspan(
+            cmap_basis, std::pair(1, tdim + 1), p,
+            MDSPAN_IMPL_STANDARD_NAMESPACE::full_extent, 0);
+        
         std::fill(J_b.begin(), J_b.end(), 0);
         std::fill(K_b.begin(), K_b.end(), 0);
-        cmap.compute_jacobian(basis_deriv, coord_dofs, J);
+        cmap.compute_jacobian(cmap_basis_deriv, coord_dofs, J);
         cmap.compute_jacobian_inverse(J, K);
         detJ = cmap.compute_jacobian_determinant(J, det_scratch);
 
