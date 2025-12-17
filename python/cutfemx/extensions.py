@@ -9,10 +9,13 @@
 from cutfemx.cutfemx_cpp import extensions
 
 __all__ = [
+    "apply_constraints",
     "build_dof_to_cells_mapping",
     "build_dof_to_root_mapping",
     "build_root_mapping",
     "create_root_to_cell_map",
+    "evaluate_basis_at_dof_coordinates",
+    "extend_function",
     "get_badly_cut_parent_indices",
 ]
 
@@ -154,7 +157,22 @@ def build_dof_to_cells_mapping(cut_cells, root, function_space):
 
     # Extract the underlying C++ FunctionSpace object
     function_space_cpp = function_space._cpp_object
-    return extensions.build_dof_to_cells_mapping(cut_cell_parents, root, function_space_cpp)
+
+    # Determine the floating point type from function space
+    if hasattr(function_space, "mesh") and hasattr(function_space.mesh, "geometry"):
+        if function_space.mesh.geometry.x.dtype.name == "float32":
+            return extensions.build_dof_to_cells_mapping_float32(
+                cut_cell_parents, root, function_space_cpp
+            )
+        else:
+            return extensions.build_dof_to_cells_mapping_float64(
+                cut_cell_parents, root, function_space_cpp
+            )
+    else:
+        # Default to float64
+        return extensions.build_dof_to_cells_mapping_float64(
+            cut_cell_parents, root, function_space_cpp
+        )
 
 
 def build_dof_to_root_mapping(dof_to_cells_mapping, cut_cell_to_root_mapping, function_space, mesh):
@@ -223,3 +241,135 @@ def build_dof_to_root_mapping(dof_to_cells_mapping, cut_cell_to_root_mapping, fu
             function_space_cpp,
             mesh_cpp,
         )
+
+
+def evaluate_basis_at_dof_coordinates(dof_to_root_mapping, function_space, mesh):
+    """
+    Evaluate basis functions to create DOF constraint relationships.
+
+    For each cut DOF, this function maps its physical coordinate to the reference space
+    of its associated root cell, evaluates all basis functions at that point, and
+    returns the constraint relationships as (root_dof, weight) pairs.
+
+    Parameters
+    ----------
+    dof_to_root_mapping : dict
+        Dictionary mapping cut DOF indices to root cell indices
+    function_space : dolfinx.fem.FunctionSpace
+        The function space whose basis functions to evaluate
+    mesh : dolfinx.mesh.Mesh
+        The mesh containing the root cells
+
+    Returns
+    -------
+    dict[int, list[tuple[int, float]]]
+        Dictionary mapping cut DOF indices to lists of (root_dof_index, weight) pairs.
+        Each entry represents: cut_dof -> [(root_dof_1, weight_1), (root_dof_2, weight_2), ...]
+
+    Notes
+    -----
+    This function creates discrete extension constraints where each cut DOF is expressed
+    as a linear combination of root DOFs weighted by basis function values.
+    Only non-zero weights (> 1e-12) are included in the constraint pairs.
+    """
+    function_space_cpp = function_space._cpp_object
+    mesh_cpp = mesh._cpp_object
+
+    # Determine the floating point type from mesh
+    if hasattr(mesh, "geometry") and hasattr(mesh.geometry, "x"):
+        if mesh.geometry.x.dtype.name == "float32":
+            return extensions.evaluate_basis_at_dof_coordinates_float32(
+                dof_to_root_mapping, function_space_cpp, mesh_cpp
+            )
+        else:
+            return extensions.evaluate_basis_at_dof_coordinates_float64(
+                dof_to_root_mapping, function_space_cpp, mesh_cpp
+            )
+    else:
+        # Default to float64
+        return extensions.evaluate_basis_at_dof_coordinates_float64(
+            dof_to_root_mapping, function_space_cpp, mesh_cpp
+        )
+
+
+def apply_constraints(matrix, constraints, function_space):
+    """
+    Apply constraints to a matrix: A ↦ C^T A C.
+
+    Transforms the matrix to eliminate cut DOFs while preserving the underlying physics.
+    The constraint matrix C expresses cut DOFs as linear combinations of interior DOFs.
+
+    Parameters
+    ----------
+    matrix : dolfinx.la.MatrixCSR
+        The matrix to be transformed (modified in-place)
+    constraints : dict[int, list[tuple[int, float]]]
+        Dictionary mapping cut DOF indices to lists of (root_dof_index, weight) pairs
+    function_space : dolfinx.fem.FunctionSpace
+        The function space for DOF indexing
+
+    Notes
+    -----
+    This function implements the mathematical transformation A ↦ C^T A C where:
+    - A is the original matrix
+    - C is the constraint matrix expressing cut DOFs as linear combinations of interior DOFs
+    - The result eliminates cut DOFs from the linear system
+
+    The matrix is modified in-place to avoid memory overhead.
+    """
+    function_space_cpp = function_space._cpp_object
+
+    # Determine the floating point type from matrix
+    if hasattr(matrix, "array") and hasattr(matrix.array(), "dtype"):
+        if matrix.array().dtype.name == "float32":
+            return extensions.apply_constraints_matrixcsr_float32(
+                matrix, constraints, function_space_cpp
+            )
+        else:
+            return extensions.apply_constraints_matrixcsr_float64(
+                matrix, constraints, function_space_cpp
+            )
+    else:
+        # Default to float64
+        return extensions.apply_constraints_matrixcsr_float64(
+            matrix, constraints, function_space_cpp
+        )
+
+
+def extend_function(u_interior, constraints, function_space):
+    """
+    Extend solution vector from interior DOFs to full domain: u_full = C u_interior.
+
+    Reconstructs the full field by applying the constraint relationships.
+    Cut DOF values are computed as linear combinations of interior DOF values.
+
+    Parameters
+    ----------
+    u_interior : numpy.ndarray
+        Solution vector defined on interior DOFs only
+    constraints : dict[int, list[tuple[int, float]]]
+        Dictionary mapping cut DOF indices to lists of (root_dof_index, weight) pairs
+    function_space : dolfinx.fem.FunctionSpace
+        The function space for DOF indexing
+
+    Returns
+    -------
+    numpy.ndarray
+        Extended solution vector including both interior and cut DOFs
+
+    Notes
+    -----
+    This function implements: u_cut = Σ weight_i * u_interior[root_dof_i] for each cut DOF.
+    The resulting vector contains values for all DOFs (interior + cut).
+    """
+    import numpy as np
+
+    function_space_cpp = function_space._cpp_object
+
+    # Determine the floating point type from input array
+    if u_interior.dtype.name == "float32":
+        result = extensions.extend_function_float32(u_interior, constraints, function_space_cpp)
+    else:
+        result = extensions.extend_function_float64(u_interior, constraints, function_space_cpp)
+
+    return np.array(result, dtype=u_interior.dtype)

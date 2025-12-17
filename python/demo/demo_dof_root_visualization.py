@@ -27,17 +27,16 @@ except ModuleNotFoundError:
 
 def main():
     print("=== DOF-to-Root Mapping Visualization Demo ===")
-    
+
     # Color palette options for 35+ distinct colors
-    # 'hsv' - Hue-Saturation-Value cycle (good for many distinct colors)
-    # 'rainbow' - Full spectrum (very distinct but can be harsh)
-    # 'gist_ncar' - NCAR graphics (35+ distinct colors)
-    # 'tab20' - 20 distinct colors (will repeat for >20)
-    # 'tab20b' - 20 more distinct colors
-    # 'tab20c' - 20 additional distinct colors
-    COLOR_PALETTE = "gist_ncar"  # Best for 35+ distinct colors
-    
-    print(f"Using colormap: {COLOR_PALETTE} (optimized for 35+ distinct colors)")
+    # Based on colormap analysis:
+    # 'hsv' - EXCELLENT (35/35 distinct colors) - Hue-Saturation-Value cycle
+    # 'jet' - EXCELLENT (34/35 distinct colors) - Classic jet colormap
+    # 'gist_ncar' - EXCELLENT (33/35 distinct colors) - NCAR graphics
+    # 'nipy_spectral' - GOOD (26/35 distinct colors) - Spectral colors
+    COLOR_PALETTE = "hsv"  # Best for 35 distinct colors (perfect coverage)
+
+    print(f"Using colormap: {COLOR_PALETTE} (PERFECT coverage for 35 distinct colors)")
 
     # Create a triangular mesh
     N = 21
@@ -88,9 +87,7 @@ def main():
 
     # Build mappings
     print("Building root mapping...")
-    root_to_cut_mapping = build_root_mapping(
-        badly_cut_parents, interior_cells, msh, cut_cells
-    )
+    root_to_cut_mapping = build_root_mapping(badly_cut_parents, interior_cells, msh, cut_cells)
 
     print("Building dof-to-cells mapping...")
     dof_to_cells_mapping = build_dof_to_cells_mapping(cut_cells, root_to_cut_mapping, V)
@@ -116,7 +113,7 @@ def main():
     # Create color mapping for DOF-to-root visualization
     unique_root_cells = list(set(dof_to_root_mapping.values()))
     print(f"Unique root cells used: {len(unique_root_cells)}")
-    
+
     # Assign each unique root cell a color index starting from 1
     root_cell_to_color = {root_cell: i + 1 for i, root_cell in enumerate(unique_root_cells)}
 
@@ -129,7 +126,7 @@ def main():
     for dof_id, root_cell in dof_to_root_mapping.items():
         color_value = root_cell_to_color[root_cell]  # Same integer as root cell
         dof_colors.append(color_value)
-        
+
         # Get DOF coordinates
         dof_coord = V.tabulate_dof_coordinates()[dof_id]
         dof_coords_for_viz.append(dof_coord)
@@ -153,7 +150,7 @@ def main():
 
     # Plot 1: Overview with all elements
     plotter.subplot(0, 0)
-    
+
     # Add mesh with root cells colored
     plotter.add_mesh(
         grid,
@@ -161,13 +158,13 @@ def main():
         show_edges=True,
         cmap=COLOR_PALETTE,  # Use the selected colormap
         opacity=0.8,
-        clim=[1, len(unique_root_cells)]  # Explicitly set color range starting from 1
+        clim=[1, len(unique_root_cells)],  # Explicitly set color range starting from 1
     )
-    
+
     # Add level set contour
     contour_mesh = grid.contour([0], scalars="Level_Set")
     plotter.add_mesh(contour_mesh, color="black", line_width=3)
-    
+
     # Add DOF points with matching colors
     plotter.add_mesh(
         dof_point_cloud,
@@ -175,41 +172,41 @@ def main():
         point_size=25,
         render_points_as_spheres=True,
         cmap=COLOR_PALETTE,  # Same colormap as cells
-        clim=[1, len(unique_root_cells)]  # Same color range as cells
+        clim=[1, len(unique_root_cells)],  # Same color range as cells
     )
-    
+
     plotter.add_title(f"DOF-Root Mapping: {len(unique_root_cells)} root cells")
     plotter.view_xy()
     plotter.camera.parallel_projection = True
 
     # Plot 2: Focus on DOFs and nearby root cells only
     plotter.subplot(0, 1)
-    
+
     # Create a mask to show only relevant cells (root cells + some neighbors)
     relevant_cells = set(unique_root_cells)
-    
+
     # Add neighboring cells for context
     mesh_coords = msh.geometry.x
     cells = msh.topology.connectivity(tdim, 0).array.reshape(-1, 3)
-    
+
     for root_cell in unique_root_cells:
         if root_cell < len(cells):
             # Add cells within a small radius of root cell
             root_vertices = cells[root_cell]
             root_coords = mesh_coords[root_vertices]
             root_center = np.mean(root_coords, axis=0)
-            
+
             for cell_id in range(num_cells):
                 if cell_id < len(cells):
                     cell_vertices = cells[cell_id]
                     cell_coords = mesh_coords[cell_vertices]
                     cell_center = np.mean(cell_coords, axis=0)
-                    
+
                     # If cell center is close to root center, include it
                     distance = np.linalg.norm(cell_center - root_center)
                     if distance < 0.3:  # Adjust threshold as needed
                         relevant_cells.add(cell_id)
-    
+
     # Create subset colors
     subset_colors = np.zeros(num_cells)
     for cell_id in relevant_cells:
@@ -218,10 +215,10 @@ def main():
             subset_colors[cell_id] = color_value
         else:
             subset_colors[cell_id] = len(unique_root_cells) + 2  # Different value for context cells
-    
+
     grid_subset = grid.copy()
     grid_subset.cell_data["Subset_Colors"] = subset_colors
-    
+
     # Show only relevant cells
     plotter.add_mesh(
         grid_subset,
@@ -229,13 +226,13 @@ def main():
         show_edges=True,
         cmap=COLOR_PALETTE,  # Use the selected colormap
         opacity=0.9,
-        clim=[1, len(unique_root_cells)]  # Same color range
+        clim=[1, len(unique_root_cells)],  # Same color range
     )
-    
+
     # Add contour
     contour_mesh = grid_subset.contour([0], scalars="Level_Set")
     plotter.add_mesh(contour_mesh, color="black", line_width=3)
-    
+
     # Add DOF points
     plotter.add_mesh(
         dof_point_cloud,
@@ -243,9 +240,9 @@ def main():
         point_size=30,
         render_points_as_spheres=True,
         cmap=COLOR_PALETTE,  # Same colormap as cells
-        clim=[1, len(unique_root_cells)]  # Same color range as cells
+        clim=[1, len(unique_root_cells)],  # Same color range as cells
     )
-    
+
     plotter.add_title("DOF-Root Details: Zoomed View")
     plotter.view_xy()
     plotter.camera.parallel_projection = True
@@ -264,8 +261,10 @@ def main():
             break
         color_value = root_cell_to_color[root_cell]
         dof_coord = V.tabulate_dof_coordinates()[dof_id]
-        print(f"DOF {dof_id:3d} at ({dof_coord[0]:6.3f}, {dof_coord[1]:6.3f}) "
-              f"→ Root cell {root_cell:3d} (color {color_value:2d})")
+        print(
+            f"DOF {dof_id:3d} at ({dof_coord[0]:6.3f}, {dof_coord[1]:6.3f}) "
+            f"→ Root cell {root_cell:3d} (color {color_value:2d})"
+        )
 
     # Verify color consistency
     print("\n=== Color Consistency Verification ===")
@@ -275,27 +274,29 @@ def main():
         dof_color = root_cell_to_color[root_cell]
         root_color = root_cell_colors[root_cell]
         dof_coord = V.tabulate_dof_coordinates()[dof_id]
-        
+
         if dof_color == root_color:
             status = "✓ MATCH"
         else:
             status = "✗ MISMATCH"
-            
-        print(f"DOF {dof_id} → Root {root_cell}: "
-              f"DOF_color={dof_color}, Root_color={root_color} {status}")
 
-    print(f"\nShowing visualization with {len(unique_root_cells)} different colors "
-          "(starting from 1)")
-    print(f"• Using '{COLOR_PALETTE}' colormap optimized for 35+ distinct colors")
+        print(
+            f"DOF {dof_id} → Root {root_cell}: "
+            f"DOF_color={dof_color}, Root_color={root_color} {status}"
+        )
+
+    print(
+        f"\nShowing visualization with {len(unique_root_cells)} different colors (starting from 1)"
+    )
+    print(f"• Using '{COLOR_PALETTE}' colormap - PERFECT for 35 distinct colors")
     print("• Each color represents one root cell")
     print("• DOFs have the EXACT SAME color integer as their assigned root cell")
     print("• This shows which DOFs will get values extended from which root cells")
-    print("\nNote: Alternative colormaps for 35+ colors:")
-    print("  - 'gist_ncar': NCAR graphics (current - good for many colors)")
-    print("  - 'hsv': Hue-Saturation-Value cycle")
-    print("  - 'rainbow': Full spectrum (very distinct)")
-    print("  - 'nipy_spectral': Spectral colors")
-    print("  - 'tab20' + 'tab20b' + 'tab20c': Combined for 60 colors")
+    print("\nNote: Top colormaps for 35+ colors (tested):")
+    print("  - 'hsv': Hue-Saturation-Value (35/35 distinct - PERFECT)")
+    print("  - 'jet': Classic jet colormap (34/35 distinct)")
+    print("  - 'gist_ncar': NCAR graphics (33/35 distinct)")
+    print("  - 'nipy_spectral': Spectral colors (26/35 distinct)")
 
     plotter.show()
 

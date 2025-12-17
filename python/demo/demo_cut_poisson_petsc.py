@@ -12,7 +12,7 @@ from cutfemx.petsc import assemble_vector, assemble_matrix, deactivate, locate_d
 
 from dolfinx import fem, mesh, plot, la
 
-#from dolfinx.fem.assemble import assemble_vector, assemble_matrix
+# from dolfinx.fem.assemble import assemble_vector, assemble_matrix
 from dolfinx.fem import form
 from dolfinx.io import XDMFFile
 from dolfinx.mesh import GhostMode
@@ -61,62 +61,63 @@ gamma_g = 1e-1
 n = FacetNormal(msh)
 h = CellDiameter(msh)
 
+
 def circle(x):
-    #return x[0]+1e-8
-    return np.sqrt((x[0])**2+(x[1])**2)-0.5
+    # return x[0]+1e-8
+    return np.sqrt((x[0]) ** 2 + (x[1]) ** 2) - 0.5
+
 
 level_set = fem.Function(V)
 level_set.interpolate(circle)
 dim = msh.topology.dim
 
-intersected_entities = locate_entities(level_set,dim,"phi=0")
-inside_entities = locate_entities(level_set,dim,"phi<0")
+intersected_entities = locate_entities(level_set, dim, "phi=0")
+inside_entities = locate_entities(level_set, dim, "phi<0")
 
 V_DG = fem.functionspace(msh, ("DG", 0, (msh.geometry.dim,)))
 n_K = fem.Function(V_DG)
-compute_normal(n_K,level_set,intersected_entities)
-#n_K = fem.Constant(msh, (PETSc.ScalarType(1.0),PETSc.ScalarType(0.0)))
+compute_normal(n_K, level_set, intersected_entities)
+# n_K = fem.Constant(msh, (PETSc.ScalarType(1.0),PETSc.ScalarType(0.0)))
 
 dof_coordinates = V.tabulate_dof_coordinates()
 
 cut_cells = cut_entities(level_set, dof_coordinates, intersected_entities, tdim, "phi<0")
-cut_mesh = create_cut_mesh(msh.comm,cut_cells,msh,inside_entities)
+cut_mesh = create_cut_mesh(msh.comm, cut_cells, msh, inside_entities)
 interface_cells = cut_entities(level_set, dof_coordinates, intersected_entities, tdim, "phi=0")
-interface_mesh = create_cut_cells_mesh(msh.comm,interface_cells)
+interface_mesh = create_cut_cells_mesh(msh.comm, interface_cells)
 
 order = 2
-inside_quadrature = runtime_quadrature(level_set,"phi<0",order)
-interface_quadrature = runtime_quadrature(level_set,"phi=0",order)
+inside_quadrature = runtime_quadrature(level_set, "phi<0", order)
+interface_quadrature = runtime_quadrature(level_set, "phi=0", order)
 
-quad_domains = [(0,inside_quadrature), (1,interface_quadrature)]
+quad_domains = [(0, inside_quadrature), (1, interface_quadrature)]
 
-gp_ids =  ghost_penalty_facets(level_set, "phi<0")
-gp_topo = facet_topology(msh,gp_ids)
+gp_ids = ghost_penalty_facets(level_set, "phi<0")
+gp_topo = facet_topology(msh, gp_ids)
 
-dx = ufl.Measure("dx", subdomain_data=[(0, inside_entities),(2, intersected_entities)], domain=msh)
+dx = ufl.Measure("dx", subdomain_data=[(0, inside_entities), (2, intersected_entities)], domain=msh)
 dS = ufl.Measure("dS", subdomain_data=[(0, gp_topo)], domain=msh)
 dx_rt = ufl.Measure("dC", subdomain_data=quad_domains, domain=msh)
 
 dxq = dx_rt(0) + dx(0)
 dsq = dx_rt(1)
 
-a  = inner(grad(u), grad(v))*dxq
+a = inner(grad(u), grad(v)) * dxq
 
 # cut cells on surface
-a += - dot(grad(u), n_K)*v*dsq
-a += - dot(grad(v), n_K)*u*dsq
-a += gamma*1.0/h*u*v*dsq
-a += avg(gamma_g)*avg(h)*dot(jump(grad(u), n), jump(grad(v), n))*dS(0)
+a += -dot(grad(u), n_K) * v * dsq
+a += -dot(grad(v), n_K) * u * dsq
+a += gamma * 1.0 / h * u * v * dsq
+a += avg(gamma_g) * avg(h) * dot(jump(grad(u), n), jump(grad(v), n)) * dS(0)
 
-L  = f*v*dxq
-L += - dot(grad(v), n_K)*g*dsq
-L +=  gamma*1.0/h*v*g*dsq
+L = f * v * dxq
+L += -dot(grad(v), n_K) * g * dsq
+L += gamma * 1.0 / h * v * g * dsq
 
-jit_options = {"cache_dir": os.getcwd()}
-a_cut = cut_form(a,  jit_options=jit_options)
-L_cut = cut_form(L,  jit_options=jit_options)
+a_cut = cut_form(a)
+L_cut = cut_form(L)
 
-dofs = locate_dofs("phi>0",level_set,[V])
+dofs = locate_dofs("phi>0", level_set, [V])
 bc = fem.dirichletbc(value=PETSc.ScalarType(0), dofs=dofs, V=V)
 
 A = assemble_matrix(a_cut, [bc])
@@ -143,14 +144,14 @@ uh = fem.Function(V)
 
 # Set a monitor, solve linear system, and display the solver
 # configuration
-#solver.setMonitor(lambda _, its, rnorm: print(f"Iteration: {its}, rel. residual: {rnorm}"))
+# solver.setMonitor(lambda _, its, rnorm: print(f"Iteration: {its}, rel. residual: {rnorm}"))
 solver.solve(b, uh.x.petsc_vec)
 solver.view()
 
 # Scatter forward the solution vector to update ghost values
 uh.x.scatter_forward()
 
-u_cut = cut_function(uh,cut_mesh)
+u_cut = cut_function(uh, cut_mesh)
 
 with XDMFFile(msh.comm, "results/uh.xdmf", "w") as file:
     file.write_mesh(msh)
@@ -163,4 +164,3 @@ with XDMFFile(msh.comm, "results/uh_cut.xdmf", "w") as file:
 
 with XDMFFile(msh.comm, "results/uh_I.xdmf", "w") as file:
     file.write_mesh(interface_mesh._mesh)
-

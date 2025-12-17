@@ -1,0 +1,20 @@
+# Documentation build requirements
+sphinx>=5.0
+pydata-sphinx-theme>=0.13
+sphinx-copybutton
+sphinx-gallery
+sphinx-design
+myst-parser
+sphinx-design
+sphinxcontrib-video
+sphinx-autobuild
+
+# For examples and notebooks
+jupyter
+matplotlib
+numpy
+scipy
+
+# For API documentation
+numpydoc
+linkify-it-py

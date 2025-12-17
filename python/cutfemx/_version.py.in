@@ -1,0 +1,26 @@
+# Copyright (c) 2022-2025 ONERA
+# Authors: Susanne Claus
+# This file is part of CutFEMx
+#
+# SPDX-License-Identifier:    MIT
+
+"""Version information for CutFEMx - Auto-generated from CMake"""
+
+# Version follows semantic versioning (https://semver.org/)
+__version__ = "@CUTFEMX_VERSION_FULL@"
+
+# Version tuple for programmatic access
+version_info = (@CUTFEMX_VERSION_MAJOR@, @CUTFEMX_VERSION_MINOR@, @CUTFEMX_VERSION_PATCH@)
+
+# Additional metadata
+__author__ = "Susanne Claus"
+__email__ = "susanne.claus@onera.fr"
+__license__ = "MIT"
+__copyright__ = "Copyright (c) 2022-2025 ONERA"
+__url__ = "https://github.com/sclaus2/CutFEMx"
+__description__ = "Cut Finite Element Methods for FEniCSx"
+
+# CMake build information
+CMAKE_VERSION_MAJOR = @CUTFEMX_VERSION_MAJOR@
+CMAKE_VERSION_MINOR = @CUTFEMX_VERSION_MINOR@
+CMAKE_VERSION_PATCH = @CUTFEMX_VERSION_PATCH@
