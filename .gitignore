@@ -30,3 +30,30 @@
 *.exe
 *.out
 *.app
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.mypy_cache/
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Editors / IDEs
+.vscode/
+.idea/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+build-dir/
+
+# Caches
+*.cache
+
+# Doxygen / documentation
+docs/_build/
+
