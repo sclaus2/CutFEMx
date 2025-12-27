@@ -219,8 +219,12 @@ void assemble_matrix(
     auto& [coeffs, cstride] = coefficients.at({cutfemx::fem::IntegralType::cutcell, i});
     std::shared_ptr<const cutfemx::quadrature::QuadratureRules<U>> quadrature_rules
     = a.quadrature_rules(cutfemx::fem::IntegralType::cutcell, i);
-    std::vector<std::pair<std::shared_ptr<basix::FiniteElement<T>>, std::int32_t>> elements
-    = a.elements(cutfemx::fem::IntegralType::cutcell, i);
+    
+    // Resolve element sources to basix elements
+    std::vector<std::pair<std::shared_ptr<basix::FiniteElement<T>>, std::int32_t>> elements;
+    resolve_element_sources(a.element_sources(cutfemx::fem::IntegralType::cutcell, i),
+                            *a.form(), elements);
+    
     assemble_cells(
         mat_set, x_dofmap, x, quadrature_rules, elements, fn,
         {dofs0, bs0, quadrature_rules->_parent_map}, P0,

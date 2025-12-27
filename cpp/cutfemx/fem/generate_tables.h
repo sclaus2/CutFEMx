@@ -45,6 +45,18 @@ namespace cutfemx::fem
         mdspand_t<const T, 2> points_span(points.data(), num_points, points.size()/num_points);
 
         el->tabulate(deriv_order, points_span, phi);
+        
+        // Check for NaN in tabulated values
+        bool has_nan = false;
+        for(std::size_t j = 0; j < length[i]; ++j) {
+          if(std::isnan(phi_b[i][j])) {
+            has_nan = true;
+            break;
+          }
+        }
+        if(has_nan) {
+          std::cout << "  WARNING: Element " << i << " tabulation contains NaN!" << std::endl;
+        }
       }
 
       //Concatenate tab_data and shape to pass to integration kernel function
@@ -62,5 +74,6 @@ namespace cutfemx::fem
         FE.insert(FE.end(),phi_b[i].begin(),phi_b[i].end());
         shape.insert(shape.end(),e_shapes[i].begin(),e_shapes[i].end());
       }
+      
     }
 } // namespace cutfemx::fem

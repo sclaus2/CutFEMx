@@ -84,6 +84,16 @@ void declare_level_set(nb::module_& m, std::string type)
     return dolfinx_wrappers::as_nbarray(facet_ids);
   }, "ghost penalty facets");
 
+  m.def("interior_facets", []
+  (std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
+  nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> cells,
+                                            const std::string& ls_type)
+  {
+    std::vector<int32_t> facet_ids;
+    cutfemx::level_set::interior_facets(level_set, std::span(cells.data(), cells.size()), ls_type, facet_ids);
+    return dolfinx_wrappers::as_nbarray(facet_ids);
+  }, "interior facets");
+
   m.def("facet_topology", [](std::shared_ptr<const dolfinx::mesh::Mesh<U>> mesh,
                              nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> facet_ids)
   {

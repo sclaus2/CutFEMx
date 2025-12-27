@@ -31,6 +31,8 @@ if(DOLFINX_FOUND)
   message(STATUS "Found DOLFINx at ${DOLFINX_DIR}")
 endif()
 
+message(STATUS "Using Python executable: ${Python_EXECUTABLE}")
+
 #Check for DOLFINx python wrappers
 execute_process(
   COMMAND ${Python_EXECUTABLE} -c "import dolfinx; print(dolfinx.get_include())"
@@ -46,7 +48,8 @@ elseif(EXISTS $ENV{DOLFINX_PY_WRAPPERS_DIR})
   set(DOLFINX_PY_WRAPPERS_DIR $ENV{DOLFINX_PY_WRAPPERS_DIR})
   message(STATUS "Found DOLFINx python wrappers at ${DOLFINX_PY_WRAPPERS_DIR}")
 else()
-  message(FATAL_ERROR "DOLFINx python wrappers could not be found. Please try specifying DOLFIN_PY_WRAPPERS_DIR env variable via dolfinx.get_include()")
+  message(STATUS "Failed to run dolfinx.get_include(). Error: ${DOLFINX_PY_WRAPPERS_COMMAND_ERROR}")
+  message(FATAL_ERROR "DOLFINx python wrappers could not be found. Please try specifying DOLFINX_PY_WRAPPERS_DIR env variable via dolfinx.get_include()")
 endif()
 
 find_package(CutCells REQUIRED CONFIG)
@@ -55,10 +58,7 @@ if(CutCells_FOUND)
 endif()
 
 
-find_package(CUTFEMX REQUIRED CONFIG)
-if(CUTFEMX_FOUND)
-  message(STATUS "Found CutFEMx at ${CUTFEMX_DIR}")
-endif()
+# find_package(CUTFEMX REQUIRED CONFIG) replaced by add_subdirectory(cpp) in root
 
 
 # Create the binding library nanobind handles its own calls to
@@ -110,10 +110,11 @@ endif()
 # Define HAS_PETSC4PY for compatibility with DOLFINx python wrappers
 target_compile_definitions(cutfemx_cpp PRIVATE HAS_PETSC4PY)
 
-# Add DOLFINx libraries
-target_link_libraries(cutfemx_cpp PRIVATE dolfinx)
+# Add DOLFINx libraries - order matters for static linking
+# cutfemx first, then its dependencies
+target_link_libraries(cutfemx_cpp PRIVATE cutfemx)
 target_link_libraries(cutfemx_cpp PRIVATE CUTCELLS::cutcells)
-target_link_libraries(cutfemx_cpp PRIVATE CUTFEMX::cutfemx)
+target_link_libraries(cutfemx_cpp PRIVATE dolfinx)
 
 # Add DOLFINx python, petsc4py and mpi4py include directories (with DOLFINx C++
 # ones already being added by target_link_libraries)

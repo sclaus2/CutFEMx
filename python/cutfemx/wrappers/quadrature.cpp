@@ -40,18 +40,15 @@ void declare_quadrature(nb::module_& m, std::string type)
       .def(
           "__init__",
           [](cutfemx::quadrature::QuadratureRule<T>* self,
-             nb::ndarray<const T, nb::ndim<2>> points,
+             nb::ndarray<const T, nb::ndim<2>, nb::c_contig> points,
              nb::ndarray<const T, nb::ndim<1>, nb::c_contig> weights)
           {
-            self->_points.resize(points.shape(0)*points.shape(1));
+            // Explicitly call constructor via placement new since nanobind allocated raw memory
+            new (self) cutfemx::quadrature::QuadratureRule<T>();
 
-            for (size_t i = 0; i < points.shape(0); ++i)
-              for (size_t j = 0; j < points.shape(1); ++j)
-                self->_points[i*points.shape(1)+j] = points(i,j);
-
-            self->_weights.resize(weights.shape(0));
-            for (size_t i = 0; i < weights.shape(0); ++i)
-              self->_weights[i] = weights(i);
+            // Copy data from numpy to std::vector
+            self->_points.assign(points.data(), points.data() + points.size());
+            self->_weights.assign(weights.data(), weights.data() + weights.size());
           },
           nb::arg("points"), nb::arg("weights"))
       .def_prop_ro(
@@ -82,11 +79,11 @@ void declare_quadrature(nb::module_& m, std::string type)
              std::vector<cutfemx::quadrature::QuadratureRule<T>>& rules,
              nb::ndarray<const std::int64_t, nb::ndim<1>, nb::c_contig> parent_map)
           {
+            new (self) cutfemx::quadrature::QuadratureRules<T>();
+
             self->_quadrature_rules = rules;
 
-            self->_parent_map.resize(parent_map.shape(0));
-            for (size_t i = 0; i < parent_map.shape(0); ++i)
-              self->_parent_map[i] = parent_map(i);
+            self->_parent_map.assign(parent_map.data(), parent_map.data() + parent_map.size());
           },
           nb::arg("quadrature rules"), nb::arg("parent map"))
       .def_prop_ro(

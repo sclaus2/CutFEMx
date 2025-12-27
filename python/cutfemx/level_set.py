@@ -20,6 +20,7 @@ __all__ = [
   "cut_entities",
   "ghost_penalty_facets",
   "facet_topology",
+  "interior_facets",
   "compute_normal"
 ]
 
@@ -63,4 +64,11 @@ def facet_topology(
 def compute_normal(normal: Function,level_set: Function,entities: npt.NDArray[np.int32]):
     _cpp.level_set.compute_normal(normal._cpp_object,level_set._cpp_object,entities)
     return normal
+
+def interior_facets(
+    level_set: Function,
+    cells: npt.NDArray[np.int32],
+    cut_type: str
+) -> npt.NDArray[np.int32]:
+      return _cpp.level_set.interior_facets(level_set._cpp_object,cells,cut_type)
 

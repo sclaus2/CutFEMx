@@ -8,6 +8,9 @@
 #include <vector>
 #include <cutcells/cell_flags.h>
 #include <cutcells/cell_types.h>
+#include <span>
+#include <concepts>
+#include <algorithm>
 
 #include <dolfinx/mesh/Mesh.h>
 #include <dolfinx/fem/Function.h>
@@ -181,6 +184,98 @@ namespace cutfemx::level_set
           }
         }
       }
+   }
+
+   // Function to get interior facets of active domain (interior + ghost penalty)
+   template <dolfinx::scalar T, std::floating_point U= dolfinx::scalar_value_type_t<T>>
+   void interior_facets(std::shared_ptr<const dolfinx::fem::Function<T>>  level_set,
+                             std::span<const int32_t> cells, const std::string& ls_type,
+                             std::vector<int32_t>& facet_ids)
+   {
+      // Connection between cells and facets
+      auto mesh = level_set->function_space()->mesh();
+      const int tdim = level_set->function_space()->mesh()->topology()->dim();
+      assert(level_set->function_space()->dofmap());
+      std::shared_ptr<const dolfinx::fem::DofMap> dofmap = level_set->function_space()->dofmap();
+
+      // Get adjacencylist from cell to vertices on current processor
+      std::shared_ptr<const dolfinx::common::IndexMap>  facet_map = mesh->topology()->index_map(tdim-1);
+      if (!facet_map)
+      {
+        mesh->topology_mutable()->create_entities(tdim - 1);
+        facet_map = mesh->topology()->index_map(tdim-1);
+      }
+
+      // Facet to cell map
+      mesh->topology_mutable()->create_connectivity(tdim, tdim-1);
+      std::shared_ptr<const graph::AdjacencyList<std::int32_t>> c_to_f = mesh->topology()->connectivity(tdim, tdim-1);
+      assert(c_to_f);
+
+      mesh->topology_mutable()->create_connectivity(tdim - 1, tdim);
+      std::shared_ptr<const graph::AdjacencyList<std::int32_t>> f_to_c = mesh->topology()->connectivity(tdim - 1, tdim);
+      assert(f_to_c);
+      
+      std::int32_t num_local_cells = mesh->topology()->index_map(tdim)->size_local();
+
+      //iterate over active cell entities and obtain all facets
+      std::int32_t num_cells = cells.size();
+      const std::span<const T>& ls_values = level_set->x()->array();
+
+      // Loop over cells
+      for (int c = 0; c < num_cells; ++c)
+      {
+        int cell_index = cells[c];
+        //get facets and check each facet
+        auto cell_faces = c_to_f->links(cell_index);
+
+        //iterate over faces
+        for(int f=0; f<cell_faces.size(); f++)
+        {
+          auto facet_index = cell_faces[f];
+          auto facet_cells = f_to_c->links(facet_index);
+
+          //interior facet
+          if(facet_cells.size()==2)
+          {
+            auto c0 = facet_cells[0];
+            auto c1 = facet_cells[1];
+            
+            // Get LS values for both cells
+            std::span<const std::int32_t> dofs0 = dofmap->cell_dofs(c0);
+            std::vector<T> ls_vals0(dofs0.size());
+            for (std::size_t i = 0; i < dofs0.size(); ++i) ls_vals0[i] = ls_values[dofs0[i]];
+            
+            std::span<const std::int32_t> dofs1 = dofmap->cell_dofs(c1);
+            std::vector<T> ls_vals1(dofs1.size());
+            for (std::size_t i = 0; i < dofs1.size(); ++i) ls_vals1[i] = ls_values[dofs1[i]];
+
+            cutcells::cell::domain m0 = cutcells::cell::classify_cell_domain<T>(ls_vals0);
+            cutcells::cell::domain m1 = cutcells::cell::classify_cell_domain<T>(ls_vals1);
+            
+            bool active0 = false;
+            bool active1 = false;
+            
+            if(ls_type == "phi<0")
+            {
+                active0 = (m0 == cutcells::cell::domain::inside || m0 == cutcells::cell::domain::intersected);
+                active1 = (m1 == cutcells::cell::domain::inside || m1 == cutcells::cell::domain::intersected);
+            }
+            else if(ls_type == "phi>0")
+            {
+                active0 = (m0 == cutcells::cell::domain::outside || m0 == cutcells::cell::domain::intersected);
+                active1 = (m1 == cutcells::cell::domain::outside || m1 == cutcells::cell::domain::intersected);
+            }
+            
+            if (active0 && active1) {
+                facet_ids.push_back(facet_index);
+            }
+          }
+        }
+      }
+      // Ensure specific facets are unique (since we visit from both sides)
+      std::sort(facet_ids.begin(), facet_ids.end());
+      auto last = std::unique(facet_ids.begin(), facet_ids.end());
+      facet_ids.erase(last, facet_ids.end());
    }
 
   //Standard function to get ghost penalty facets of all cells
