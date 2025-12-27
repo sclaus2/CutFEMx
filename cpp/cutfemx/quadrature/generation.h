@@ -5,6 +5,9 @@
 // SPDX-License-Identifier:    MIT
 #pragma once
 
+#include <cstdio>
+#include <stdexcept>
+#include <string>
 #include "quadrature.h"
 #include "geometry.h"
 #include "../mesh/convert.h"
@@ -208,7 +211,19 @@ namespace cutfemx::quadrature
           }
         }
 
-        //Map local cut coordinates onto physical space
+        // STRATEGY: 
+        // 1. Map reference quadrature points (of the cut pieces) to physical space using CUT CELL geometry (linear)
+        //    -> This gives x_phys and detJ (representing the physical volume of the cut piece)
+        // 2. Pull back x_phys to the PARENT element's reference space using cmap (P2, etc.)
+        //    -> This gives X_ref for basis function evaluation
+
+        // --- Step 1: Map from Cut Cell Ref -> Physical (Linear) ---
+        // Note: The 'phi' variable here (lines 200+) represents the linear shape functions on the cut cell
+        // 'vertex_coords_phys' represents the physical coordinates of the cut cell vertices
+        
+        // We first need the physical coordinates of the cut cell vertices.
+        // These must be computed using the PARENT map, because the cut cell vertices are defined in parent ref space.
+        
         std::vector<T> vertex_coords_phys_b(num_vertices*gdim);
         mdspan2_t<T> vertex_coords_phys(vertex_coords_phys_b.data(),num_vertices, gdim);
 
@@ -217,8 +232,11 @@ namespace cutfemx::quadrature
             = std::accumulate(e_shape_phys.begin(), e_shape_phys.end(), 1, std::multiplies<>{});
         std::vector<T> phi_phys_b(length_phys);
         mdspan_t<T, 4> phi_phys(phi_phys_b.data(), e_shape_phys);
-        // nd, mdspan of points, phi
-        cmap.tabulate(0, std::span(vertex_coords_b.data(),vertex_coords_b.size()), {num_vertices,tdim}, std::span(phi_phys_b.data(),phi_phys_b.size()));
+        
+        // Tabulate cmap at cut cell vertices (in parent ref space)
+        cmap.tabulate(0, std::span(vertex_coords_b.data(),vertex_coords_b.size()), 
+                     {static_cast<std::size_t>(num_vertices),static_cast<std::size_t>(tdim)}, 
+                     std::span(phi_phys_b.data(),phi_phys_b.size()));
 
         auto x_dofs = MDSPAN_IMPL_STANDARD_NAMESPACE::submdspan(
         x_dofmap, parent_index, MDSPAN_IMPL_STANDARD_NAMESPACE::full_extent);
@@ -229,20 +247,38 @@ namespace cutfemx::quadrature
                       std::next(coordinate_dofs.begin(), 3 * i));
         }
 
-        // x[ip] = sum(v) vc[v]*p[ip]
-        // / derivative, point index, basis function index, basis function component
+        // Compute physical coordinates of cut cell vertices
         for(std::size_t ip=0;ip<num_vertices;ip++)
         {
           for(std::size_t i=0;i<gdim;i++)
           {
-            for(std::size_t v=0;v<x_dofs.size();v++) //shape function index
+            for(std::size_t v=0;v<x_dofs.size();v++) 
             {
               vertex_coords_phys(ip,i) += coordinate_dofs[v*3+i]*phi_phys(0, ip, v, 0);
             }
           }
         }
+        
+        // Now map quadrature points to physical space using LINEAR interpolation on the cut cell
+        std::vector<T> points_phys_b(num_points*gdim);
+        mdspan2_t<T> points_phys(points_phys_b.data(), num_points, gdim);
+        
+        for(std::size_t ip=0;ip<num_points;ip++)
+        {
+            for(std::size_t d=0;d<gdim;d++)
+            {
+                for(std::size_t v=0;v<phi.extent(2);v++) 
+                {
+                    points_phys(ip,d) += vertex_coords_phys(v,d)*phi(0, ip, v, 0);
+                }
+            }
+        }
 
-        //Map back to reference element of cut cell to get weights
+        // Update the points to be inserted (unchanged, they are already in parent ref space)
+        // points_b = points_ref_b; // REMOVED: Do not modify points!
+
+        // --- Compute Weights using LINEAR Jacobian (from Step 1) ---
+        // (This preserves the cut volume)
         std::vector<T> J_b(gdim * ctdim);
         mdspan2_t<T> J(J_b.data(), gdim, ctdim);
 
@@ -254,10 +290,9 @@ namespace cutfemx::quadrature
 
         std::vector<T> weights(num_points);
 
-        //adjust weights for map from reference cell to cut part of cell
         for(int ip=0;ip<num_points;ip++)
         {
-            // Compute Jacobian and its determinant
+            // Compute Linear Jacobian
             std::fill(J_b.begin(), J_b.end(), 0.0);
             for (std::size_t d = 0; d < ctdim; ++d)
                 for (std::size_t v = 0; v < phi.extent(2); ++v)
@@ -268,6 +303,7 @@ namespace cutfemx::quadrature
             math::dot(vertex_coords_phys, dphi, J, true);
             detJ[ip] = std::fabs(compute_detJ(J, std::span(det_scratch.data(),det_scratch.size())));
             weights[ip] = wts_refs[type_id_map[cut_cell_type]][ip]*detJ[ip];
+
         }
 
         runtime_rules._quadrature_rules[i]._weights.insert(runtime_rules._quadrature_rules[i]._weights.end(),weights.begin(),weights.end());

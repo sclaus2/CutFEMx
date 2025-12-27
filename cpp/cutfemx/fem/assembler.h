@@ -164,7 +164,7 @@ void create_sparsity_pattern(const CutForm<T,U>& a, dolfinx::la::SparsityPattern
   }
 }
 
-  template <dolfinx::scalar T, std::floating_point U>
+template <dolfinx::scalar T, std::floating_point U>
 dolfinx::la::SparsityPattern create_sparsity_pattern(const CutForm<T, U>& a)
 {
   if (a._form->rank() != 2)
@@ -202,7 +202,6 @@ dolfinx::la::SparsityPattern create_sparsity_pattern(const CutForm<T, U>& a)
       throw std::runtime_error("Unsupported integral type");
     }
   }
-
   return pattern;
 }
 

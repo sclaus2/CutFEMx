@@ -3,6 +3,7 @@
 # This file is part of CutFEMx
 #
 # SPDX-License-Identifier:    MIT
+import sys
 import numpy as np
 import numpy.typing as npt
 import typing
@@ -57,6 +58,184 @@ _ufl_to_cutfemx_domain = {
     "cutcell": _cpp.fem.IntegralType.cutcell,
     "interface": _cpp.fem.IntegralType.interface,
 }
+
+class ElementSourceType:
+    """Type of element source for tabulation."""
+    ARGUMENT = 0
+    COEFFICIENT = 1
+    GEOMETRY = 2
+
+def extract_integral_element_sources(ufcx_form, ufl_form, module):
+    """
+    Extract per-integral element sources from UFCX.
+    
+    For each runtime integral, identifies which elements are needed for
+    tabulation and where they come from (argument, coefficient, geometry).
+    
+    Returns:
+        dict: {(integral_type, integral_id): [(source_type, index, component, deriv_order), ...]}
+    """
+    result = {}
+    
+    # UFCX integral type offsets:
+    # 0=cell, 1=exterior_facet, 2=interior_facet, 3=cutcell (custom/vertex slot), 4=interface
+    # NOTE: Standard FFCx might place custom integrals in slot 3 or 4 depending on version.
+    # Observed trace shows cutcell at slot 3.
+    CUTCELL_OFFSET = 3
+    INTERFACE_OFFSET = 4
+    
+    # Get integral counts
+    offsets = [ufcx_form.form_integral_offsets[i] for i in range(7)]
+    num_cutcell = offsets[CUTCELL_OFFSET + 1] - offsets[CUTCELL_OFFSET]
+    num_interface = offsets[INTERFACE_OFFSET + 1] - offsets[INTERFACE_OFFSET]
+    
+    # Build hash-to-source lookup table
+    hash_to_source = _build_hash_to_source_map(ufl_form)
+    
+    # Process cutcell integrals
+    for i in range(num_cutcell):
+        idx = offsets[CUTCELL_OFFSET] + i
+        integral = ufcx_form.form_integrals[idx]
+        integral_id = ufcx_form.form_integral_ids[idx]
+        
+        sources = _extract_sources_from_integral(integral, hash_to_source)
+        result[(_cpp.fem.IntegralType.cutcell, integral_id)] = sources
+    
+
+    # Process interface integrals (legacy expect at 5)
+    for i in range(num_interface):
+        idx = offsets[INTERFACE_OFFSET] + i
+        integral = ufcx_form.form_integrals[idx]
+        integral_id = ufcx_form.form_integral_ids[idx]
+        
+        sources = _extract_sources_from_integral(integral, hash_to_source)
+        result[(_cpp.fem.IntegralType.interface, integral_id)] = sources
+    
+    return result
+
+def _extract_sources_from_integral(integral, hash_to_source):
+    """Extract element sources for a single integral."""
+    sources = []
+    seen = set()
+    
+    # Debug prints
+    
+    
+    for j in range(integral.num_fe):
+        hash_val = integral.finite_element_hashes[j]
+        deriv_order = integral.finite_element_deriv_order[j]
+        
+        if hash_val in hash_to_source:
+            src_type, idx, comp = hash_to_source[hash_val]
+            key = (src_type, idx, comp, deriv_order)
+            if key not in seen:
+                 sources.append(key)
+                 seen.add(key)
+        else:
+
+            # Fallback logic:
+            # - deriv_order=0 and not found likely means geometry/coordinate element
+            # - Otherwise, use first argument as fallback
+            if deriv_order == 0:
+                # Likely a geometry/coordinate element
+                key = (ElementSourceType.GEOMETRY, 0, -1, deriv_order)
+            else:
+                # Fallback to first argument
+                key = (ElementSourceType.ARGUMENT, 0, -1, deriv_order)
+            if key not in seen:
+                 sources.append(key)
+                 seen.add(key)
+    sys.stdout.flush()
+    return sources
+
+def _build_hash_to_source_map(ufl_form):
+    """Build a mapping from element hash to (source_type, index, component)."""
+    hash_map = {}
+    
+    
+    
+    # Arguments (function spaces)
+    for i, arg in enumerate(ufl_form.arguments()):
+        element = arg.ufl_function_space().ufl_element()
+
+        _add_element_hashes(hash_map, element, ElementSourceType.ARGUMENT, i)
+    
+    # Coefficients
+    for i, coeff in enumerate(ufl_form.coefficients()):
+        element = coeff.ufl_function_space().ufl_element()
+        _add_element_hashes(hash_map, element, ElementSourceType.COEFFICIENT, i)
+    
+    # Geometry (coordinate element from domain)
+    domain = ufl_form.ufl_domain()
+    if domain is not None:
+        coord_elem = domain.ufl_coordinate_element()
+        if coord_elem is not None:
+
+             # Force component -1 for GEOMETRY to ensure full block extraction
+             _add_element_hashes(hash_map, coord_elem, ElementSourceType.GEOMETRY, 0, component=-1)
+
+    
+
+    return hash_map
+
+def _add_element_hashes(hash_map, element, source_type, index, component=-1):
+    """Add element and its sub-elements to the hash map recursively."""
+    from basix.ufl import _BasixElement
+    
+    # Helper to extract hash
+    def get_hash(el):
+        if hasattr(el, 'basix_hash'):
+            # Check if it's callable
+            if callable(el.basix_hash):
+                return el.basix_hash()
+            return el.basix_hash
+        if hasattr(el, 'basix_element'):
+             return el.basix_element.hash()
+        if hasattr(el, '_basix_element'):
+             return el._basix_element.hash()
+        return None
+
+    # Get the basix element if available
+    h = get_hash(element)
+    if h is not None:
+        hash_map[h] = (source_type, index, component)
+    
+    # Handle elements with sub-elements (mixed, blocked, etc.)
+    if hasattr(element, 'sub_elements') and len(element.sub_elements) > 0:
+        for comp, sub_el in enumerate(element.sub_elements):
+            # Recursively process sub-element
+            # For top-level mixed elements, use comp as the component
+            # For nested elements (like BlockedElement), inherit the parent component
+                new_comp = comp if component == -1 else component
+                _add_element_hashes(hash_map, sub_el, source_type, index, new_comp)
+
+def _compute_basix_hash(cmap):
+    """Compute hash for coordinate element."""
+    try:
+        import basix
+        from basix import create_element
+        
+        # Dolfinx CoordinateElement (from cpp) exposes these properties
+        degree = cmap.degree
+        cell_shape = cmap.cell_shape
+        variant = cmap.variant
+        
+        # Create the basix element with the same properties
+        e = create_element(
+            basix.ElementFamily.P,
+            cell_shape,
+            degree,
+            variant,
+            basix.DPCVariant.unset,
+            False,
+            basix.element.dtype.float64
+        )
+        return e.hash()
+    except Exception as ex:
+        import sys
+        print(f"DEBUG: Failed to compute coord hash: {ex}", file=sys.stdout)
+        return None
+
 
 class CutForm:
     _cpp_object: typing.Union[
@@ -318,10 +497,33 @@ def cut_form(
         )
         form_py = Form(f, ufcx_form, code, module)
 
+        
+        # Extract element sources from UFCX for runtime integrals
+        element_sources_py = extract_integral_element_sources(ufcx_form, form, module)
+
+        
+        # Convert to C++ ElementSource objects
+        # Convert to C++ ElementSource objects
+        element_sources_cpp = {}
+        for (itg_type, itg_id), sources in element_sources_py.items():
+
+            cpp_sources = []
+            for (src_type, idx, comp, deriv) in sources:
+
+                cpp_src = _cpp.fem.ElementSource(
+                    _cpp.fem.ElementSourceType(src_type),
+                    idx, comp, deriv
+                )
+                cpp_sources.append(cpp_src)
+            element_sources_cpp[(itg_type, itg_id)] = cpp_sources
+        
+
+
         ufcx_address = module.ffi.cast("uintptr_t", module.ffi.addressof(ufcx_form))
         cutf = cut_ftype(ufcx_address,
                          f,
-                         runtime_subdomains)
+                         runtime_subdomains,
+                         element_sources_cpp)
 
         return CutForm(cutf, form_py)
 

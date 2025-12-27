@@ -98,7 +98,7 @@ namespace cutfemx::fem
       if(deactivate_domain=="phi>0")
       {
         // set xi to 1 for inside or intersected cells
-        if((marker_type == cutcells::cell::domain::intersected) || (marker_type == cutcells::cell::domain::inside) )
+        if(marker_type == cutcells::cell::domain::intersected || marker_type == cutcells::cell::domain::inside)
         {
           for (std::size_t i = 0; i < dofs_xi.size(); ++i)
           {
@@ -112,7 +112,7 @@ namespace cutfemx::fem
       else if(deactivate_domain=="phi<0")
       {
         // set xi to 1 for inside or intersected cells
-        if((marker_type == cutcells::cell::domain::intersected) || (marker_type == cutcells::cell::domain::outside) )
+        if(marker_type == cutcells::cell::domain::intersected || marker_type == cutcells::cell::domain::outside)
         {
           for (std::size_t i = 0; i < dofs_xi.size(); ++i)
             for (int k = 0; k < bs_dof_xi; ++k)
@@ -122,7 +122,7 @@ namespace cutfemx::fem
       else if(deactivate_domain=="phi!=0")
       {
         // set xi to 1 for inside or intersected cells
-        if((marker_type == cutcells::cell::domain::intersected) )
+        if(marker_type == cutcells::cell::domain::intersected)
         {
           for (std::size_t i = 0; i < dofs_xi.size(); ++i)
             for (int k = 0; k < bs_dof_xi; ++k)
@@ -249,7 +249,7 @@ namespace cutfemx::fem
       if(deactivate_domain=="phi>0")
       {
         // set xi to 1 for inside or intersected cells
-        if((marker_type == cutcells::cell::domain::intersected) || (marker_type == cutcells::cell::domain::inside) )
+        if(marker_type == cutcells::cell::domain::intersected || marker_type == cutcells::cell::domain::inside)
         {
           for (std::size_t i = 0; i < dofs_xi.size(); ++i)
           {
@@ -263,7 +263,7 @@ namespace cutfemx::fem
       else if(deactivate_domain=="phi<0")
       {
         // set xi to 1 for inside or intersected cells
-        if((marker_type == cutcells::cell::domain::intersected) || (marker_type == cutcells::cell::domain::outside) )
+        if(marker_type == cutcells::cell::domain::intersected || marker_type == cutcells::cell::domain::outside)
         {
           for (std::size_t i = 0; i < dofs_xi.size(); ++i)
             for (int k = 0; k < bs_dof_xi; ++k)
@@ -273,7 +273,7 @@ namespace cutfemx::fem
       else if(deactivate_domain=="phi!=0")
       {
         // set xi to 1 for inside or intersected cells
-        if((marker_type == cutcells::cell::domain::intersected) )
+        if(marker_type == cutcells::cell::domain::intersected)
         {
           for (std::size_t i = 0; i < dofs_xi.size(); ++i)
             for (int k = 0; k < bs_dof_xi; ++k)

@@ -113,8 +113,12 @@ namespace cutfemx::fem
       auto& [coeffs, cstride] = coefficients.at({cutfemx::fem::IntegralType::cutcell, i});
       std::shared_ptr<const cutfemx::quadrature::QuadratureRules<U>> quadrature_rules
           = M.quadrature_rules(cutfemx::fem::IntegralType::cutcell, i);
-      std::vector<std::pair<std::shared_ptr<basix::FiniteElement<T>>, std::int32_t>> elements
-          = M.elements(cutfemx::fem::IntegralType::cutcell, i);
+      
+      // Resolve element sources to basix elements
+      std::vector<std::pair<std::shared_ptr<basix::FiniteElement<T>>, std::int32_t>> elements;
+      resolve_element_sources(M.element_sources(cutfemx::fem::IntegralType::cutcell, i),
+                              *M.form(), elements);
+      
       value += assemble_cells(x_dofmap, x, quadrature_rules, elements, fn, constants, coeffs,
                                     cstride);
     }

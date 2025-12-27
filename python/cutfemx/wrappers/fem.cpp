@@ -75,13 +75,19 @@ void declare_fem(nb::module_& m, std::string type)
                 std::shared_ptr<const dolfinx::fem::Form<T, U>> form,
                 const std::map<cutfemx::fem::IntegralType,
                 std::vector<std::pair<std::int32_t, std::shared_ptr<cutfemx::quadrature::QuadratureRules<U>>>>>&
-                subdomains)
+                subdomains,
+                const std::map<std::pair<cutfemx::fem::IntegralType, int>,
+                               std::vector<cutfemx::fem::ElementSource>>&
+                element_sources_map = {})
           {
             ufcx_form* p = reinterpret_cast<ufcx_form*>(ufcform);
             new (fp)
                 cutfemx::fem::CutForm<T, U>(cutfemx::fem::create_cut_form_factory<T>(
-                    *p, form, subdomains));
+                    *p, form, subdomains, element_sources_map));
           }
+          , nb::arg("ufcx_form"), nb::arg("form"), nb::arg("subdomains"),
+            nb::arg("element_sources_map") = std::map<std::pair<cutfemx::fem::IntegralType, int>,
+                                                       std::vector<cutfemx::fem::ElementSource>>{}
           , "Create a Cutform from a pointer to a ufcx_form")
       .def(
           "integral_ids",
@@ -187,7 +193,6 @@ void declare_fem(nb::module_& m, std::string type)
                         nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
              coeffs_rt)
       {
-        std::cout << "entering: ";
         return cutfemx::fem::assemble_scalar<T,U>(
             M, std::span(constants.data(), constants.size()),
             py_to_cpp_coeffs(coefficients),py_to_cpp_coeffs_rt(coeffs_rt));
@@ -351,6 +356,21 @@ namespace cutfemx_wrappers
     .value("cutcell", cutfemx::fem::IntegralType::cutcell, "runtime integral on cell")
     .value("interface", cutfemx::fem::IntegralType::interface,
             "runtime integral on interface between two parent cells");
+
+    // Bind ElementSourceType enum
+    nb::enum_<cutfemx::fem::ElementSourceType>(m, "ElementSourceType")
+        .value("Argument", cutfemx::fem::ElementSourceType::Argument)
+        .value("Coefficient", cutfemx::fem::ElementSourceType::Coefficient)
+        .value("Geometry", cutfemx::fem::ElementSourceType::Geometry);
+
+    // Bind ElementSource struct
+    nb::class_<cutfemx::fem::ElementSource>(m, "ElementSource")
+        .def(nb::init<cutfemx::fem::ElementSourceType, int, int, int>(),
+             nb::arg("type"), nb::arg("index"), nb::arg("component"), nb::arg("deriv_order"))
+        .def_rw("type", &cutfemx::fem::ElementSource::type)
+        .def_rw("index", &cutfemx::fem::ElementSource::index)
+        .def_rw("component", &cutfemx::fem::ElementSource::component)
+        .def_rw("deriv_order", &cutfemx::fem::ElementSource::deriv_order);
 
     declare_fem<float>(m, "float32");
     declare_fem<double>(m, "float64");

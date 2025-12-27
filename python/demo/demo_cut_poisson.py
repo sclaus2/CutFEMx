@@ -38,7 +38,7 @@ V = fem.functionspace(msh, ("Lagrange", 2))
 u = ufl.TrialFunction(V)
 v = ufl.TestFunction(V)
 f = fem.Constant(msh, default_real_type(1.0))
-g = fem.Constant(msh, default_real_type(0.0))
+g = fem.Constant(msh, default_real_type(0.0)) 
 gamma = 100
 gamma_g = 1e-1
 

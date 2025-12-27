@@ -25,9 +25,15 @@ endforeach()
 
 target_include_directories(cutfemx PUBLIC
   $<INSTALL_INTERFACE:include>
-  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR};${CMAKE_CURRENT_SOURCE_DIR}>")
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..;${CMAKE_CURRENT_SOURCE_DIR}>")
 
 # dolfinx
 target_link_libraries(cutfemx PUBLIC CUTCELLS::cutcells)
 target_link_libraries(cutfemx PUBLIC dolfinx)
 target_link_libraries(cutfemx PUBLIC spdlog::spdlog)
+
+target_compile_features(cutfemx PUBLIC cxx_std_20)
+
+if(DEFINED ENV{CONDA_PREFIX})
+  target_include_directories(cutfemx BEFORE PUBLIC "$ENV{CONDA_PREFIX}/include")
+endif()

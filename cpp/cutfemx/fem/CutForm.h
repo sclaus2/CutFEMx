@@ -12,6 +12,7 @@
 #include <array>
 #include <concepts>
 #include <cstdint>
+#include <cstdio>
 #include <ufcx.h>
 #include <spdlog/spdlog.h>
 
@@ -19,6 +20,7 @@
 
 #include <dolfinx/common/IndexMap.h>
 #include <dolfinx/common/types.h>
+#include <dolfinx/fem/utils.h>
 #include <dolfinx/mesh/Mesh.h>
 #include <dolfinx/fem/FunctionSpace.h>
 #include <dolfinx/fem/Function.h>
@@ -44,6 +46,25 @@ enum class IntegralType : std::int8_t
   cutcell = 0,           ///< run time integration one parent cell -> dC
   interface = 1,         ///< run time integration coupling two parent cells -> dI
 };
+
+/// @brief Source type for element metadata (passed from Python)
+enum class ElementSourceType : std::int8_t
+{
+  Argument = 0,     ///< Element from form argument (trial/test function space)
+  Coefficient = 1,  ///< Element from coefficient function space
+  Geometry = 2,     ///< Coordinate element from mesh geometry
+};
+
+/// @brief Describes where to find an element for tabulation
+/// Passed from Python based on FFCx IR analysis
+struct ElementSource
+{
+  ElementSourceType type;
+  int index;       ///< Argument or coefficient index
+  int component;   ///< Sub-element component (-1 = whole element)
+  int deriv_order; ///< Maximum derivative order needed
+};
+
 
 static std::string integralTypeToString(dolfinx::fem::IntegralType type)
 {
@@ -86,12 +107,13 @@ struct runtime_integral_data
                                     const T*, const size_t*)>>
                  and std::is_convertible_v<std::remove_cvref_t<W>,
                                            std::vector<int>>
-  runtime_integral_data(int id, K&& kernel, std::shared_ptr<const cutfemx::quadrature::QuadratureRules<U>> quadrature_rules,
-                std::vector<std::pair<std::shared_ptr<basix::FiniteElement<T>>, std::int32_t>> elements,
+  runtime_integral_data(int id, K&& kernel, 
+                std::shared_ptr<const cutfemx::quadrature::QuadratureRules<U>> quadrature_rules,
+                std::vector<ElementSource> element_sources,
                 W&& coeffs)
       : id(id), kernel(std::forward<K>(kernel)),
         quadrature_rules(quadrature_rules),
-        elements(elements),
+        element_sources(std::move(element_sources)),
         coeffs(std::forward<W>(coeffs))
   {
   }
@@ -109,14 +131,15 @@ struct runtime_integral_data
   /// @brief The quadrature rule to integrate over (contains parent map to mesh).
   std::shared_ptr<const cutfemx::quadrature::QuadratureRules<U>> quadrature_rules;
 
-  /// @brief basix elements used in integral and their maximum derivative
-  /// this is used to tabulate values in the assembler over runtime integrals
-  std::vector<std::pair<std::shared_ptr<basix::FiniteElement<T>>, std::int32_t>> elements;
+  /// @brief Element sources describing where to get elements for tabulation
+  /// (from Python based on FFCx IR analysis)
+  std::vector<ElementSource> element_sources;
 
   /// @brief Indices of coefficients (from the form) that are in this
   /// integral.
   std::vector<int> coeffs;
 };
+
 
 template <dolfinx::scalar T,
           std::floating_point U = dolfinx::scalar_value_type_t<T>>
@@ -256,13 +279,13 @@ public:
       throw std::runtime_error("No mesh entities for requested domain index.");
   }
 
-  std::vector<std::pair<std::shared_ptr<basix::FiniteElement<T>>, std::int32_t>> elements(cutfemx::fem::IntegralType type, int i) const
+  std::vector<ElementSource> element_sources(cutfemx::fem::IntegralType type, int i) const
   {
     const auto& integrals = _integrals[static_cast<std::size_t>(type)];
     auto it = std::ranges::lower_bound(integrals, i, std::less<>{},
                                        [](const auto& a) { return a.id; });
     if (it != integrals.end() and it->id == i)
-      return it->elements;
+      return it->element_sources;
     else
       throw std::runtime_error("No mesh entities for requested domain index.");
   }
@@ -391,40 +414,27 @@ public:
 };
 
 template <std::floating_point T>
-void find_element_leaves(std::shared_ptr<const dolfinx::fem::FiniteElement<T>> element,
-                          std::vector<std::shared_ptr<const dolfinx::fem::FiniteElement<T>>>& leaves)
+void collect_all_elements(std::shared_ptr<const dolfinx::fem::FiniteElement<T>> element,
+                          std::vector<std::shared_ptr<const dolfinx::fem::FiniteElement<T>>>& elements)
 {
     if (!element) return;
 
-    //std::cout << "N sub elements=" << element->num_sub_elements() << std::endl;
-
-    // If the node has no children, it's a leaf
-    if (element->num_sub_elements()== 0) {
-        leaves.push_back(element);
-        //std::cout << "Add element:" << leaves.size() << std::endl;
-    }
+    // Add current element (whether mixed or leaf)
+    elements.push_back(element);
 
     // Recursively check all children of the current node
     for (auto child : element->sub_elements()) {
-        find_element_leaves(child, leaves);
+        collect_all_elements(child, elements);
     }
 }
 
   template <std::floating_point T>
-  void map_hash_element(const std::vector<std::shared_ptr<basix::FiniteElement<T>>>& elements,
-                      std::unordered_map<std::size_t,std::shared_ptr<basix::FiniteElement<T>>>& hash_el)
+  void map_hash_element(const std::vector<std::pair<std::size_t, std::shared_ptr<const dolfinx::fem::FiniteElement<T>>>>& elements,
+                      std::unordered_map<std::size_t,std::shared_ptr<const dolfinx::fem::FiniteElement<T>>>& hash_el)
   {
-    for(auto& basix_element : elements)
+    for(auto& [hash, element] : elements)
     {
-      auto hash = basix_element->hash();
-
-      if(hash_el.find(hash) != hash_el.end())
-      {
-
-      }
-      else{
-        hash_el.insert({hash,basix_element}); 
-      }
+      hash_el[hash] = element;
     }
   }
 
@@ -433,7 +443,7 @@ void find_element_leaves(std::shared_ptr<const dolfinx::fem::FiniteElement<T>> e
   template <dolfinx::scalar T,
             std::floating_point U = dolfinx::scalar_value_type_t<T>>
   void form_elements(std::shared_ptr<const dolfinx::fem::Form<T,U>> form,
-    std::vector<std::shared_ptr<basix::FiniteElement<U>>>& elements)
+                     std::vector<std::pair<std::size_t, std::shared_ptr<const dolfinx::fem::FiniteElement<U>>>>& elements)
   {
     //Start with finding elements in functionspaces
     const std::vector<std::shared_ptr<const dolfinx::fem::FunctionSpace<U>>>&
@@ -449,20 +459,23 @@ void find_element_leaves(std::shared_ptr<const dolfinx::fem::FiniteElement<T>> e
       assert(element);
 
       //extract subspaces
-      if(element->is_mixed())
-      {
-        std::cout << "Warning implementation still to be tested for mixed element" << std::endl;
-      }
-
-      find_element_leaves<U>(element,elements_function_spaces);
+      collect_all_elements<U>(element,elements_function_spaces);
     }
 
-    //get basix element for all components of found dolfinx elements
+    //get element for all components of found dolfinx elements
     for(auto& element : elements_function_spaces)
     {
-      auto basix_element = std::make_shared<basix::FiniteElement<U>>(element->basix_element());
-      assert(basix_element); // should all exist after flattening
-      elements.push_back(basix_element);
+       if (element->num_sub_elements() == 0)
+       {
+          elements.push_back({element->basix_element().hash(), element});
+          // Leaf Element: Map 0 to it as well (FFCx runtime fix for mixed elements)
+          elements.push_back({0, element});
+       }
+       else
+       {
+          // Mixed Element: Just map 0
+          elements.push_back({0, element});
+       }
     }
 
     //std::cout << "Number of component elements identified from function spaces=" << elements.size() << std::endl;
@@ -471,12 +484,24 @@ void find_element_leaves(std::shared_ptr<const dolfinx::fem::FiniteElement<T>> e
     auto mesh = form->mesh();
     const dolfinx::fem::CoordinateElement<U>& coord_el = mesh->geometry().cmap();
 
-    auto basix_element = std::make_shared<basix::FiniteElement<U>>(basix::create_element<T>(basix::element::family::P,
+    //TODO: This creates a new element just for hash/storage, ideally we should use the one from mesh if possible or just store it.
+    // However, coordinate element doesn't inherit from FiniteElement in same way.
+    // For now, let's keep the basix creation for coordinate element as it's usually standard.
+    // WAIT: We need Dolfinx FiniteElement!
+    // Since CoordinateElement is distinct, we might need a wrapper or just rely on Basix for this one specific case?
+    // BUT our vector expects Dolfinx FiniteElement.
+    // We can construct a dolfinx::fem::FiniteElement from the basix element.
+    
+    auto basix_element = basix::create_element<T>(basix::element::family::P,
                                     dolfinx::mesh::cell_type_to_basix_type(coord_el.cell_shape()),
                                     coord_el.degree(), coord_el.variant(),
-                                    basix::element::dpc_variant::unset, false));
-
-    elements.push_back(basix_element);
+                                    basix::element::dpc_variant::unset, false);
+    
+    // Create dummy function space to generate dolfinx element wrapper
+    auto V_dummy = dolfinx::fem::create_functionspace(std::make_shared<dolfinx::mesh::Mesh<U>>(*mesh), basix_element, {1});
+    auto dolfinx_coord_element = V_dummy->element();
+    
+    elements.push_back({basix_element.hash(), dolfinx_coord_element});
 
     //std::cout << "Number of component elements identified from mesh=" << elements.size() << std::endl;
 
@@ -491,66 +516,103 @@ void find_element_leaves(std::shared_ptr<const dolfinx::fem::FiniteElement<T>> e
       assert(element);
 
       //extract subspaces
-      if(element->is_mixed())
-      {
-        std::cout << "Warning implementation still to be tested for mixed element" << std::endl;
-      }
-
-      find_element_leaves<U>(element,elements_coefficients);
+      collect_all_elements<U>(element,elements_coefficients);
     }
 
-    //get basix element for all components of found dolfinx elements
+    //get element for all components of found dolfinx elements
     for(auto& element : elements_coefficients)
     {
-      auto basix_element = std::make_shared<basix::FiniteElement<U>>(element->basix_element());
-      assert(basix_element); // should all exist after flattening
-      elements.push_back(basix_element);
+       if (element->num_sub_elements() == 0)
+       {
+          elements.push_back({element->basix_element().hash(), element});
+          // Leaf Element
+          elements.push_back({0, element});
+       }
+       else
+       {
+          elements.push_back({0, element});
+       }
     }
 
     //std::cout << "Number of component elements identified from coefficients=" << elements_coefficients.size() << std::endl;
   }
 
-
-// obtain basix elements that are used in integral and put them in the correct order
-// these elements are then used during assembly to tabulate basis function values at 
-// arbitrary quadrature points at runtime
-// find elements corresponding to the right finite element hashes
-// note these are potentially components of elements
-// elements can come from functionspaces, from meshes or coefficients
-/// @todo: see if this cannot be recovered during code generation process
+/// @brief Resolve element sources to basix elements for tabulation
+/// Uses the form's function spaces and coefficients to look up the actual elements
 template <dolfinx::scalar T,
           std::floating_point U = dolfinx::scalar_value_type_t<T>>
-void pack_elements(ufcx_integral* integral,
-                   std::unordered_map<std::size_t,std::shared_ptr<basix::FiniteElement<T>>>& hash_el,
-                   std::vector<std::pair<std::shared_ptr<basix::FiniteElement<U>>, std::int32_t>>& basix_elements)
+void resolve_element_sources(
+    const std::vector<ElementSource>& sources,
+    const dolfinx::fem::Form<T, U>& form,
+    std::vector<std::pair<std::shared_ptr<basix::FiniteElement<U>>, std::int32_t>>& basix_elements)
 {
-  int num_elements = integral->num_fe;
-
-  if(num_elements==0)
-    throw std::runtime_error("Number of elements in generated code is zero");
-
-  std::vector<std::uint64_t> element_hashes(num_elements);
-  std::vector<int> element_deriv_order(num_elements);
-  basix_elements.resize(num_elements);
-
-  for(std::size_t i=0;i<num_elements;i++)
+  basix_elements.resize(sources.size());
+  
+  const auto& function_spaces = form.function_spaces();
+  const auto& coefficients = form.coefficients();
+  auto mesh = form.mesh();
+  
+  for (std::size_t i = 0; i < sources.size(); ++i)
   {
-    element_hashes[i] = integral->finite_element_hashes[i];
-    element_deriv_order[i] = integral->finite_element_deriv_order[i];
-  }
-
-  //next identify element associated with mesh
-  for(std::size_t i=0;i<num_elements;i++)
-  {
-    if (hash_el.find(element_hashes[i]) != hash_el.end())
+    const auto& src = sources[i];
+    std::shared_ptr<const dolfinx::fem::FiniteElement<U>> element;
+    
+    switch (src.type)
     {
-      basix_elements[i] = std::make_pair(hash_el[element_hashes[i]],element_deriv_order[i]);
+      case ElementSourceType::Argument:
+      {
+        if (src.index < 0 || static_cast<std::size_t>(src.index) >= function_spaces.size())
+          throw std::runtime_error("Invalid argument index in ElementSource");
+        element = function_spaces[src.index]->element();
+        break;
+      }
+      case ElementSourceType::Coefficient:
+      {
+        if (src.index < 0 || static_cast<std::size_t>(src.index) >= coefficients.size())
+          throw std::runtime_error("Invalid coefficient index in ElementSource");
+        element = coefficients[src.index]->function_space()->element();
+        break;
+      }
+      case ElementSourceType::Geometry:
+      {
+        // Create basix element for coordinate element
+        const auto& coord_el = mesh->geometry().cmap();
+        try {
+            auto basix_el = std::make_shared<basix::FiniteElement<U>>(
+                basix::create_element<U>(basix::element::family::P,
+                    dolfinx::mesh::cell_type_to_basix_type(coord_el.cell_shape()),
+                    coord_el.degree(), coord_el.variant(),
+                    basix::element::dpc_variant::unset, false));
+            basix_elements[i] = {basix_el, src.deriv_order};
+        } catch (const std::exception& e) {
+             std::cout << "Exception in basix::create_element: " << e.what() << std::endl;
+             throw;
+        }
+        continue;
+      }
+      default:
+        throw std::runtime_error("Unknown ElementSourceType");
     }
-    else{
-       throw std::runtime_error("Element hash not found in form elements");
+    
+    // Handle sub-elements for mixed elements BEFORE accessing basix_element
+    if (src.component >= 0)
+    {
+      const auto& sub_elements = element->sub_elements();
+      if (static_cast<std::size_t>(src.component) >= sub_elements.size())
+        throw std::runtime_error("Invalid component index for mixed element");
+      element = sub_elements[src.component];
     }
+    
+    // Now we can safely access basix_element
+    
+    // Extract basix element for tabulation
+    basix_elements[i] = {
+        std::make_shared<basix::FiniteElement<U>>(element->basix_element()),
+        src.deriv_order
+    };
   }
 }
+
 
 /// @brief Create a Form from UFCx input with coefficients and constants
 /// passed in the required order.
@@ -564,6 +626,7 @@ void pack_elements(ufcx_integral* integral,
 /// @param[in] coefficients Coefficient fields in the form.
 /// @param[in] constants Spatial constants in the form.
 /// @param[in] subdomains Subdomain markers.
+/// @param[in] element_sources_map Element sources per integral from Python.
 /// @param[in] entity_maps The entity maps for the form. Empty for
 /// single domain problems.
 /// @param[in] mesh The mesh of the domain.
@@ -576,7 +639,11 @@ CutForm<T, U> create_cut_form_factory(
     const std::map<
         cutfemx::fem::IntegralType,
         std::vector<std::pair<std::int32_t, std::shared_ptr<cutfemx::quadrature::QuadratureRules<U>>>>>&
-        subdomains)
+        subdomains,
+    const std::map<
+        std::pair<cutfemx::fem::IntegralType, int>,
+        std::vector<ElementSource>>&
+        element_sources_map = {})
 {
   auto spaces = form->function_spaces();
   auto mesh = form->mesh();
@@ -606,14 +673,6 @@ CutForm<T, U> create_cut_form_factory(
                                     const int*, const U*, const U*,
                                     const T*, const size_t*)>;
   std::map<cutfemx::fem::IntegralType, std::vector<runtime_integral_data<T, U>>> integrals;
-
-
-  //Get all elements in form
-  std::vector<std::shared_ptr<basix::FiniteElement<U>>> all_elements;
-  form_elements(form,all_elements);
-
-  std::unordered_map<std::size_t,std::shared_ptr<basix::FiniteElement<T>>> hash_el;
-  map_hash_element(all_elements, hash_el);
 
   // Attach cell kernels
   {
@@ -650,9 +709,23 @@ CutForm<T, U> create_cut_form_factory(
                 active_coeffs.push_back(j);
             }
 
-            //add vector of elements used in integral
-            std::vector<std::pair<std::shared_ptr<basix::FiniteElement<U>>, std::int32_t>> basix_elements;
-            pack_elements(integral, hash_el, basix_elements);
+            // Get element sources from Python-passed map
+            std::vector<ElementSource> sources;
+            auto key = std::make_pair(cutfemx::fem::IntegralType::cutcell, id);
+            auto es_it = element_sources_map.find(key);
+            if (es_it != element_sources_map.end())
+            {
+              sources = es_it->second;
+            }
+            else
+            {
+              // Fallback: create default sources for arguments
+              for (std::size_t arg_idx = 0; arg_idx < spaces.size(); ++arg_idx)
+              {
+                sources.push_back({ElementSourceType::Argument, 
+                                   static_cast<int>(arg_idx), -1, 1});
+              }
+            }
 
             kern_t k = nullptr;
             if constexpr (std::is_same_v<T, float>)
@@ -660,7 +733,7 @@ CutForm<T, U> create_cut_form_factory(
             else if constexpr (std::is_same_v<T, double>)
               k = integral->tabulate_tensor_runtime_float64;
 
-            itg.first->second.emplace_back(id, k, domain.second, basix_elements, active_coeffs);
+            itg.first->second.emplace_back(id, k, domain.second, sources, active_coeffs);
           }
         }
       }

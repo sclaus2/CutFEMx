@@ -170,8 +170,8 @@ namespace cutfemx::fem
     const std::size_t value_size = u.function_space()->value_size();
 
     std::vector<T> send_values(num_new_points * value_size);
-    u.eval(new_points, {num_new_points, (std::size_t)3},
-          new_points_cell_index, send_values, {num_new_points, (std::size_t)value_size});
+    u.eval(new_points, {static_cast<std::size_t>(num_new_points), (std::size_t)3},
+          new_points_cell_index, send_values, {static_cast<std::size_t>(num_new_points), (std::size_t)value_size});
 
     // assign interpolated values
     for(int p=0;p<num_new_points;p++)
