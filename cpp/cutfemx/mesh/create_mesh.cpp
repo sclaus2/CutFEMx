@@ -168,8 +168,28 @@ namespace cutfemx::mesh
                 std::vector<T>& vertex_coords,
                 std::vector<std::vector<int>>& vertex_map)
   {
-    // Build list of vertex coordinates by removing any doubles
-    auto gdim = cut_cells._cut_cells[0]._gdim;
+    // Guard against empty cut cells
+    if(cut_cells._cut_cells.empty())
+      return;
+      
+    // Find first non-empty cut cell to get gdim
+    std::size_t gdim = 0;
+    for(const auto& cut_cell : cut_cells._cut_cells)
+    {
+      if(cut_cell._vertex_coords.size() > 0)
+      {
+        gdim = cut_cell._gdim;
+        break;
+      }
+    }
+    
+    // If no valid cut cells found, try to infer gdim from existing vertex_coords
+    if(gdim == 0)
+    {
+      // No valid cut cells to merge
+      return;
+    }
+    
     int merged_vertex_id = 0;
     int vertex_counter = 0;
     if(vertex_coords.size()>0)
@@ -225,10 +245,35 @@ namespace cutfemx::mesh
   {
     CutMesh<T> cut_mesh;
 
+    // Guard against completely empty cut cells mesh
+    if(cut_cells._cut_cells.empty())
+    {
+      return cut_mesh;
+    }
+    
+    // Find first non-empty cut cell to get gdim/tdim/cell_type
+    std::size_t first_valid = 0;
+    bool found_valid = false;
+    for(std::size_t i = 0; i < cut_cells._cut_cells.size(); ++i)
+    {
+      if(cut_cells._cut_cells[i]._vertex_coords.size() > 0)
+      {
+        first_valid = i;
+        found_valid = true;
+        break;
+      }
+    }
+    
+    // If all cut cells are empty, return empty mesh
+    if(!found_valid)
+    {
+      return cut_mesh;
+    }
+
     //create local meshes with local vertex numbering
-    std::size_t gdim = cut_cells._cut_cells[0]._gdim;
-    std::size_t tdim = cut_cells._cut_cells[0]._tdim;
-    auto cell_type = cutcells_to_dolfinx_cell_type(cut_cells._cut_cells[0]._types[0]);
+    std::size_t gdim = cut_cells._cut_cells[first_valid]._gdim;
+    std::size_t tdim = cut_cells._cut_cells[first_valid]._tdim;
+    auto cell_type = cutcells_to_dolfinx_cell_type(cut_cells._cut_cells[first_valid]._types[0]);
     const int num_cell_vertices = dolfinx::mesh::num_cell_vertices(cell_type);
 
     //Count the total number of cells in vector
@@ -239,6 +284,12 @@ namespace cutfemx::mesh
       // purpose here is to exclude ghosts
       if(cut_cell._vertex_coords.size()>0)
         num_cells += cut_cell._connectivity.size();
+    }
+    
+    // If no valid cells, return empty mesh
+    if(num_cells == 0)
+    {
+      return cut_mesh;
     }
 
     //Merged vertex coordinates
@@ -328,8 +379,25 @@ namespace cutfemx::mesh
     std::size_t gdim = mesh.geometry().dim();
     auto entity_map = mesh.topology()->index_map(tdim);
 
-    assert(tdim == cut_cells._cut_cells[0]._tdim);
-    assert(gdim == cut_cells._cut_cells[0]._gdim);
+    // Find first non-empty cut cell to validate dimensions (if any exist)
+    std::size_t first_valid = 0;
+    bool found_valid = false;
+    for(std::size_t i = 0; i < cut_cells._cut_cells.size(); ++i)
+    {
+      if(cut_cells._cut_cells[i]._vertex_coords.size() > 0 && !cut_cells._cut_cells[i]._types.empty())
+      {
+        first_valid = i;
+        found_valid = true;
+        break;
+      }
+    }
+    
+    // Only check assertions if we have valid cut cells
+    if(found_valid)
+    {
+      assert(tdim == cut_cells._cut_cells[first_valid]._tdim);
+      assert(gdim == cut_cells._cut_cells[first_valid]._gdim);
+    }
 
     //get list of all vertices connected to entities
     mesh.topology_mutable()->create_connectivity(0, tdim);
@@ -380,8 +448,17 @@ namespace cutfemx::mesh
         num_cells += cut_cell._connectivity.size();
     }
 
-    /// @todo: this only works for mesh with one cell type
-    auto cell_type = cutcells_to_dolfinx_cell_type(cut_cells._cut_cells[0]._types[0]);
+    // Get cell type - use first valid cut cell, or fall back to background mesh cell type
+    dolfinx::mesh::CellType cell_type;
+    if(found_valid)
+    {
+      cell_type = cutcells_to_dolfinx_cell_type(cut_cells._cut_cells[first_valid]._types[0]);
+    }
+    else
+    {
+      // No valid cut cells - use background mesh cell type
+      cell_type = mesh.topology()->cell_type();
+    }
     const int num_cell_vertices = dolfinx::mesh::num_cell_vertices(cell_type);
 
     std::vector<int64_t> cells(num_cells*num_cell_vertices);

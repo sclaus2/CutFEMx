@@ -104,6 +104,10 @@ void assemble_cells(
     const auto& weights = quadrature_rules->_quadrature_rules[index]._weights;
 
     const int num_points = weights.size();
+    
+    // Skip cells with no quadrature points (e.g., empty cut cells)
+    if (num_points == 0)
+      continue;
 
     std::vector<T> FE;
     std::vector<std::size_t> shape;

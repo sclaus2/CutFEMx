@@ -148,6 +148,18 @@ void declare_fem(nb::module_& m, std::string type)
           }
         , "create function over cut mesh");
 
+  m.def("interpolate_cut_expression",
+        [](dolfinx::fem::Expression<T, U>& expr,
+           std::shared_ptr<dolfinx::fem::FunctionSpace<U>> V_cut,
+           const cutfemx::mesh::CutMesh<U>& sub_mesh)
+        {
+          // Cast to const shared_ptr to match function signature
+          auto V_cut_const = std::const_pointer_cast<const dolfinx::fem::FunctionSpace<U>>(V_cut);
+          return cutfemx::fem::interpolate_cut_expression(expr, V_cut_const, sub_mesh);
+        },
+        nb::arg("expr"), nb::arg("V_cut"), nb::arg("sub_mesh"),
+        "Interpolate expression onto cut mesh using parent cell mapping.");
+
     m.def(
       "pack_coefficients",
       [](const cutfemx::fem::CutForm<T, U>& form)

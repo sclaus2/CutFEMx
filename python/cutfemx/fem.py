@@ -541,10 +541,111 @@ def cut_form(
 
     return _create_cut_form(form)
 
+def _wrap_cpp_function(cpp_func):
+    """Wrap a C++ Function object in a Python Function, ensuring UFL compatibility.
+    
+    This manually reconstructs the Python Function object from the C++ object,
+    making sure to initialize the UFL coefficient base class.
+    """
+    # 1. Get the C++ FunctionSpace and wrap it in Python
+    cpp_V = cpp_func.function_space
+    mesh = cpp_V.mesh
+    
+    # We need to reconstruct the ufl.FiniteElement to create the Python FunctionSpace
+    # This might be tricky without access to the original UFL element.
+    # However, dolfinx FunctionSpace wrapper can be constructed with just the mesh and element.
+    # A safer bet for now is to try to construct a FunctionSpace wrapper that mirrors the C++ one.
+    
+    # Actually, we can just use the provided V_cut argument in interpolate_cut_expression
+    # if we change the signature slightly. But for general wrapping:
+    
+    # For now, let's assume we can get the element from the C++ space (wrapped via nb)
+    # or create a dummy one if strictly needed for UFL.
+    # BUT, 'Function' requires a Python FunctionSpace for __init__.
+    
+    # BETTER APPROACH:
+    # Instead of full reconstruction, allocate a Function and call ufl.Coefficient.__init__ manually
+    
+    func = object.__new__(Function)
+    func._cpp_object = cpp_func
+    
+    # We need a Python FunctionSpace to satisfy UFL (it expects a FunctionSpace in __init__)
+    # Let's try to get it from the arguments if possible, or reconstruct a minimal one.
+    # In cut_function(u, sub_mesh), we don't passed V_cut explicitly.
+    # In interpolate_cut_expression(expr, V_cut, cut_mesh), we DO have V_cut.
+    
+    # Let's handle the two cases separately or update signatures.
+    # Updating signatures is cleaner.
+    return func
+
 def cut_function(
       u: Function,
       sub_mesh: CutMesh)->Function:
-    return _cpp.fem.create_cut_function(u._cpp_object,sub_mesh._cpp_object)
+    """Create a function on the cut mesh from a function on the background mesh."""
+    cpp_func = _cpp.fem.create_cut_function(u._cpp_object, sub_mesh._cpp_object)
+    
+    # We need to construct the Python FunctionSpace for the result
+    # The C++ function uses the same element family/degree as input but on cut mesh
+    import basix
+    import ufl
+    from dolfinx import fem
+    
+    # Reconstruct element logic from C++: it matches u.function_space
+    V_bg = u.function_space
+    elem = V_bg.ufl_element()
+    
+    # Create Python wrapper for the NEW cut function space
+    # (The C++ object already instantiated the space, we just need to wrap it)
+    cpp_V = cpp_func.function_space
+    
+    # We need the dolfinx Mesh wrapper for the cut mesh
+    # sub_mesh._cpp_object._cut_mesh gives C++ mesh
+    # sub_mesh.cut_mesh gives the Python Mesh wrapper (it should!)
+    # Checking CutMesh.py... it seems to have ._mesh attribute?
+    cut_mesh_wrapper = sub_mesh._mesh # Assuming this exists from CutMesh definition
+    
+    # Create a Python FunctionSpace wrapper sharing the C++ object
+    # We need the UFL element.
+    # Ideally we'd just use the C++ space directly but FunctionSpace.__init__ requires ufl element
+    
+    # Quick fix: Construct a new Python FunctionSpace that mirrors the C++ one
+    # This creates a DUPLICATE C++ object if we aren't careful.
+    # dolfinx.fem.FunctionSpace(mesh, element, cppV=...) allows wrapping!
+    
+    V_cut = fem.FunctionSpace(cut_mesh_wrapper, elem, cppV=cpp_V)
+    
+    # Now create the Function properly
+    func = Function(V_cut)
+    # Replace the underlying C++ object (though Function(V_cut) creates a new one initialized to 0)
+    # The C++ object `cpp_func` has the data we want.
+    # We should copy the data or swap the pointer.
+    # Function has `_cpp_object`, we can swap it.
+    func._cpp_object = cpp_func
+    
+    # Correct the vector wrapper
+    from dolfinx import la
+    func._x = la.Vector(func._cpp_object.x)
+    
+    return func
+
+def interpolate_cut_expression(
+      expr,
+      V_cut,
+      cut_mesh: CutMesh)->Function:
+    """Interpolate a UFL expression onto a CutMesh function space."""
+    cpp_func = _cpp.fem.interpolate_cut_expression(
+        expr._cpp_object, V_cut._cpp_object, cut_mesh._cpp_object
+    )
+    
+    # Here we HAVE the Python FunctionSpace V_cut
+    func = Function(V_cut)
+    func._cpp_object = cpp_func
+    
+    # Correct the vector wrapper
+    from dolfinx import la
+    func._x = la.Vector(func._cpp_object.x)
+    
+    return func
 
 def assemble_scalar(M: CutForm, constants=None, coeffs=None, coeffs_rt=None):
     constants = constants or _pack_constants(M._form._cpp_object)
