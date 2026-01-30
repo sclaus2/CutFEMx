@@ -174,6 +174,10 @@ namespace cutfemx::quadrature
 
     for(std::size_t i=0;i<num_entities;i++)
     {
+      // Skip empty cut cells (can happen when is_intersected and get_entity_flag disagree)
+      if(cut_cells[i]._connectivity.empty())
+        continue;
+        
       int parent_index = intersected_cells[i];
       runtime_rules._parent_map[i] = intersected_cells[i];
 
