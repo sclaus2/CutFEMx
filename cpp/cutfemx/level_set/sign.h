@@ -11,6 +11,11 @@
 #include <cutfemx/mesh/cell_triangle_map.h>
 #include <cutfemx/level_set/pt_tri_distance.h>
 #include <cutfemx/level_set/parallel_min_exchange.h>
+#include "geom_map.h"
+
+#include "sign_options.h"
+#include "sign_region.h"
+#include "winding.h"
 
 #include <span>
 #include <vector>
@@ -20,31 +25,6 @@
 #include <queue>
 
 namespace cutfemx::level_set {
-
-/// Sign determination mode
-enum class SignMode {
-    LocalNormalBand,   ///< Method 1: Fast sign via closest triangle normal
-    ComponentAnchor,   ///< Method 2: Global sign via mesh connectivity barriers
-    WindingNumber      ///< Method 3: Robust via generalized winding number
-};
-
-/// Options for sign computation
-struct SignOptions {
-    SignMode mode = SignMode::LocalNormalBand;
-    
-    // Method 1 options
-    double band_max_dist = -1.0;  ///< Max distance for sign assignment (-1 = all)
-    bool propagate_sign = true;   ///< Propagate sign from nearfield to farfield
-    
-    // Method 2 options
-    bool use_boundary_as_outside_anchor = true;
-    bool use_user_anchor_point = false;
-    std::array<double, 3> anchor_point = {0, 0, 0};
-    
-    // Method 3 options
-    double winding_threshold = 0.5;
-    int max_triangles_per_query = 10000;
-};
 
 namespace sign_detail {
 
@@ -158,40 +138,13 @@ void apply_sign_local_normal(
     
     const std::int32_t num_vertices = vertex_map->size_local() + vertex_map->num_ghosts();
     
-    // Get geometry coordinates with correct mapping
-    const Real* x = mesh->geometry().x().data();
-    auto geom_dofmap = mesh->geometry().dofmap();
+    // Build centralized mapping
+    VertexMapCache<Real> vmap;
+    vmap.build(*mesh, phi.function_space().get());
     
-    // Build vertex -> geometry DOF mapping
-    std::vector<std::int32_t> vert_to_geom(num_vertices, -1);
-    for (std::int32_t c = 0; c < static_cast<std::int32_t>(geom_dofmap.extent(0)); ++c) {
-        auto c_verts = cell_to_vertex->links(c);
-        for (std::size_t i = 0; i < c_verts.size(); ++i) {
-            std::int32_t v = c_verts[i];
-            if (v < num_vertices) {
-                vert_to_geom[v] = geom_dofmap(c, i);
-            }
-        }
-    }
-    
-    // Build vertex -> Function DOF mapping
-    // Assuming P1 Lagrange, typically vertex_idx == dof_idx locally, but reordering happens
-    std::vector<std::int32_t> vert_to_dof(num_vertices, -1);
-    auto dofmap = phi.function_space()->dofmap();
-    // Iterate over cells to map vertices
-    // We traverse all cells in the dofmap list (including ghosts if present in list)
-    // Actually simpler to iterate topology cells and assume geometry/function compatibility
-    const int num_cells = topology->index_map(tdim)->size_local() + topology->index_map(tdim)->num_ghosts();
-    for (std::int32_t c = 0; c < num_cells; ++c) {
-        auto c_verts = cell_to_vertex->links(c);
-        auto c_dofs = dofmap->cell_dofs(c);
-        for(size_t i=0; i<c_verts.size(); ++i) {
-             std::int32_t v = c_verts[i];
-             if (v < num_vertices) {
-                 vert_to_dof[v] = c_dofs[i];
-             }
-        }
-    }
+    // Alias for compatibility with existing code structure
+    const auto& vert_to_dof = vmap.vert_to_dof;
+    const auto& vert_to_geom = vmap.vert_to_geom;
     
     // Track which vertices have sign assigned
     std::vector<bool> has_sign(num_vertices, false);
@@ -206,9 +159,8 @@ void apply_sign_local_normal(
         
         if (opt.band_max_dist > 0 && phi_span[dof_v] > opt.band_max_dist) continue;
         
-        std::int32_t g = vert_to_geom[v];
-        if (g < 0) continue;
-        const Real* x_v = &x[3*g];
+        if (!vmap.has_geom(v)) continue;
+        const Real* x_v = vmap.coords(v);
         
         std::int32_t t = closest_tri[v];
         std::int32_t i0 = soup.tri[3*t];
@@ -259,9 +211,37 @@ void apply_sign(
             apply_sign_local_normal(phi, soup, map, closest_tri, opt);
             break;
         case SignMode::ComponentAnchor:
-            throw std::runtime_error("SignMode::ComponentAnchor not yet implemented");
+        {
+            // Method 2: 
+            // 1. Mark cut facets
+            auto mesh = phi.function_space()->mesh();
+            auto cut_facets = mark_cut_facets(*mesh, map, soup);
+            
+            int local_cuts = 0; 
+            for(bool b : cut_facets) if(b) local_cuts++;
+            int global_cuts_pre = 0;
+            MPI_Allreduce(&local_cuts, &global_cuts_pre, 1, MPI_INT, MPI_SUM, mesh->comm());
+            if (dolfinx::MPI::rank(mesh->comm()) == 0) std::cout << "Cut Facets Pre-Sync: " << global_cuts_pre << std::endl;
+
+            // Sync cut facets (OR)
+            auto topology = mesh->topology();
+            int tdim = topology->dim();
+            int fdim = tdim - 1;
+            or_exchange_bool(*topology->index_map(fdim), cut_facets);
+            
+            local_cuts = 0;
+            for(bool b : cut_facets) if(b) local_cuts++;
+            int global_cuts_post = 0;
+            MPI_Allreduce(&local_cuts, &global_cuts_post, 1, MPI_INT, MPI_SUM, mesh->comm());
+            if (dolfinx::MPI::rank(mesh->comm()) == 0) std::cout << "Cut Facets Post-Sync: " << global_cuts_post << std::endl;
+            
+            // 2. Apply sign via flooding
+            apply_sign_flood_fill(phi, *mesh, cut_facets);
+            break;
+        }
         case SignMode::WindingNumber:
-            throw std::runtime_error("SignMode::WindingNumber not yet implemented");
+            apply_sign_winding_number(phi, soup, opt);
+            break;
     }
 }
 

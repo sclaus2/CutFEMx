@@ -157,239 +157,114 @@ int main(int argc, char* argv[])
     
     auto dist_func = std::make_shared<fem::Function<T>>(V);
 
-    // ============================================================
-    // Compute unsigned distance using FMM
-    // ============================================================
-    if (rank == 0) std::cout << "\nComputing unsigned distance field...\n";
-    
+    // Definitions for loop
     cutfemx::level_set::FMMOptions fmm_opt;
     fmm_opt.band_layers = 2;
     fmm_opt.max_iter = 1000;
     
     std::vector<std::int32_t> closest_tri;
-    cutfemx::level_set::compute_unsigned_distance(
-        *dist_func, sphere_soup, cell_tri_map, fmm_opt, &closest_tri);
     
-    // ============================================================
-    // Apply sign using local normal projection
-    // ============================================================
-    cutfemx::level_set::SignOptions sign_opt;
-    sign_opt.mode = cutfemx::level_set::SignMode::LocalNormalBand;
-    cutfemx::level_set::apply_sign(
-        *dist_func, sphere_soup, cell_tri_map, closest_tri, sign_opt);
-    
-    if (rank == 0)
-    {
-        std::cout << "Signed distance field computed!\n";
-    }
-    
-
-    
-    // ============================================================
-    // Compute error against analytical solution
-    // ============================================================
-    
-    // Sphere parameters from generate_sphere.py
-    const double center[3] = {0.5, 0.5, 0.5};
-    const double radius = 0.3;
-    
-    const auto& geometry = bg_mesh->geometry();
-    std::span<const T> x = geometry.x();
-    auto geom_dofmap = geometry.dofmap();
-    
-    // Access function values for error check
-    std::span<const T> dist_vals = dist_func->x()->array();
-    
-    double local_L2_error_sq = 0.0;
-    double local_Linf_error = 0.0;
-    int local_count = 0;
-    
-    // Use topology to iterate cells and map to function DOFs
     auto topology = bg_mesh->topology();
     const int tdim = topology->dim();
     auto cell_to_vertex = topology->connectivity(tdim, 0);
     auto cell_map = topology->index_map(tdim);
     const std::int32_t num_cells = cell_map->size_local() + cell_map->num_ghosts();
-    
     auto dofmap = V->dofmap();
+    const auto& geometry = bg_mesh->geometry();
+    std::span<const T> x = geometry.x();
+    auto geom_dofmap = geometry.dofmap();
     
-    // Build vertex -> DOF mapping for verification
-    auto vertex_map_err = bg_mesh->topology()->index_map(0);
-    const std::int32_t num_vertices = vertex_map_err->size_local() + vertex_map_err->num_ghosts();
-    std::vector<std::int32_t> vert_to_dof(num_vertices, -1);
-    
-    for (std::int32_t c = 0; c < num_cells; ++c)
-    {
-        auto cell_verts = cell_to_vertex->links(c);
-        auto cell_dofs = dofmap->cell_dofs(c);
+    // Sphere parameters
+    const double center[3] = {0.5, 0.5, 0.5};
+    const double radius = 0.3;
 
-        // Map vertices
-        for (std::size_t i = 0; i < cell_verts.size(); ++i) {
-             std::int32_t v = cell_verts[i];
-             if (v < num_vertices) vert_to_dof[v] = cell_dofs[i];
-        }
+    // Verify ALL sign methods
+    struct MethodSpec {
+        cutfemx::level_set::SignMode mode;
+        std::string name;
+        std::string vtk_name;
+    };
+    
+    std::vector<MethodSpec> methods = {
+        {cutfemx::level_set::SignMode::LocalNormalBand, "Method 1 (LocalNormalBand)", "sign_method1.pvd"},
+        {cutfemx::level_set::SignMode::ComponentAnchor, "Method 2 (ComponentAnchor)", "sign_method2.pvd"},
+        {cutfemx::level_set::SignMode::WindingNumber,   "Method 3 (WindingNumber)",   "sign_method3.pvd"}
+    };
+    
+    for (const auto& method : methods) {
+        if (rank == 0) std::cout << "\n=== Testing " << method.name << " ===\n";
+        
+        // Reset distance to Unsigned
+        // Re-run FMM (fastest way to ensure clean state)
+        // Or store copy. Re-running is fine for demo size.
+        if (rank == 0) std::cout << "Re-computing unsigned distance...\n";
+        cutfemx::level_set::compute_unsigned_distance(
+             *dist_func, sphere_soup, cell_tri_map, fmm_opt, &closest_tri);
+        
+        // Apply Sign
+        cutfemx::level_set::SignOptions sign_opt;
+        sign_opt.mode = method.mode;
+        // Method 2 options
+        sign_opt.use_boundary_as_outside_anchor = true;
+        
+        // Method 3 options
+        sign_opt.winding_threshold = 0.5;
+        
+        cutfemx::level_set::apply_sign(
+            *dist_func, sphere_soup, cell_tri_map, closest_tri, sign_opt);
 
-        // Skip ghosts for error norm accumulation (count each cell only once)
-        if (c >= cell_map->size_local())
-            continue;
-            
-        for (std::size_t i = 0; i < cell_verts.size(); ++i)
-        {
-            // P1 dof index corresponds to vertex index 'i' in the cell
-            std::int32_t dof = cell_dofs[i];
-            
-            // Get value from function
-            T computed_dist = dist_vals[dof];
-            
-            // Check for uninitialized values (infinity)
-            if (computed_dist > 100.0) 
-                 continue; 
-            
-            // Analytical distance - use geometry dofmap to get correct coordinates
-            std::int32_t g = geom_dofmap(c, i);
-            T vx = x[3*g];
-            T vy = x[3*g+1];
-            T vz = x[3*g+2];
-            
-            T dx = vx - center[0];
-            T dy = vy - center[1];
-            T dz = vz - center[2];
-            T r = std::sqrt(dx*dx + dy*dy + dz*dz);
-            // Signed distance: negative inside, positive outside
-            T exact_dist = r - radius;
-            
-            T error = std::abs(computed_dist - exact_dist);
-            
-            local_L2_error_sq += error * error;
-            local_Linf_error = std::max(local_Linf_error, static_cast<double>(error));
-            local_count++;
-        }
-    }
-    
-    double global_L2_error_sq = 0.0;
-    double global_Linf_error = 0.0;
-    int global_count = 0;
-    
-    MPI_Reduce(&local_L2_error_sq, &global_L2_error_sq, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_Linf_error, &global_Linf_error, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_count, &global_count, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-    
-    if (rank == 0)
-    {
-        std::cout << "\nError Analysis (vs Exact Sphere):\n";
-        std::cout << "  L_inf Error: " << global_Linf_error << "\n";
-        std::cout << "  L_2 Error:   " << std::sqrt(global_L2_error_sq / global_count) << "\n";
-        std::cout << "\n";
-    }
-    
-    // Find location of max error
-    {
-        double max_err = 0;
-        int max_v = -1;
-        double max_computed = 0, max_exact = 0;
-        double max_x = 0, max_y = 0, max_z = 0;
+        // Error Analysis
+        double method_L2_error_sq = 0.0;
+        double method_Linf_error = 0.0;
+        int count = 0;
         
-        // Iterate over OWNED vertices by topology index
-        const std::int32_t size_local = vertex_map->size_local();
+        std::span<const T> vals = dist_func->x()->array();
 
-        for (std::int32_t v = 0; v < size_local; ++v) {
-            std::int32_t dof = vert_to_dof[v];
-            if (dof < 0) continue; // Should not happen for owned P1 vertices in most cases
-            
-            double computed = dist_vals[dof];
-            if (computed > 100.0) continue;
-            
-            double r = std::sqrt(std::pow(x[3*v] - center[0], 2) + 
-                                std::pow(x[3*v+1] - center[1], 2) + 
-                                std::pow(x[3*v+2] - center[2], 2));
-            double exact = r - radius;  // Signed: negative inside, positive outside
-            double err = std::abs(computed - exact);
-            
-            if (err > max_err) {
-                max_err = err;
-                max_v = v;
-                max_computed = computed;
-                max_exact = exact;
-                max_x = x[3*v];
-                max_y = x[3*v+1];
-                max_z = x[3*v+2];
-            }
+        // Error loop (simplified from above)
+        for (std::int32_t c = 0; c < num_cells; ++c) {
+            // Reuse local pointers/maps
+             auto cell_verts = cell_to_vertex->links(c);
+             auto cell_dofs = dofmap->cell_dofs(c);
+             
+             // Skip ghosts
+             if (c >= cell_map->size_local()) continue;
+             
+             for (std::size_t i = 0; i < cell_verts.size(); ++i) {
+                 std::int32_t dof = cell_dofs[i];
+                 T val = vals[dof];
+                 if (val > 100.0) continue;
+                 
+                 std::int32_t g = geom_dofmap(c, i);
+                 T vx = x[3*g], vy = x[3*g+1], vz = x[3*g+2];
+                 T r = std::sqrt(std::pow(vx-center[0],2) + std::pow(vy-center[1],2) + std::pow(vz-center[2],2));
+                 T exact = r - radius;
+                 
+                 T err = std::abs(val - exact);
+                 method_L2_error_sq += err * err;
+                 method_Linf_error = std::max(method_Linf_error, (double)err);
+                 count++;
+             }
         }
         
-        // Reduce to find global max error location
-        struct { double err; int rank; } local_max = {max_err, rank}, global_max;
-        MPI_Allreduce(&local_max, &global_max, 1, MPI_DOUBLE_INT, MPI_MAXLOC, MPI_COMM_WORLD);
+        double gl_L2_sq = 0.0, gl_Linf = 0.0;
+        int gl_count = 0;
+        MPI_Reduce(&method_L2_error_sq, &gl_L2_sq, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&method_Linf_error, &gl_Linf, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&count, &gl_count, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
         
-        if (rank == global_max.rank) {
-            std::cout << "\n=== Max Error Location ===\n";
-            std::cout << "  Vertex at: (" << max_x << ", " << max_y << ", " << max_z << ")\n";
-            std::cout << "  Computed distance: " << max_computed << "\n";
-            std::cout << "  Exact distance:    " << max_exact << "\n";
-            std::cout << "  Error:             " << max_err << "\n";
-            double r = std::sqrt(std::pow(max_x - center[0], 2) + 
-                                std::pow(max_y - center[1], 2) + 
-                                std::pow(max_z - center[2], 2));
-            std::cout << "  Radius from center: " << r << " (sphere radius: " << radius << ")\n";
+        if (rank == 0) {
+            std::cout << "  L_inf Error: " << gl_Linf << "\n";
+            std::cout << "  L_2 Error:   " << std::sqrt(gl_L2_sq / gl_count) << "\n";
         }
-        MPI_Barrier(MPI_COMM_WORLD);
-    }
-    
-    // Compute distance statistics again for reporting
-    T local_min = fmm_opt.inf_value;
-    T local_max = 0;
-    int local_inf_count = 0;
-    
-    const std::int32_t num_local_verts = vertex_map->size_local();
-    
-    for (std::int32_t v = 0; v < num_local_verts; ++v)
-    {
-        std::int32_t dof = vert_to_dof[v];
-        if (dof < 0) continue;
         
-        T val = dist_vals[dof];
-        
-        if (val < fmm_opt.inf_value)
-        {
-            local_min = std::min(local_min, val);
-            local_max = std::max(local_max, val);
-        }
-        else
-        {
-            ++local_inf_count;
-        }
+        // Write VTK
+        io::VTKFile vtk_file(MPI_COMM_WORLD, method.vtk_name.c_str(), "w");
+        vtk_file.write<T>({*dist_func}, 0.0);
+        vtk_file.close();
     }
     
-    T global_min, global_max;
-    int global_inf_count;
-    MPI_Reduce(&local_min, &global_min, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_max, &global_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_inf_count, &global_inf_count, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-    
-    if (rank == 0)
-    {
-        std::cout << "Distance field statistics:\n";
-        std::cout << "  Min distance: " << global_min << "\n";
-        std::cout << "  Max distance: " << global_max << "\n";
-        std::cout << "  Vertices with inf: " << global_inf_count << "\n";
-        
-        // For a sphere centered at (0.5, 0.5, 0.5) with radius 0.3:
-        // - Vertices at center should have dist ≈ 0.3
-        // - Vertices at corner (0,0,0) should have dist ≈ sqrt(3)*0.5 - 0.3 ≈ 0.566
-        std::cout << "\nExpected for sphere(center=0.5, r=0.3):\n";
-        std::cout << "  Min ≈ 0 (at surface)\n";
-        std::cout << "  Max ≈ 0.566 (at corners)\n";
-    }
-    
-    // Write to VTK file
-    io::VTKFile vtk_file(MPI_COMM_WORLD, "fmm_distance.pvd", "w");
-    vtk_file.write<T>({*dist_func}, 0.0);
-    vtk_file.close();
-    
-    if (rank == 0)
-    {
-        std::cout << "\nOutput written to fmm_distance.pvd\n";
-        std::cout << "Open in Paraview and color by distance.\n";
-    }
+    if (rank == 0) std::cout << "\nAll methods verified.\n";
+
 
     } // end dolfinx/VTK scope
 

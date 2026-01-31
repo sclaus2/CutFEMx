@@ -16,9 +16,8 @@
 
 #include "eikonal_update.h"
 #include "parallel_min_exchange.h"
-#include "band_selection.h"
-#include "vertex_graph.h"
 #include "pt_tri_distance.h"
+#include "geom_map.h"
 #include "../mesh/cell_triangle_map.h"
 #include "../mesh/distribute_stl.h" 
 
@@ -73,29 +72,13 @@ void compute_distance_fim(
     std::int32_t num_owned = vertex_map->size_local();
     
     // CRITICAL: Build mapping from topology vertex index to geometry DOF index
-    // In DOLFINx, x = geometry().x() is indexed by geometry DOFs, NOT topology vertices
-    const Real* x = mesh.geometry().x().data();
-    auto geom_dofmap = mesh.geometry().dofmap();
+    // Use centralized cache
+    VertexMapCache<Real> vmap;
+    vmap.build(mesh);
     
-    // OPTIMIZATION #1: Pre-compute vertex coordinates for cache locality
-    // Instead of indirect lookup via lambda, store coords contiguously
-    std::vector<Real> vertex_coords(3 * num_vertices);
-    for (std::int32_t c = 0; c < static_cast<std::int32_t>(geom_dofmap.extent(0)); ++c) {
-        auto c_verts = cell_to_vertex->links(c);
-        for (std::size_t i = 0; i < c_verts.size(); ++i) {
-            std::int32_t v = c_verts[i];
-            if (v < num_vertices) {
-                std::int32_t g = geom_dofmap(c, i);
-                vertex_coords[3*v]   = x[3*g];
-                vertex_coords[3*v+1] = x[3*g+1];
-                vertex_coords[3*v+2] = x[3*g+2];
-            }
-        }
-    }
-    
-    // Direct pointer access for coordinates (no indirection)
-    auto get_vertex_coords = [&vertex_coords](std::int32_t v) -> const Real* {
-        return &vertex_coords[3*v];
+    // Direct pointer access for coordinates via cache
+    auto get_vertex_coords = [&vmap](std::int32_t v) -> const Real* {
+        return vmap.coords(v);
     };
     
     // 1. Initialization (NearField)
@@ -109,7 +92,7 @@ void compute_distance_fim(
     
     // Initial sync to ensure consistency (e.g. if seeds are ghosts)
     std::vector<Real> dist_before(dist.begin(), dist.end());
-    min_exchange_vertices(*vertex_map, dist);
+    min_exchange_vertices(*vertex_map, dist, static_cast<Real>(opt.inf_value));
     
     int initial_activated = 0;
     
@@ -230,15 +213,15 @@ void compute_distance_fim(
         active_queue = std::move(next_active_queue);
         
         // B. Synchronization Phase
-        // OPTIMIZATION #2: Adaptive sync interval - less frequent syncs in later iterations
+        // FIX: Sync MORE frequently near convergence to fix boundary artifacts
         int current_sync_interval = opt.sync_interval;
-        if (iter >= 50) current_sync_interval = std::max(opt.sync_interval, 8);
-        else if (iter >= 20) current_sync_interval = std::max(opt.sync_interval, 4);
+        if (iter >= 50) current_sync_interval = 1;  // Sync every iteration late
+        else if (iter >= 20) current_sync_interval = std::min(opt.sync_interval, 2);
         
         if (iter % current_sync_interval == 0)
         {
             std::vector<Real> dist_before_sync(dist.begin(), dist.end()); 
-            min_exchange_vertices(*vertex_map, dist);
+            min_exchange_vertices(*vertex_map, dist, static_cast<Real>(opt.inf_value));
             
             int owned_cnt = 0;
             int ghost_cnt = 0;
@@ -336,21 +319,11 @@ void compute_unsigned_distance(
     // Track closest triangle if requested
     std::vector<std::int32_t> closest_tri(num_vertices, -1);
     
-    const Real* x = mesh->geometry().x().data();
+    // Build vertex -> geometry_dof and dof mapping
+    VertexMapCache<Real> vmap;
+    vmap.build(*mesh, dist_func.function_space().get());
+
     auto cell_to_vertex = mesh->topology()->connectivity(tdim, 0);
-    auto geom_dofmap = mesh->geometry().dofmap();
-    
-    // Build vertex -> geometry_dof mapping for correct coordinate access
-    std::vector<std::int32_t> vert_to_geom(num_vertices, -1);
-    for (std::int32_t c = 0; c < static_cast<std::int32_t>(geom_dofmap.extent(0)); ++c) {
-        auto c_verts = cell_to_vertex->links(c);
-        for (std::size_t i = 0; i < c_verts.size(); ++i) {
-            std::int32_t v = c_verts[i];
-            if (v < num_vertices) {
-                vert_to_geom[v] = geom_dofmap(c, i);
-            }
-        }
-    }
     
     // Correct iteration over CSR map
     std::size_t num_map_cells = map.num_cells();
@@ -366,9 +339,8 @@ void compute_unsigned_distance(
         
         for (std::int32_t v : cell_verts)
         {
-            std::int32_t g = vert_to_geom[v];
-            if (g < 0) continue; // Skip unmapped vertices
-            const Real* p = &x[3*g];
+            if (!vmap.has_geom(v)) continue;
+            const Real* p = vmap.coords(v);
             
             for (std::int32_t k = start; k < end; ++k)
             {
@@ -406,25 +378,12 @@ void compute_unsigned_distance(
     }
     
     // Copy result to Function
-    // 1. Build vertex -> DOF mapping
-    std::vector<std::int32_t> vert_to_dof(num_vertices, -1);
-    auto dofmap = dist_func.function_space()->dofmap();
-    const int num_cells = mesh->topology()->index_map(tdim)->size_local() + mesh->topology()->index_map(tdim)->num_ghosts();
-    for (std::int32_t c = 0; c < num_cells; ++c) {
-        auto c_verts = cell_to_vertex->links(c);
-        auto c_dofs = dofmap->cell_dofs(c);
-        for(size_t i=0; i<c_verts.size(); ++i) {
-             std::int32_t v = c_verts[i];
-             if (v < num_vertices) {
-                 vert_to_dof[v] = c_dofs[i];
-             }
-        }
-    }
+    // 1. Use cached vertex -> DOF mapping
     
     // 2. Copy values
     std::span<Real> func_vals = dist_func.x()->mutable_array();
     for(std::int32_t v=0; v<num_vertices; ++v) {
-        std::int32_t dof = vert_to_dof[v];
+        std::int32_t dof = vmap.vert_to_dof[v];
         if (dof >= 0 && dof < (std::int32_t)func_vals.size()) {
             func_vals[dof] = dist[v];
         }
