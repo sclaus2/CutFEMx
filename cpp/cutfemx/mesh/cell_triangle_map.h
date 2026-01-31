@@ -175,20 +175,93 @@ CellTriangleMap build_cell_triangle_map(
         cell_aabbs[c] = detail::cell_aabb(mesh, c);
     }
     
-    // Step 3: For each cell, find candidate triangles via AABB overlap
-    // Then filter with robust predicates
+    // Step 3: Acceleration - Build a Uniform Grid of Triangle Indices
+    // ----------------------------------------------------------------
+    // Compute grid bounds from triangle AABBs
+    std::array<Real, 3> grid_min = {std::numeric_limits<Real>::max(), std::numeric_limits<Real>::max(), std::numeric_limits<Real>::max()};
+    std::array<Real, 3> grid_max = {std::numeric_limits<Real>::lowest(), std::numeric_limits<Real>::lowest(), std::numeric_limits<Real>::lowest()};
     
+    for (const auto& box : tri_aabbs) {
+        grid_min[0] = std::min(grid_min[0], box[0]);
+        grid_min[1] = std::min(grid_min[1], box[1]);
+        grid_min[2] = std::min(grid_min[2], box[2]);
+        grid_max[0] = std::max(grid_max[0], box[3]);
+        grid_max[1] = std::max(grid_max[1], box[4]);
+        grid_max[2] = std::max(grid_max[2], box[5]);
+    }
+    
+    // Add small eps to max to ensure all points are inside [min, max)
+    Real eps = std::abs(grid_max[0] - grid_min[0]) * 1e-6 + 1e-10;
+    grid_max[0] += eps; grid_max[1] += eps; grid_max[2] += eps;
+    grid_min[0] -= eps; grid_min[1] -= eps; grid_min[2] -= eps;
+
+    // Heuristic: Grid resolution
+    // Aim for ~5 triangles per bin on average, but clamp resolution
+    int n_grid = std::ceil(std::pow(num_tris / 5.0, 1.0/3.0));
+    n_grid = std::max(1, std::min(n_grid, 50)); // Clamp between 1 and 50 per axis
+    
+    std::vector<std::vector<std::int32_t>> bins(n_grid * n_grid * n_grid);
+    auto get_bin_idx = [&](Real x, Real y, Real z) -> std::array<int, 3> {
+        int i = static_cast<int>((x - grid_min[0]) / (grid_max[0] - grid_min[0]) * n_grid);
+        int j = static_cast<int>((y - grid_min[1]) / (grid_max[1] - grid_min[1]) * n_grid);
+        int k = static_cast<int>((z - grid_min[2]) / (grid_max[2] - grid_min[2]) * n_grid);
+        return {std::clamp(i, 0, n_grid-1), std::clamp(j, 0, n_grid-1), std::clamp(k, 0, n_grid-1)};
+    };
+
+    // Fill bins
+    for (std::int32_t t = 0; t < num_tris; ++t) {
+        const auto& box = tri_aabbs[t];
+        auto b_min = get_bin_idx(box[0], box[1], box[2]);
+        auto b_max = get_bin_idx(box[3], box[4], box[5]);
+        
+        for (int k = b_min[2]; k <= b_max[2]; ++k) {
+            for (int j = b_min[1]; j <= b_max[1]; ++j) {
+                for (int i = b_min[0]; i <= b_max[0]; ++i) {
+                    bins[k*n_grid*n_grid + j*n_grid + i].push_back(t);
+                }
+            }
+        }
+    }
+    
+    // Step 4: Query Grid for each Cell
+    // --------------------------------
     result.offsets.resize(num_cells + 1);
     result.offsets[0] = 0;
     
     // Get cell type
     dolfinx::mesh::CellType cell_type = topology->cell_type();
-    
     std::vector<std::array<Real, 3>> cell_verts;
-    
+    std::vector<std::int32_t> candidates;
+    candidates.reserve(128); // Reserve for efficiency
+
     for (std::int32_t c = 0; c < num_cells; ++c)
     {
         const auto& c_aabb = cell_aabbs[c];
+        
+        // 1. Gather candidates from overlapping bins
+        candidates.clear();
+        auto b_min = get_bin_idx(c_aabb[0], c_aabb[1], c_aabb[2]);
+        auto b_max = get_bin_idx(c_aabb[3], c_aabb[4], c_aabb[5]);
+        
+        for (int k = b_min[2]; k <= b_max[2]; ++k) {
+            for (int j = b_min[1]; j <= b_max[1]; ++j) {
+                for (int i = b_min[0]; i <= b_max[0]; ++i) {
+                    int bin_id = k*n_grid*n_grid + j*n_grid + i;
+                    candidates.insert(candidates.end(), bins[bin_id].begin(), bins[bin_id].end());
+                }
+            }
+        }
+        
+        // Remove duplicates if multiple bins were touched
+        if (candidates.empty()) {
+            result.offsets[c + 1] = static_cast<std::int32_t>(result.data.size());
+            continue;
+        }
+        
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+        
+        // 2. Precise Checks on candidates
         detail::get_cell_vertices(mesh, c, cell_verts);
         
         // Build vertex pointer array for intersection tests
@@ -196,11 +269,11 @@ CellTriangleMap build_cell_triangle_map(
         for (std::size_t i = 0; i < cell_verts.size(); ++i)
             vert_ptrs[i] = cell_verts[i].data();
         
-        for (std::int32_t t = 0; t < num_tris; ++t)
+        for (std::int32_t t : candidates)
         {
             const auto& t_aabb = tri_aabbs[t];
             
-            // Quick AABB rejection
+            // Quick AABB rejection (still needed as bins are coarse)
             if (!detail::aabb_overlap(c_aabb.data(), t_aabb.data(), 
                                       static_cast<Real>(opt.aabb_padding)))
                 continue;
@@ -228,8 +301,6 @@ CellTriangleMap build_cell_triangle_map(
             }
             else
             {
-                // For other cell types, conservatively assume intersection
-                // if AABBs overlap
                 intersects = true;
             }
             

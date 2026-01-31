@@ -27,8 +27,25 @@ enum class PredSign : int {
 inline PredSign orient3d(const double* a, const double* b, 
                          const double* c, const double* d)
 {
-    // The GEO macros (expansion_create, expansion_diff, etc.) require 
-    // the GEO namespace to be available since they use unqualified names
+    // 1. Floating Point Filter
+    double ax = a[0], ay = a[1], az = a[2];
+    double bx = b[0] - ax, by = b[1] - ay, bz = b[2] - az;
+    double cx = c[0] - ax, cy = c[1] - ay, cz = c[2] - az;
+    double dx = d[0] - ax, dy = d[1] - ay, dz = d[2] - az;
+    
+    double det = bx * (cy * dz - cz * dy)
+               - by * (cx * dz - cz * dx)
+               + bz * (cx * dy - cy * dx);
+               
+    // Simple robust bound (assuming coordinates ~ O(1))
+    // For more generality one should compute bound based on input magnitudes.
+    // Keeping it simple but improved:
+    constexpr double filter_eps = 1e-10; 
+    if (std::abs(det) > filter_eps) {
+        return (det > 0) ? PredSign::POSITIVE : PredSign::NEGATIVE;
+    }
+
+    // 2. Exact Fallback
     using namespace GEO;
     
     // Use expansion arithmetic for exact computation
@@ -38,25 +55,25 @@ inline PredSign orient3d(const double* a, const double* b,
     const expansion& ay_ = expansion_create(a[1]);
     const expansion& az_ = expansion_create(a[2]);
     
-    const expansion& bx = expansion_diff(b[0], a[0]);
-    const expansion& by = expansion_diff(b[1], a[1]);
-    const expansion& bz = expansion_diff(b[2], a[2]);
+    const expansion& bx_ = expansion_diff(b[0], a[0]);
+    const expansion& by_ = expansion_diff(b[1], a[1]);
+    const expansion& bz_ = expansion_diff(b[2], a[2]);
     
-    const expansion& cx = expansion_diff(c[0], a[0]);
-    const expansion& cy = expansion_diff(c[1], a[1]);
-    const expansion& cz = expansion_diff(c[2], a[2]);
+    const expansion& cx_ = expansion_diff(c[0], a[0]);
+    const expansion& cy_ = expansion_diff(c[1], a[1]);
+    const expansion& cz_ = expansion_diff(c[2], a[2]);
     
-    const expansion& dx = expansion_diff(d[0], a[0]);
-    const expansion& dy = expansion_diff(d[1], a[1]);
-    const expansion& dz = expansion_diff(d[2], a[2]);
+    const expansion& dx_ = expansion_diff(d[0], a[0]);
+    const expansion& dy_ = expansion_diff(d[1], a[1]);
+    const expansion& dz_ = expansion_diff(d[2], a[2]);
     
     // Cross product c × d
-    const expansion& cxdy = expansion_product(cx, dy);
-    const expansion& cydx = expansion_product(cy, dx);
-    const expansion& cxdz = expansion_product(cx, dz);
-    const expansion& czdx = expansion_product(cz, dx);
-    const expansion& cydz = expansion_product(cy, dz);
-    const expansion& czdy = expansion_product(cz, dy);
+    const expansion& cxdy = expansion_product(cx_, dy_);
+    const expansion& cydx = expansion_product(cy_, dx_);
+    const expansion& cxdz = expansion_product(cx_, dz_);
+    const expansion& czdx = expansion_product(cz_, dx_);
+    const expansion& cydz = expansion_product(cy_, dz_);
+    const expansion& czdy = expansion_product(cz_, dy_);
     
     // Actually we need det3x3 of [b-a, c-a, d-a]
     // = bx*(cy*dz - cz*dy) - by*(cx*dz - cz*dx) + bz*(cx*dy - cy*dx)
@@ -65,18 +82,18 @@ inline PredSign orient3d(const double* a, const double* b,
     const expansion& t2 = expansion_diff(cxdz, czdx);
     const expansion& t3 = expansion_diff(cxdy, cydx);
     
-    const expansion& p1 = expansion_product(bx, t1);
-    const expansion& p2 = expansion_product(by, t2);
-    const expansion& p3 = expansion_product(bz, t3);
+    const expansion& p1 = expansion_product(bx_, t1);
+    const expansion& p2 = expansion_product(by_, t2);
+    const expansion& p3 = expansion_product(bz_, t3);
     
     const expansion& s1 = expansion_diff(p1, p2);
-    const expansion& det = expansion_sum(s1, p3);
+    const expansion& det_exact = expansion_sum(s1, p3);
     
     geo_argused(ax_);
     geo_argused(ay_);
     geo_argused(az_);
     
-    Sign s = det.sign();
+    Sign s = det_exact.sign();
     return static_cast<PredSign>(static_cast<int>(s));
 }
 

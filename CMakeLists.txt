@@ -21,10 +21,12 @@ find_package(spdlog REQUIRED)
 add_subdirectory(cpp)
 
 # Find DOLFINX Python Wrappers (required for array.h etc included by wrappers/fem.cpp)
+# Find DOLFINX Python Wrappers (required for array.h etc included by wrappers/fem.cpp)
 execute_process(
   COMMAND "${Python_EXECUTABLE}" -c "
-import dolfinx, os, mpi4py, petsc4py
+import sys
 try:
+    import dolfinx, os, mpi4py, petsc4py
     # DOLFINX
     inc = dolfinx.get_include()
     if os.path.exists(os.path.join(inc, 'array.h')):
@@ -43,18 +45,36 @@ try:
 
     # PETSC4PY
     print(petsc4py.get_include(), end='')
-except Exception:
-    print(';;')
+except ImportError as e:
+    print(f'IMPORT_ERROR: {e}', end='')
+except Exception as e:
+    print(f'ERROR: {e}', end='')
 "
   OUTPUT_VARIABLE PYTHON_INCLUDES
+  ERROR_VARIABLE PYTHON_STDERR
 )
 
-list(GET PYTHON_INCLUDES 0 DOLFINX_WRAPPERS_DIR)
-list(GET PYTHON_INCLUDES 1 MPI4PY_INCLUDE_DIR)
-list(GET PYTHON_INCLUDES 2 PETSC4PY_INCLUDE_DIR)
+if(PYTHON_INCLUDES MATCHES "IMPORT_ERROR" OR PYTHON_INCLUDES MATCHES "ERROR")
+    message(WARNING "Python module detection failed: ${PYTHON_INCLUDES}")
+    message(STATUS "Stderr: ${PYTHON_STDERR}")
+else()
+    list(LENGTH PYTHON_INCLUDES LEN)
+    if(LEN EQUAL 3)
+        list(GET PYTHON_INCLUDES 0 DOLFINX_WRAPPERS_DIR)
+        list(GET PYTHON_INCLUDES 1 MPI4PY_INCLUDE_DIR)
+        list(GET PYTHON_INCLUDES 2 PETSC4PY_INCLUDE_DIR)
+    else()
+        message(WARNING "Could not parse python includes. Output: ${PYTHON_INCLUDES}")
+    endif()
+endif()
 
+# Fallback: Try to use environment variables or verify found paths
 if(NOT DOLFINX_WRAPPERS_DIR)
-  message(WARNING "Could not automatically locate DOLFINX wrappers containing array.h. Build may fail.")
+  if(DEFINED ENV{DOLFINX_DIR})
+     set(DOLFINX_WRAPPERS_DIR "$ENV{DOLFINX_DIR}/lib/python3.13/site-packages/dolfinx/wrappers") 
+     # This is a guess, probably wrong for conda
+  endif()
+  message(WARNING "Could not automatically locate DOLFINX wrappers containing array.h. Build WILL FAIL if headers are not found.")
 else()
   message(STATUS "Found DOLFINX wrappers: ${DOLFINX_WRAPPERS_DIR}")
 endif()

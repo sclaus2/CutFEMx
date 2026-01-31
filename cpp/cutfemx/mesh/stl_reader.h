@@ -153,4 +153,89 @@ void read_stl_facets(const std::string& path,
     }
 }
 
+template <typename Real>
+std::pair<std::array<Real, 3>, std::array<Real, 3>> 
+compute_stl_bbox(const std::string& path)
+{
+    std::array<Real, 3> min_c = {
+        std::numeric_limits<Real>::max(),
+        std::numeric_limits<Real>::max(),
+        std::numeric_limits<Real>::max()
+    };
+    std::array<Real, 3> max_c = {
+        std::numeric_limits<Real>::lowest(),
+        std::numeric_limits<Real>::lowest(),
+        std::numeric_limits<Real>::lowest()
+    };
+    
+    // lambda to update bbox
+    auto update_bbox = [&](Real x, Real y, Real z) {
+        if (x < min_c[0]) min_c[0] = x;
+        if (y < min_c[1]) min_c[1] = y;
+        if (z < min_c[2]) min_c[2] = z;
+        
+        if (x > max_c[0]) max_c[0] = x;
+        if (y > max_c[1]) max_c[1] = y;
+        if (z > max_c[2]) max_c[2] = z;
+    };
+    
+    // Reuse logic from read_stl_facets but simplified
+    std::ifstream file(path, std::ios::binary);
+    if (!file) throw std::runtime_error("Could not open STL file: " + path);
+
+    // Read first 80 bytes
+    char header[80];
+    file.read(header, 80);
+    
+    bool is_binary = true;
+    std::uint32_t num_tris_binary = 0;
+    file.read(reinterpret_cast<char*>(&num_tris_binary), 4);
+    
+    file.seekg(0, std::ios::end);
+    std::size_t file_size = file.tellg();
+    std::size_t expected_size = 80 + 4 + num_tris_binary * 50;
+    
+    if (file_size != expected_size) is_binary = false;
+    
+    file.seekg(0, std::ios::beg);
+    
+    if (is_binary)
+    {
+        file.seekg(84, std::ios::beg);
+        struct __attribute__((packed)) StlFacetBin {
+            float n[3];
+            float v0[3];
+            float v1[3];
+            float v2[3];
+            std::uint16_t attr;
+        };
+        StlFacetBin facet;
+        for (std::uint32_t i = 0; i < num_tris_binary; ++i)
+        {
+            file.read(reinterpret_cast<char*>(&facet), 50);
+            update_bbox(static_cast<Real>(facet.v0[0]), static_cast<Real>(facet.v0[1]), static_cast<Real>(facet.v0[2]));
+            update_bbox(static_cast<Real>(facet.v1[0]), static_cast<Real>(facet.v1[1]), static_cast<Real>(facet.v1[2]));
+            update_bbox(static_cast<Real>(facet.v2[0]), static_cast<Real>(facet.v2[1]), static_cast<Real>(facet.v2[2]));
+        }
+    }
+    else
+    {
+        std::string line, word;
+        
+        while (std::getline(file, line))
+        {
+            std::stringstream ss(line);
+            ss >> word;
+            if (word == "vertex")
+            {
+                double vx, vy, vz;
+                ss >> vx >> vy >> vz;
+                update_bbox(static_cast<Real>(vx), static_cast<Real>(vy), static_cast<Real>(vz));
+            }
+        }
+    }
+    
+    return {min_c, max_c};
+}
+
 } // namespace cutfemx::mesh
