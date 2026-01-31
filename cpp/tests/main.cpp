@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <dolfinx/common/log.h>
 #include <mpi.h>
+#include <cstdlib>
 
 int main(int argc, char* argv[])
 {
@@ -11,6 +12,7 @@ int main(int argc, char* argv[])
   // termination only after all tests complete.
   MPI_Init(&argc, &argv);
   int result = Catch::Session().run(argc, argv);
-  MPI_Finalize();
-  return result;
+  MPI_Barrier(MPI_COMM_WORLD);
+  // MPI_Finalize();
+  std::_Exit(result);
 }

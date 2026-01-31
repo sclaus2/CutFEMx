@@ -37,3 +37,11 @@ target_compile_features(cutfemx PUBLIC cxx_std_20)
 if(DEFINED ENV{CONDA_PREFIX})
   target_include_directories(cutfemx BEFORE PUBLIC "$ENV{CONDA_PREFIX}/include")
 endif()
+
+if(CUTFEMX_USE_MULTIPRECISION_PSM)
+  target_sources(cutfemx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/geogram.psm.MultiPrecision/MultiPrecision_psm.cpp)
+  target_include_directories(cutfemx PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/geogram.psm.MultiPrecision>)
+  target_compile_definitions(cutfemx PUBLIC CUTFEMX_USE_MULTIPRECISION_PSM)
+endif()
+

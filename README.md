@@ -50,7 +50,7 @@ The CutFEMx library requires a FEniCSx installation version 0.9.0 with an extend
     ```bash
     conda install -c conda-forge numpy scipy sympy numba pyvista pytest
     conda install -c conda-forge blas blas-devel lapack libblas libcblas liblapack liblapacke libtmglib
-    conda install -c conda-forge mpi mpich kahip libboost-devel parmetis libscotch libptscotch pugixml spdlog
+    conda install -c conda-forge mpi mpich kahip libboost-devel parmetis libscotch libptscotch pugixml spdlog ccache
     conda install -c conda-forge mpi4py petsc4py slepc4py scikit-build-core 
     conda install -c conda-forge 'hdf5=*=mpi*' 'petsc=*=*real*' 'slepc=*=*real*' 'libadios2=*=mpi*'
     ```
@@ -117,12 +117,16 @@ The CutFEMx library requires a FEniCSx installation version 0.9.0 with an extend
 9. Install CutFEMx:
     ```bash
     git clone https://github.com/sclaus2/CutFEMx
-
     cd CutFEMx
-    export CMAKE_PREFIX_PATH=$CONDA_PREFIX
-    export CMAKE_INSTALL_PREFIX=$CONDA_PREFIX
 
-    # Install CutFEMx  (triggers C++ build via scikit-build-core)
+    # 1. Install C++ library and headers (Required for C++ demos/tests)
+    cd cpp
+    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" -B build-dir -S .
+    cmake --build build-dir
+    cmake --install build-dir
+    cd ..
+
+    # 2. Install Python interface
     python -m pip install --check-build-dependencies --no-build-isolation -v .
     ```
 
@@ -137,3 +141,23 @@ The `python/demo` directory contains several examples illustrating the usage of 
   - VTX output for parallel visualization.
 - **Moving Domain** (`demo_moving_poisson.py`): solving a time-dependent problem with a moving interface, demonstrating how to update quadrature rules and integration domains dynamically at each time step.
 
+
+## Running Cpp Tests
+
+To verify the installation and core functionality run the C++ tests located in `cpp/tests`.
+
+1.  **Configure and Build Tests**:
+    ```bash
+    cd cpp
+    # Configure (ensure your conda environment is active)
+    cmake -S . -B build
+    # Build
+    cmake --build build
+    ```
+
+2.  **Run Tests**:
+    The tests use `MPI` and `Catch2`. Use `mpirun` to execute them in parallel (required for distribution tests).
+    ```bash
+    # Run on 2 processes
+    mpirun -n 2 ./build/tests/tests
+    ```

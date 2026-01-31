@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.16)
 
 project(cutfemx-tests LANGUAGES C CXX VERSION 0.0.1)
 
@@ -8,15 +8,15 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Find DOLFINx config file
 find_package(DOLFINX REQUIRED)
-find_package(CUTFEMX REQUIRED)
+#find_package(CUTFEMX REQUIRED)
 
-add_custom_command(
-  OUTPUT scalar.c
-  COMMAND ffcx ${CMAKE_CURRENT_SOURCE_DIR}/scalar.py
-  VERBATIM
-  DEPENDS scalar.py
-  COMMENT "Compile scalar.py using FFCx"
-)
+#add_custom_command(
+#  OUTPUT scalar.c
+#  COMMAND ffcx ${CMAKE_CURRENT_SOURCE_DIR}/scalar.py
+#  VERBATIM
+#  DEPENDS scalar.py
+#  COMMENT "Compile scalar.py using FFCx"
+#)
 
 find_package(Catch2 3)
 
@@ -34,8 +34,12 @@ endif()
 # These tests can use the Catch2-provided main
 add_executable(tests
 main.cpp
-test.cpp
-${CMAKE_CURRENT_BINARY_DIR}/scalar.c)
+#test.cpp
+test_distribute_stl_facets.cpp
+test_orient_surface.cpp
+test_cell_triangle_map.cpp
+#${CMAKE_CURRENT_BINARY_DIR}/scalar.c)
+)
 
 target_link_libraries(tests PRIVATE Catch2::Catch2 dolfinx cutfemx)
 
