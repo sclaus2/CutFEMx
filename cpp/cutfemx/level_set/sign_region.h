@@ -333,6 +333,91 @@ void apply_sign_flood_fill(
         }
     }
     
+    // CRITICAL: Synchronize votes across MPI ranks
+    // Ghost vertices may have received votes from ONLY local cells, 
+    // while the owner needs to aggregate votes from ALL cells sharing the vertex.
+    // We use a SUM reduction: ghost → owner, then owner → ghost.
+    {
+        MPI_Comm comm = mesh.comm();
+        const int mpi_size = dolfinx::MPI::size(comm);
+        
+        if (mpi_size > 1) {
+            const std::int32_t size_local = vertex_map->size_local();
+            const std::int32_t num_ghosts_v = vertex_map->num_ghosts();
+            
+            std::span<const int> ghost_owners = vertex_map->owners();
+            std::span<const std::int64_t> ghosts_global = vertex_map->ghosts();
+            
+            // Count messages per destination
+            std::vector<int> send_counts(mpi_size, 0);
+            for (int owner : ghost_owners) send_counts[owner]++;
+            
+            std::vector<int> send_displs(mpi_size + 1, 0);
+            for (int i = 0; i < mpi_size; ++i) send_displs[i + 1] = send_displs[i] + send_counts[i];
+            
+            // Pack ghost votes and global IDs
+            std::vector<int> send_vals(num_ghosts_v);
+            std::vector<std::int64_t> send_global_ids(num_ghosts_v);
+            std::vector<int> cursors(mpi_size, 0);
+            
+            for (std::int32_t g = 0; g < num_ghosts_v; ++g) {
+                int owner = ghost_owners[g];
+                int idx = send_displs[owner] + cursors[owner]++;
+                send_vals[idx] = votes[size_local + g];
+                send_global_ids[idx] = ghosts_global[g];
+            }
+            
+            // Exchange counts
+            std::vector<int> recv_counts(mpi_size);
+            MPI_Alltoall(send_counts.data(), 1, MPI_INT, recv_counts.data(), 1, MPI_INT, comm);
+            
+            std::vector<int> recv_displs(mpi_size + 1, 0);
+            for (int i = 0; i < mpi_size; ++i) recv_displs[i + 1] = recv_displs[i] + recv_counts[i];
+            
+            int total_recv = recv_displs[mpi_size];
+            std::vector<int> recv_vals(total_recv);
+            std::vector<std::int64_t> recv_global_ids(total_recv);
+            
+            // Exchange values
+            MPI_Alltoallv(send_vals.data(), send_counts.data(), send_displs.data(), MPI_INT,
+                          recv_vals.data(), recv_counts.data(), recv_displs.data(), MPI_INT, comm);
+            MPI_Alltoallv(send_global_ids.data(), send_counts.data(), send_displs.data(), MPI_INT64_T,
+                          recv_global_ids.data(), recv_counts.data(), recv_displs.data(), MPI_INT64_T, comm);
+            
+            // SUM received ghost votes into owned vertices
+            auto local_range = vertex_map->local_range();
+            for (int i = 0; i < total_recv; ++i) {
+                std::int64_t global_id = recv_global_ids[i];
+                if (global_id >= local_range[0] && global_id < local_range[1]) {
+                    std::int32_t local_id = static_cast<std::int32_t>(global_id - local_range[0]);
+                    votes[local_id] += recv_vals[i];
+                }
+            }
+            
+            // Now send owner's final vote back to ghosts
+            std::vector<int> owned_reply(total_recv);
+            for (int i = 0; i < total_recv; ++i) {
+                std::int64_t global_id = recv_global_ids[i];
+                if (global_id >= local_range[0] && global_id < local_range[1]) {
+                    std::int32_t local_id = static_cast<std::int32_t>(global_id - local_range[0]);
+                    owned_reply[i] = votes[local_id];
+                }
+            }
+            
+            std::vector<int> ghost_update(num_ghosts_v);
+            MPI_Alltoallv(owned_reply.data(), recv_counts.data(), recv_displs.data(), MPI_INT,
+                          ghost_update.data(), send_counts.data(), send_displs.data(), MPI_INT, comm);
+            
+            // Update ghost votes with owner's aggregated value
+            std::fill(cursors.begin(), cursors.end(), 0);
+            for (std::int32_t g = 0; g < num_ghosts_v; ++g) {
+                int owner = ghost_owners[g];
+                int idx = send_displs[owner] + cursors[owner]++;
+                votes[size_local + g] = ghost_update[idx];
+            }
+        }
+    }
+    
     // 5. Update Phi
     // Need Vertex->Dof mapping.
     VertexMapCache<Real> vmap;
@@ -350,6 +435,7 @@ void apply_sign_flood_fill(
         data[dof] = s * std::abs(data[dof]);
     }
     
+    // Final sync: Ensure ghost DOFs match owner DOFs
     phi.x()->scatter_fwd();
 }
 

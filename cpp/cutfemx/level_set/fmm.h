@@ -282,6 +282,11 @@ void compute_distance_fim(
             break;
         }
     }
+    
+    // CRITICAL: Final owner→ghost copy to ensure perfect consistency for VTK output
+    // The MIN-rule sync may leave ghosts with values slightly different from owners.
+    // This strict copy ensures ghost values EXACTLY match their owners.
+    copy_owner_to_ghost(*vertex_map, dist);
 }
 
 // Helper to get keys from map

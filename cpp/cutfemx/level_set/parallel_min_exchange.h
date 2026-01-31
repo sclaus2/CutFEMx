@@ -171,6 +171,85 @@ void min_exchange_vertices(
     }
 }
 
+/// Strict owner→ghost copy (no MIN rule)
+/// Use this after FIM convergence to ensure ghost values exactly match owners
+/// for consistent VTK I/O.
+/// @param index_map Vertex index map from mesh topology
+/// @param dist Distance array (size = owned + ghosts). Modified in-place.
+template <typename Real>
+void copy_owner_to_ghost(
+    const dolfinx::common::IndexMap& index_map,
+    std::span<Real> dist)
+{
+    MPI_Comm comm = index_map.comm();
+    const int mpi_size = dolfinx::MPI::size(comm);
+    
+    if (mpi_size <= 1) return; // Nothing to do in serial
+    
+    const std::int32_t size_local = index_map.size_local();
+    const std::int32_t num_ghosts = index_map.num_ghosts();
+    
+    std::span<const int> ghost_owners = index_map.owners();
+    std::span<const std::int64_t> ghosts_global = index_map.ghosts();
+    
+    MPI_Datatype mpi_real = get_mpi_type<Real>();
+    
+    // Count messages per destination
+    std::vector<int> send_counts(mpi_size, 0);
+    for (int owner : ghost_owners) send_counts[owner]++;
+    
+    std::vector<int> send_displs(mpi_size + 1, 0);
+    for (int i = 0; i < mpi_size; ++i) send_displs[i + 1] = send_displs[i] + send_counts[i];
+    
+    // Pack ghost global IDs to request from owners
+    std::vector<std::int64_t> send_global_ids(num_ghosts);
+    std::vector<int> cursors(mpi_size, 0);
+    
+    for (std::int32_t g = 0; g < num_ghosts; ++g) {
+        int owner = ghost_owners[g];
+        int idx = send_displs[owner] + cursors[owner]++;
+        send_global_ids[idx] = ghosts_global[g];
+    }
+    
+    // Exchange counts
+    std::vector<int> recv_counts(mpi_size);
+    MPI_Alltoall(send_counts.data(), 1, MPI_INT, recv_counts.data(), 1, MPI_INT, comm);
+    
+    std::vector<int> recv_displs(mpi_size + 1, 0);
+    for (int i = 0; i < mpi_size; ++i) recv_displs[i + 1] = recv_displs[i] + recv_counts[i];
+    
+    int total_recv = recv_displs[mpi_size];
+    std::vector<std::int64_t> recv_global_ids(total_recv);
+    
+    // Exchange global IDs
+    MPI_Alltoallv(send_global_ids.data(), send_counts.data(), send_displs.data(), MPI_INT64_T,
+                  recv_global_ids.data(), recv_counts.data(), recv_displs.data(), MPI_INT64_T, comm);
+    
+    // Prepare owner values to send back
+    auto local_range = index_map.local_range();
+    std::vector<Real> owned_reply(total_recv);
+    
+    for (int i = 0; i < total_recv; ++i) {
+        std::int64_t global_id = recv_global_ids[i];
+        if (global_id >= local_range[0] && global_id < local_range[1]) {
+            std::int32_t local_id = static_cast<std::int32_t>(global_id - local_range[0]);
+            owned_reply[i] = dist[local_id];
+        }
+    }
+    
+    // Send owned values back to ghosts
+    std::vector<Real> ghost_update(num_ghosts);
+    MPI_Alltoallv(owned_reply.data(), recv_counts.data(), recv_displs.data(), mpi_real,
+                  ghost_update.data(), send_counts.data(), send_displs.data(), mpi_real, comm);
+    
+    // STRICT COPY: Overwrite ghost values with owner values (no MIN)
+    std::fill(cursors.begin(), cursors.end(), 0);
+    for (std::int32_t g = 0; g < num_ghosts; ++g) {
+        int owner = ghost_owners[g];
+        int idx = send_displs[owner] + cursors[owner]++;
+        dist[size_local + g] = ghost_update[idx];
+    }
+}
 
 /// Synchronize boolean array using Logical OR
 /// @param index_map Facet index map

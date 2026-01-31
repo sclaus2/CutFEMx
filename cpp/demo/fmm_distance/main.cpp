@@ -23,6 +23,7 @@
 #include <dolfinx/fem/Function.h>
 #include <dolfinx/fem/FunctionSpace.h>
 #include <dolfinx/io/VTKFile.h>
+#include <dolfinx/io/XDMFFile.h>
 
 #include <cutfemx/mesh/stl_surface.h>
 #include <cutfemx/mesh/cell_triangle_map.h>
@@ -186,9 +187,9 @@ int main(int argc, char* argv[])
     };
     
     std::vector<MethodSpec> methods = {
-        {cutfemx::level_set::SignMode::LocalNormalBand, "Method 1 (LocalNormalBand)", "sign_method1.pvd"},
-        {cutfemx::level_set::SignMode::ComponentAnchor, "Method 2 (ComponentAnchor)", "sign_method2.pvd"},
-        {cutfemx::level_set::SignMode::WindingNumber,   "Method 3 (WindingNumber)",   "sign_method3.pvd"}
+        {cutfemx::level_set::SignMode::LocalNormalBand, "Method 1 (LocalNormalBand)", "sign_method1.xdmf"},
+        {cutfemx::level_set::SignMode::ComponentAnchor, "Method 2 (ComponentAnchor)", "sign_method2.xdmf"},
+        {cutfemx::level_set::SignMode::WindingNumber,   "Method 3 (WindingNumber)",   "sign_method3.xdmf"}
     };
     
     for (const auto& method : methods) {
@@ -257,10 +258,14 @@ int main(int argc, char* argv[])
             std::cout << "  L_2 Error:   " << std::sqrt(gl_L2_sq / gl_count) << "\n";
         }
         
-        // Write VTK
-        io::VTKFile vtk_file(MPI_COMM_WORLD, method.vtk_name.c_str(), "w");
-        vtk_file.write<T>({*dist_func}, 0.0);
-        vtk_file.close();
+        // CRITICAL: Sync ghost values BEFORE writing VTK to avoid partition cracks
+        dist_func->x()->scatter_fwd();
+        
+        // Write XDMF (handles parallel I/O correctly, no partition cracks)
+        io::XDMFFile xdmf_file(MPI_COMM_WORLD, method.vtk_name.c_str(), "w");
+        xdmf_file.write_mesh(*bg_mesh);
+        xdmf_file.write_function(*dist_func, 0.0);
+        xdmf_file.close();
     }
     
     if (rank == 0) std::cout << "\nAll methods verified.\n";
