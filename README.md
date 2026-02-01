@@ -27,7 +27,7 @@ Poisson problem in a circular domain described by a level set function.
 
 ## Features
 - **Unfitted Discretization**: Solve PDEs on geometries defined by level set functions without remeshing.
-- **Runtime Quadrature**: Automatically generates high-order quadrature rules on cut elements using the [CutCells](https://github.com/sclaus2/cutcells) library and a custom FFCX backend.
+- **Runtime Quadrature**: Automatically generates quadrature rules on cut elements using the [CutCells](https://github.com/sclaus2/cutcells) library and a custom FFCX backend.
 - **Stabilization**: Implements **Ghost Penalty** stabilization to ensure condition number robustness independent of cut geometry..
 - **Parallel Support**: Fully compatible with MPI for large-scale distributed simulations.
 
@@ -50,7 +50,7 @@ The CutFEMx library requires a FEniCSx installation version 0.9.0 with an extend
     ```bash
     conda install -c conda-forge numpy scipy sympy numba pyvista pytest
     conda install -c conda-forge blas blas-devel lapack libblas libcblas liblapack liblapacke libtmglib
-    conda install -c conda-forge mpi mpich kahip libboost-devel parmetis libscotch libptscotch pugixml spdlog
+    conda install -c conda-forge mpi mpich kahip libboost-devel parmetis libscotch libptscotch pugixml spdlog ccache
     conda install -c conda-forge mpi4py petsc4py slepc4py scikit-build-core 
     conda install -c conda-forge 'hdf5=*=mpi*' 'petsc=*=*real*' 'slepc=*=*real*' 'libadios2=*=mpi*'
     ```
@@ -117,12 +117,16 @@ The CutFEMx library requires a FEniCSx installation version 0.9.0 with an extend
 9. Install CutFEMx:
     ```bash
     git clone https://github.com/sclaus2/CutFEMx
-
     cd CutFEMx
-    export CMAKE_PREFIX_PATH=$CONDA_PREFIX
-    export CMAKE_INSTALL_PREFIX=$CONDA_PREFIX
 
-    # Install CutFEMx  (triggers C++ build via scikit-build-core)
+    # 1. Install C++ library and headers (Required for C++ demos/tests)
+    cd cpp
+    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" -B build-dir -S .
+    cmake --build build-dir
+    cmake --install build-dir
+    cd ..
+
+    # 2. Install Python interface
     python -m pip install --check-build-dependencies --no-build-isolation -v .
     ```
 
@@ -136,4 +140,17 @@ The `python/demo` directory contains several examples illustrating the usage of 
   - Ghost penalty stabilization for velocity.
   - VTX output for parallel visualization.
 - **Moving Domain** (`demo_moving_poisson.py`): solving a time-dependent problem with a moving interface, demonstrating how to update quadrature rules and integration domains dynamically at each time step.
+- **Distance from STL** (`demo_stl_distance.py`): Computing a signed distance field from an arbitrary STL surface using a parallel Fast Marching Method. Automatically refining a background mesh around an STL surface to improve geometric resolution.
+- **Level Set Reinitialization** (`demo_reinit.py`): Converting a distorted level set function (e.g., parabolic) into a clean signed distance field using parallel FMM.
 
+## Geometry and Level Sets
+
+CutFEMx provides robust tools for handling complex geometries via level set functions. The library can generate distance fields from standard STL files and adaptively refine the mesh around them.
+
+<p align="center">
+  <img src="img/dino.png" alt="Dino STL distance field" width="45%" />
+  <img src="img/dino2.png" alt="Dino STL distance field (sliced)" width="45%" />
+</p>
+<p align="center">
+  <i>Example: Signed distance field computed from a dino STL surface on an adaptively refined mesh using `demo_stl_distance.py`.</i>
+</p>

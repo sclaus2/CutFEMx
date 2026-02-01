@@ -24,6 +24,7 @@
 
 #include <cutfemx/mesh/cut_mesh.h>
 #include <cutfemx/mesh/create_mesh.h>
+#include <cutfemx/mesh/stl/mesh_adapt_stl.h>
 
 namespace nb = nanobind;
 
@@ -77,6 +78,25 @@ void declare_mesh(nb::module_& m, std::string type)
               return cutfemx::mesh::create_cut_mesh(comm.get(),cut_cells,mesh,std::span(entities.data(),entities.size()));
             }
             , "create dolfinx mesh from cut cells and background entities");
+
+  m.def("refinement_edges_from_stl", [](dolfinx_wrappers::MPICommWrapper comm,
+                                        dolfinx::mesh::Mesh<T>& mesh,
+                                        std::string stl_path,
+                                        double padding,
+                                        int k_ring)
+        {
+          // We use the mesh communicator, ignoring passed comm for now as they should match
+          // or we could use comm.get() if we updated the C++ API.
+          auto edges = cutfemx::mesh::stl::refinement_edges_from_stl(mesh, stl_path, padding, k_ring);
+          
+          // Zero-copy mechanism for vector -> numpy array? 
+          // We need to transfer ownership or copy. Copy is safer.
+          size_t size = edges.size();
+          int32_t* data = new int32_t[size];
+          std::copy(edges.begin(), edges.end(), data);
+          nb::capsule owner(data, [](void *p) noexcept { delete[] (int32_t *) p; });
+          return nb::ndarray<int32_t, nb::numpy>(data, {size}, owner);
+        }, "Get refinement edges from STL");
 }
 
 } // namespace

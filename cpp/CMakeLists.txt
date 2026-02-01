@@ -11,6 +11,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Options
 option(BUILD_SHARED_LIBS "Build cutfemx with shared libraries." ON)
+option(CUTFEMX_USE_MULTIPRECISION_PSM "Use MultiPrecision_psm library for high precision arithmetic." ON)
 #add_feature_info(BUILD_SHARED_LIBS BUILD_SHARED_LIBS "Build cutfemx with shared libraries.")
 
 include(FeatureSummary)
@@ -20,11 +21,21 @@ find_package(CutCells REQUIRED)
 find_package(DOLFINX REQUIRED)
 find_package(spdlog REQUIRED)
 
-# Enable testing
-#enable_testing()
-
 # Source files
 add_subdirectory(cutfemx)
+
+option(CUTFEMX_BUILD_DEMOS "Build demos" OFF)
+option(BUILD_TESTING "Build tests" OFF)
+
+if(BUILD_TESTING)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
+
+if(CUTFEMX_BUILD_DEMOS)
+  add_subdirectory(demo/fmm_distance)
+  add_subdirectory(demo/reinit)
+endif()
 
 # Install the cutfemx library
 install(TARGETS cutfemx
