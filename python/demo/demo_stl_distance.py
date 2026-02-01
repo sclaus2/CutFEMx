@@ -8,11 +8,12 @@ from dolfinx.fem import FunctionSpace, Function
 from dolfinx.io import XDMFFile
 
 from cutfemx.level_set import compute_distance_from_stl
+from cutfemx.mesh import adapt_mesh_to_stl
 
 def demo_stl_distance():
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
-
+    
     # Path to STL file
     stl_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "Dino.stl"))
     
@@ -54,7 +55,7 @@ def demo_stl_distance():
     comm.Bcast(length_mesh, root=0)
 
     min_length = np.min(length_mesh)
-    n_min = 20
+    n_min = 5
 
     N_mesh = np.zeros(3, dtype=int)
     N_mesh[:] = np.round(length_mesh / min_length * n_min).astype(int)
@@ -68,6 +69,23 @@ def demo_stl_distance():
         ghost_mode=GhostMode.shared_facet
     )
 
+    if comm.rank == 0:
+        print(f"Initial mesh: {mesh.topology.index_map(mesh.topology.dim).size_global} cells")
+    
+    # Adaptive mesh refinement around STL:
+    # nlevels: Number of refinement levels
+    # k_ring: Number of neighbor rings to mark
+    # aabb_padding: Padding for STL search
+    
+    refined_mesh = adapt_mesh_to_stl(mesh, stl_path, 
+                                     nlevels=3, 
+                                     k_ring=1, 
+                                     aabb_padding=0.0,
+                                     ghost_mode=GhostMode.shared_facet)
+                                     
+    if comm.rank == 0:
+        print(f"Refined mesh: {refined_mesh.topology.index_map(refined_mesh.topology.dim).size_global} cells")
+
     import time
     
     # 2. Compute signed distance
@@ -75,7 +93,7 @@ def demo_stl_distance():
     t0 = time.time()
     
     from cutfemx.level_set import SignMode
-    dist = compute_distance_from_stl(mesh, stl_path, sign_mode=SignMode.ComponentAnchor)
+    dist = compute_distance_from_stl(refined_mesh, stl_path, sign_mode=SignMode.ComponentAnchor)
     
     t1 = time.time()
     if rank == 0: print(f"Computed distance in {t1-t0:.4f} s", flush=True)
@@ -85,8 +103,9 @@ def demo_stl_distance():
 
     # 5. Output
     with XDMFFile(comm, "distance_from_stl.xdmf", "w") as xdmf:
-        xdmf.write_mesh(mesh)
+        xdmf.write_mesh(refined_mesh)
         xdmf.write_function(dist)
-
+        xdmf.close()
+        
 if __name__ == "__main__":
     demo_stl_distance()

@@ -5,7 +5,7 @@
 // Uses Octree approximation for far-field triangles to reduce complexity from O(N*M) to O(N*logM).
 
 #include "sign_options.h"
-#include <cutfemx/mesh/stl_surface.h>
+#include <cutfemx/mesh/stl/stl_surface.h>
 
 #include <dolfinx/fem/Function.h>
 #include <dolfinx/mesh/Mesh.h>
@@ -284,7 +284,7 @@ void apply_sign_winding_number(
     }
     
     // 2. Build Barnes-Hut Octree
-    if (dolfinx::MPI::rank(comm) == 0) std::cout << "Building Winding Octree with " << all_triangles.size()/9 << " triangles..." << std::endl;
+    if (dolfinx::MPI::rank(comm) == 0) spdlog::info("Building Winding Octree with {} triangles...", all_triangles.size()/9);
     
     std::vector<std::int32_t> root_indices(all_triangles.size()/9);
     std::iota(root_indices.begin(), root_indices.end(), 0);

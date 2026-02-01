@@ -7,11 +7,13 @@
 //   3) WindingNumber   - robust global sign via generalized winding number
 
 #include <dolfinx/mesh/Mesh.h>
-#include <cutfemx/mesh/stl_surface.h>
-#include <cutfemx/mesh/cell_triangle_map.h>
+#include <cutfemx/mesh/stl/stl_surface.h>
+#include <cutfemx/mesh/stl/cell_triangle_map.h>
 #include <cutfemx/level_set/pt_tri_distance.h>
 #include <cutfemx/level_set/parallel_min_exchange.h>
 #include "geom_map.h"
+#include <dolfinx/common/log.h>
+#include <sstream>
 
 #include "sign_options.h"
 #include "sign_region.h"
@@ -221,7 +223,9 @@ void apply_sign(
             for(bool b : cut_facets) if(b) local_cuts++;
             int global_cuts_pre = 0;
             MPI_Allreduce(&local_cuts, &global_cuts_pre, 1, MPI_INT, MPI_SUM, mesh->comm());
-            if (dolfinx::MPI::rank(mesh->comm()) == 0) std::cout << "Cut Facets Pre-Sync: " << global_cuts_pre << std::endl;
+            if (dolfinx::MPI::rank(mesh->comm()) == 0) {
+                 spdlog::info("Cut Facets Pre-Sync: {}", global_cuts_pre);
+            }
 
             // Sync cut facets (OR)
             auto topology = mesh->topology();
@@ -233,7 +237,9 @@ void apply_sign(
             for(bool b : cut_facets) if(b) local_cuts++;
             int global_cuts_post = 0;
             MPI_Allreduce(&local_cuts, &global_cuts_post, 1, MPI_INT, MPI_SUM, mesh->comm());
-            if (dolfinx::MPI::rank(mesh->comm()) == 0) std::cout << "Cut Facets Post-Sync: " << global_cuts_post << std::endl;
+            if (dolfinx::MPI::rank(mesh->comm()) == 0) {
+                 spdlog::info("Cut Facets Post-Sync: {}", global_cuts_post);
+            }
             
             // 2. Apply sign via flooding
             apply_sign_flood_fill(phi, *mesh, cut_facets);

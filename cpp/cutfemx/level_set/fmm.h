@@ -18,8 +18,8 @@
 #include "parallel_min_exchange.h"
 #include "pt_tri_distance.h"
 #include "geom_map.h"
-#include "../mesh/cell_triangle_map.h"
-#include "../mesh/distribute_stl.h" 
+#include "../mesh/stl/cell_triangle_map.h"
+#include "../mesh/stl/distribute_stl.h" 
 
 namespace cutfemx::level_set {
 
@@ -108,7 +108,7 @@ void compute_distance_fim(
         }
     }
     
-    if (mpi_rank == 0) std::cout << "FIM Init: " << initial_activated << " active nodes." << std::endl;
+    if (mpi_rank == 0) spdlog::info("FIM Init: {} active nodes.", initial_activated);
     
     // 2. FIM Iteration Loop
     // ------------------------------------------------------------------------
@@ -262,7 +262,7 @@ void compute_distance_fim(
                 }
             }
             if ((owned_cnt + ghost_cnt > 0) && mpi_rank == 0 && iter%10==0) {
-                 std::cout << "Iter " << iter << " Sync: Owned=" << owned_cnt << " Ghost=" << ghost_cnt << std::endl;
+                spdlog::info("Iter {} Sync: Owned={} Ghost={}", iter, owned_cnt, ghost_cnt);
             }
         }
         
@@ -278,7 +278,7 @@ void compute_distance_fim(
         MPI_Allreduce(&local_q_size, &global_q_size, 1, MPI_INT, MPI_SUM, comm);
         
         if (global_max_change < opt.tol && global_q_size == 0) {
-            if (mpi_rank == 0) std::cout << "FIM Converged at iter " << iter << std::endl;
+            if (mpi_rank == 0) spdlog::info("FIM Converged at iter {}", iter);
             break;
         }
     }

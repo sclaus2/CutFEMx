@@ -16,7 +16,7 @@
 #include "geom_map.h"
 #include "parallel_min_exchange.h"
 
-#include <cutfemx/mesh/cell_triangle_map.h>
+#include <cutfemx/mesh/stl/cell_triangle_map.h>
 
 #include <vector>
 #include <span>
@@ -281,7 +281,7 @@ void reinitialize(
     int mpi_rank = dolfinx::MPI::rank(comm);
     
     if (mpi_rank == 0) {
-        std::cout << "Reinitializing level set (" << (tdim == 3 ? "3D" : "2D") << ")...\n";
+        spdlog::info("Reinitializing level set ({}D)...", tdim);
     }
     
     // 1. Store original signs for all vertices
@@ -308,8 +308,7 @@ void reinitialize(
     }
     
     if (mpi_rank == 0) {
-        std::cout << "Extracted surface: " << surface.nE() << " elements, " 
-                  << surface.nV() << " vertices\n";
+        spdlog::info("Extracted surface: {} elements, {} vertices", surface.nE(), surface.nV());
     }
     
     // 3. Build cell-element map from parent information
@@ -335,7 +334,7 @@ void reinitialize(
     }
     
     if (mpi_rank == 0) {
-        std::cout << "Near-field seeds: " << seeds.size() << "\n";
+        spdlog::info("Near-field seeds: {}", seeds.size());
     }
     
     // Run FIM to propagate distances
@@ -359,7 +358,7 @@ void reinitialize(
     phi.x()->scatter_fwd();
     
     if (mpi_rank == 0) {
-        std::cout << "Reinitialization complete.\n";
+        spdlog::info("Reinitialization complete.");
     }
 }
 

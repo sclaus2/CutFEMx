@@ -27,10 +27,10 @@
 #include <cutfemx/level_set/locate_entities.h>
 #include <cutfemx/level_set/ghost_penalty_facets.h>
 #include <cutfemx/level_set/compute_normal.h>
-#include <cutfemx/mesh/stl_surface.h>
-#include <cutfemx/mesh/stl_reader.h>
-#include <cutfemx/mesh/distribute_stl.h>
-#include <cutfemx/mesh/cell_triangle_map.h>
+#include <cutfemx/mesh/stl/stl_surface.h>
+#include <cutfemx/mesh/stl/stl_reader.h>
+#include <cutfemx/mesh/stl/distribute_stl.h>
+#include <cutfemx/mesh/stl/cell_triangle_map.h>
 #include <cutfemx/level_set/reinit.h>
 #include <cutfemx/level_set/sign.h>
 

@@ -23,6 +23,9 @@ foreach(DIR ${CUTFEMX_DIRS})
     COMPONENT Development)
 endforeach()
 
+install(FILES ${HEADERS_mesh_stl} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/cutfemx/mesh/stl
+  COMPONENT Development)
+
 target_include_directories(cutfemx PUBLIC
   $<INSTALL_INTERFACE:include>
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..;${CMAKE_CURRENT_SOURCE_DIR}>")

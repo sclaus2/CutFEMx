@@ -8,11 +8,13 @@
 // 4. Synchronize parallel ghosts to propagate flooding across partitions.
 
 #include "sign_options.h"
-#include <cutfemx/mesh/cell_triangle_map.h>
+#include <cutfemx/mesh/stl/cell_triangle_map.h>
 
-#include <cutfemx/mesh/tri_intersection.h>
+#include <cutfemx/mesh/stl/tri_intersection.h>
 #include <cutfemx/level_set/parallel_min_exchange.h>
 #include "geom_map.h"
+#include <dolfinx/common/log.h>
+#include <sstream>
 
 #include <dolfinx/mesh/Mesh.h>
 #include <dolfinx/mesh/Topology.h>
@@ -151,10 +153,7 @@ std::vector<bool> mark_cut_facets(
     // Explicitly Synchronize Cuts (OR rule)
     cutfemx::level_set::or_exchange_bool(*facet_map, is_cut);
 
-    if (dolfinx::MPI::rank(mesh.comm()) == 0) {
-        // std::cout << "DEBUG: mark_cut_facets found " << cut_count << " cuts locally (accumulated)." << std::endl;
-        // std::cout << "DEBUG: Post-Sync Cut Facets: " << cut_count_post << std::endl;
-    }
+    // Logging removed or moved to debug level if needed
     return is_cut;
 }
 
@@ -184,11 +183,6 @@ void apply_sign_flood_fill(
     std::vector<std::int8_t> cell_sign(num_total_cells, -1);
 
     // 2. Identify Seeds (Boundary Cells)
-    // A cell is on the boundary if it has a facet with only 1 neighbor (itself)
-    // AND that facet is not ghosted (handled implicitly by connectivity size).
-    // Note: In parallel, an inter-process facet has 2 neighbors (local + ghost).
-    // A physical boundary facet has 1 neighbor (local).
-    
     std::queue<std::int32_t> queue;
     std::vector<bool> visited(num_total_cells, false);
 
@@ -218,13 +212,17 @@ void apply_sign_flood_fill(
     long seed_count = queue.size();
     long total_seeds = 0;
     MPI_Allreduce(&seed_count, &total_seeds, 1, MPI_LONG, MPI_SUM, mesh.comm());
-    if (mpi_rank == 0) std::cout << "DEBUG: Flood seeds (boundary cells): " << total_seeds << std::endl;
+    if (mpi_rank == 0) {
+        spdlog::info("DEBUG: Flood seeds (boundary cells): {}", total_seeds);
+    }
     
     long cut_count = 0;
     for(bool b : cut_facets) if(b) cut_count++;
     long total_cuts = 0;
     MPI_Allreduce(&cut_count, &total_cuts, 1, MPI_LONG, MPI_SUM, mesh.comm());
-    if (mpi_rank == 0) std::cout << "DEBUG: Cut facets (local+ghost per rank): " << cut_count << " Total (approx): " << total_cuts << std::endl;
+    if (mpi_rank == 0) {
+         spdlog::info("DEBUG: Cut facets (local+ghost per rank): {} Total (approx): {}", cut_count, total_cuts);
+    }
     
     
     // We iterate until global convergence
@@ -298,7 +296,7 @@ void apply_sign_flood_fill(
     }
     
     if (iter >= MAX_ITER && dolfinx::MPI::rank(mesh.comm()) == 0) {
-        std::cout << "WARNING: Flood fill max iterations reached! Flooding may be incomplete." << std::endl;
+        spdlog::warn("Flood fill max iterations reached! Flooding may be incomplete.");
     }
     
     // Debug: Final Positive Count
@@ -311,7 +309,9 @@ void apply_sign_flood_fill(
     long local_cells_count = (long)num_total_cells;
     MPI_Allreduce(&local_cells_count, &total_cells_global, 1, MPI_LONG, MPI_SUM, mesh.comm());
     
-    if (mpi_rank == 0) std::cout << "DEBUG: Final Positive Cells: " << global_pos << " / " << total_cells_global << std::endl;
+    if (mpi_rank == 0) {
+         spdlog::info("DEBUG: Final Positive Cells: {} / {}", global_pos, total_cells_global);
+    }
 
     // 4. Vote for Vertices
     if (!topology->connectivity(tdim, 0)) mesh_mut->create_connectivity(tdim, 0);
@@ -374,11 +374,11 @@ void apply_sign_flood_fill(
             std::vector<int> recv_displs(mpi_size + 1, 0);
             for (int i = 0; i < mpi_size; ++i) recv_displs[i + 1] = recv_displs[i] + recv_counts[i];
             
+            // Exchange values
             int total_recv = recv_displs[mpi_size];
             std::vector<int> recv_vals(total_recv);
             std::vector<std::int64_t> recv_global_ids(total_recv);
-            
-            // Exchange values
+
             MPI_Alltoallv(send_vals.data(), send_counts.data(), send_displs.data(), MPI_INT,
                           recv_vals.data(), recv_counts.data(), recv_displs.data(), MPI_INT, comm);
             MPI_Alltoallv(send_global_ids.data(), send_counts.data(), send_displs.data(), MPI_INT64_T,

@@ -56,7 +56,7 @@ void write_trisoup_vtk(const TriSoup<Real>& soup,
     }
     
     out.close();
-    std::cout << "Wrote surface: " << filename << " (" << nT << " triangles)\n";
+    spdlog::info("Wrote surface: {} ({} triangles)", filename, nT);
 }
 
 /// Compute axis-aligned bounding box of a TriSoup surface

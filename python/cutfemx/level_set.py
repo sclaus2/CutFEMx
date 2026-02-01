@@ -101,10 +101,12 @@ def compute_distance_from_stl(
     t_compute = time.time()
     
     if rank == 0:
-        print(f"  [Timing] FunctionSpace: {t_space - t_start:.4f}s")
-        print(f"  [Timing] Distribute:    {t_dist - t_space:.4f}s")
-        print(f"  [Timing] BuildMap:      {t_map - t_dist:.4f}s")
-        print(f"  [Timing] FMM+Sign:      {t_compute - t_map:.4f}s")
+        import logging
+        logger = logging.getLogger("cutfemx")
+        logger.info(f"  [Timing] FunctionSpace: {t_space - t_start:.4f}s")
+        logger.info(f"  [Timing] Distribute:    {t_dist - t_space:.4f}s")
+        logger.info(f"  [Timing] BuildMap:      {t_map - t_dist:.4f}s")
+        logger.info(f"  [Timing] FMM+Sign:      {t_compute - t_map:.4f}s")
     
     return dist_func
 
