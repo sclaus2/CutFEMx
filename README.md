@@ -27,7 +27,7 @@ Poisson problem in a circular domain described by a level set function.
 
 ## Features
 - **Unfitted Discretization**: Solve PDEs on geometries defined by level set functions without remeshing.
-- **Runtime Quadrature**: Automatically generates high-order quadrature rules on cut elements using the [CutCells](https://github.com/sclaus2/cutcells) library and a custom FFCX backend.
+- **Runtime Quadrature**: Automatically generates quadrature rules on cut elements using the [CutCells](https://github.com/sclaus2/cutcells) library and a custom FFCX backend.
 - **Stabilization**: Implements **Ghost Penalty** stabilization to ensure condition number robustness independent of cut geometry..
 - **Parallel Support**: Fully compatible with MPI for large-scale distributed simulations.
 
@@ -140,24 +140,17 @@ The `python/demo` directory contains several examples illustrating the usage of 
   - Ghost penalty stabilization for velocity.
   - VTX output for parallel visualization.
 - **Moving Domain** (`demo_moving_poisson.py`): solving a time-dependent problem with a moving interface, demonstrating how to update quadrature rules and integration domains dynamically at each time step.
+- **Distance from STL** (`demo_stl_distance.py`): Computing a signed distance field from an arbitrary STL surface using a parallel Fast Marching Method. Automatically refining a background mesh around an STL surface to improve geometric resolution.
+- **Level Set Reinitialization** (`demo_reinit.py`): Converting a distorted level set function (e.g., parabolic) into a clean signed distance field using parallel FMM.
 
+## Geometry and Level Sets
 
-## Running Cpp Tests
+CutFEMx provides robust tools for handling complex geometries via level set functions. The library can generate distance fields from standard STL files and adaptively refine the mesh around them.
 
-To verify the installation and core functionality run the C++ tests located in `cpp/tests`.
-
-1.  **Configure and Build Tests**:
-    ```bash
-    cd cpp
-    # Configure (ensure your conda environment is active)
-    cmake -S . -B build
-    # Build
-    cmake --build build
-    ```
-
-2.  **Run Tests**:
-    The tests use `MPI` and `Catch2`. Use `mpirun` to execute them in parallel (required for distribution tests).
-    ```bash
-    # Run on 2 processes
-    mpirun -n 2 ./build/tests/tests
-    ```
+<p align="center">
+  <img src="img/dino.png" alt="Dino STL distance field" width="45%" />
+  <img src="img/dino2.png" alt="Dino STL distance field (sliced)" width="45%" />
+</p>
+<p align="center">
+  <i>Example: Signed distance field computed from a dino STL surface on an adaptively refined mesh using `demo_stl_distance.py`.</i>
+</p>
