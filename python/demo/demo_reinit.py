@@ -6,6 +6,7 @@ import dolfinx
 from dolfinx.mesh import create_box, create_rectangle, CellType, GhostMode
 from dolfinx.fem import FunctionSpace, Function
 from dolfinx.io import XDMFFile
+from dolfinx import fem
 import ufl
 
 from cutfemx.level_set import reinitialize
@@ -48,7 +49,7 @@ def demo_reinit(dim=3):
         )
 
     # 2. Setup functions
-    V = FunctionSpace(mesh, ("Lagrange", 1))
+    V = fem.functionspace(mesh, ("Lagrange", 1))
     phi = Function(V)
     phi_exact = Function(V)
     

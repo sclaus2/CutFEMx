@@ -14,12 +14,12 @@ def demo_stl_distance():
     rank = comm.Get_rank()
 
     # Path to STL file
-    stl_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../sphere.stl"))
+    stl_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "Dino.stl"))
     
     if rank == 0:
         print(f"Computing distance to STL: {stl_path}")
         if not os.path.exists(stl_path):
-            print("Error: sphere.stl not found in root directory!")
+            print("Error: Dino.stl not found in root directory!")
             return
 
     # 1. Get bbox of STL to define background mesh
@@ -38,15 +38,32 @@ def demo_stl_distance():
     comm.Bcast(max_pt_stl, root=0)
 
     # Add some padding
-    padding = 0.2
+    min_coord = np.min(min_pt_stl)
+    max_coord = np.max(max_pt_stl)
+
+    length_diag = max_coord - min_coord
+    padding = 0.1 * length_diag
     min_pt_mesh = min_pt_stl - padding
     max_pt_mesh = max_pt_stl + padding
+
+    length_mesh = np.zeros(3, dtype=np.float64)
+
+    if rank == 0:
+        length_mesh[:] = max_pt_mesh - min_pt_mesh
+
+    comm.Bcast(length_mesh, root=0)
+
+    min_length = np.min(length_mesh)
+    n_min = 20
+
+    N_mesh = np.zeros(3, dtype=int)
+    N_mesh[:] = np.round(length_mesh / min_length * n_min).astype(int)
+    print(N_mesh)
     
-    n = 20
     mesh = create_box(
         comm,
         [min_pt_mesh, max_pt_mesh],
-        [n, n, n],
+        N_mesh,
         CellType.tetrahedron,
         ghost_mode=GhostMode.shared_facet
     )

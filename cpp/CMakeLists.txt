@@ -21,14 +21,21 @@ find_package(CutCells REQUIRED)
 find_package(DOLFINX REQUIRED)
 find_package(spdlog REQUIRED)
 
-# Enable testing
-# Enable testing
-enable_testing()
-
 # Source files
 add_subdirectory(cutfemx)
-add_subdirectory(tests)
-add_subdirectory(demo/fmm_distance)
+
+option(CUTFEMX_BUILD_DEMOS "Build demos" OFF)
+option(BUILD_TESTING "Build tests" OFF)
+
+if(BUILD_TESTING)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
+
+if(CUTFEMX_BUILD_DEMOS)
+  add_subdirectory(demo/fmm_distance)
+  add_subdirectory(demo/reinit)
+endif()
 
 # Install the cutfemx library
 install(TARGETS cutfemx
