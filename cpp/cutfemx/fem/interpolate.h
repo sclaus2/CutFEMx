@@ -40,12 +40,15 @@ namespace cutfemx::fem
     const basix::FiniteElement<T>& basix_element = element_in->basix_element();
     auto sub_mesh_cell_type = sub_mesh._cut_mesh->topology()->cell_type();
 
-    // basix::FiniteElement<T> e = basix::create_element<T>(
-    // basix_element.family(),
-    // dolfinx::mesh::cell_type_to_basix_type(sub_mesh_cell_type), basix_element.degree());
+    basix::FiniteElement<T> e = basix::create_element<T>(
+      basix_element.family(),
+      dolfinx::mesh::cell_type_to_basix_type(sub_mesh_cell_type), basix_element.degree(),
+      basix_element.lagrange_variant(),
+      basix_element.dpc_variant(),
+      basix_element.discontinuous());
 
     const std::span<const T>& u_in_values = u.x()->array();
-    auto V = std::make_shared<dolfinx::fem::FunctionSpace<U>>(dolfinx::fem::create_functionspace(sub_mesh._cut_mesh,basix_element,value_shape));
+    auto V = std::make_shared<dolfinx::fem::FunctionSpace<U>>(dolfinx::fem::create_functionspace(sub_mesh._cut_mesh,e,value_shape));
 
     dolfinx::fem::Function<T,U> u_out(V);
 

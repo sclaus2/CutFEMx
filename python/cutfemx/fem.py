@@ -598,28 +598,42 @@ def cut_function(
     # (The C++ object already instantiated the space, we just need to wrap it)
     cpp_V = cpp_func.function_space
     
-    # We need the dolfinx Mesh wrapper for the cut mesh
-    # sub_mesh._cpp_object._cut_mesh gives C++ mesh
-    # sub_mesh.cut_mesh gives the Python Mesh wrapper (it should!)
-    # Checking CutMesh.py... it seems to have ._mesh attribute?
-    cut_mesh_wrapper = sub_mesh._mesh # Assuming this exists from CutMesh definition
+    # FunctionSpace wrapper needs a UFL element matching the C++ element.
+    # The C++ element now (after our fix) matches the sub_mesh cell type.
+    # But 'elem' is still the background element (e.g. Tetrahedron).
+    # We must create a new UFL element with the sub_mesh cell type.
+    
+    cut_mesh_wrapper = sub_mesh._mesh
+    cell_name = cut_mesh_wrapper.topology.cell_name()
+    
+    # Create new compatible element
+    # Use basix.ufl.element (preferred in dolfinx)
+    family = elem.family_name
+    # degree is a property in recent dolfinx/ufl
+    degree = elem.degree
+    # Check if vector/tensor
+    shape = elem.reference_value_shape
+    
+    # Note: family_name might be 'Lagrange', 'Discontinuous Lagrange' etc.
+    # If using basix.ufl.element, we should pass corresponding args.
+    # Alternatively we can try to rely on the fact that cpp_V has the element? 
+    # But FunctionSpace(...) checks strict compatibility.
+    
+    new_elem = basix.ufl.element(
+        family, 
+        cell_name, 
+        degree, 
+        shape=shape, 
+        dtype=u.x.array.dtype
+    )
     
     # Create a Python FunctionSpace wrapper sharing the C++ object
-    # We need the UFL element.
-    # Ideally we'd just use the C++ space directly but FunctionSpace.__init__ requires ufl element
-    
-    # Quick fix: Construct a new Python FunctionSpace that mirrors the C++ one
-    # This creates a DUPLICATE C++ object if we aren't careful.
-    # dolfinx.fem.FunctionSpace(mesh, element, cppV=...) allows wrapping!
-    
-    V_cut = fem.FunctionSpace(cut_mesh_wrapper, elem, cppV=cpp_V)
+    V_cut = fem.FunctionSpace(cut_mesh_wrapper, new_elem, cppV=cpp_V)
     
     # Now create the Function properly
+    from dolfinx.fem import Function
     func = Function(V_cut)
-    # Replace the underlying C++ object (though Function(V_cut) creates a new one initialized to 0)
-    # The C++ object `cpp_func` has the data we want.
-    # We should copy the data or swap the pointer.
-    # Function has `_cpp_object`, we can swap it.
+    # Replace the underlying C++ object
     func._cpp_object = cpp_func
     
     # Correct the vector wrapper
