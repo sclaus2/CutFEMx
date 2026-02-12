@@ -6,6 +6,7 @@
 #include "create_mesh.h"
 
 #include <cutcells/utils.h>
+#include <cutcells/cell_topology.h>
 
 #include <dolfinx/mesh/cell_types.h>
 #include <dolfinx/mesh/utils.h>
@@ -13,9 +14,50 @@
 #include <cmath>
 #include <iterator>
 #include <algorithm>
+#include <unordered_map>
+#include <cstdint>
 
 namespace cutfemx::mesh
 {
+  namespace
+  {
+    struct VertexKey
+    {
+      // 0: original vertex (global vertex id)
+      // 1: edge intersection (global vertex id pair)
+      // 2: special point (parent cell id + sid)
+      uint8_t kind = 0;
+      int32_t a = 0;
+      int32_t b = 0;
+
+      bool operator==(const VertexKey& other) const noexcept
+      {
+        return kind == other.kind && a == other.a && b == other.b;
+      }
+    };
+
+    struct VertexKeyHash
+    {
+      std::size_t operator()(const VertexKey& k) const noexcept
+      {
+        // Basic mix; good enough for small integer keys.
+        const std::size_t h0 = std::hash<int32_t>{}(k.a);
+        const std::size_t h1 = std::hash<int32_t>{}(k.b);
+        const std::size_t hk = std::hash<uint8_t>{}(k.kind);
+        return h0 ^ (h1 + 0x9e3779b97f4a7c15ULL + (h0 << 6) + (h0 >> 2)) ^ (hk << 1);
+      }
+    };
+
+    template <std::floating_point T>
+    inline void append_vertex_coords(std::vector<T>& out, const std::vector<T>& in,
+                    int local_vertex_id, int gdim)
+    {
+      const int base = local_vertex_id * gdim;
+      for (int j = 0; j < gdim; ++j)
+        out.push_back(in[base + j]);
+    }
+  }
+
   // Copy of create_mesh from utils.h in dolfinx with added return of reordered cell numbering
   // this cell reordering information is necessary to update the parent map for cut cells
   template <typename U>
@@ -183,57 +225,108 @@ namespace cutfemx::mesh
       }
     }
     
-    // If no valid cut cells found, try to infer gdim from existing vertex_coords
-    if(gdim == 0)
-    {
-      // No valid cut cells to merge
-      return;
-    }
+    if(gdim == 0) return;
     
-    int merged_vertex_id = 0;
-    int vertex_counter = 0;
-    if(vertex_coords.size()>0)
-    {
-      vertex_counter = (vertex_coords.size()/gdim) ;
-    }
+    std::unordered_map<VertexKey, int, VertexKeyHash> global_vertex_ids;
+    // Pre-reserve to avoid reallocations; rough estimate of unique vertices.
+    // In 3D, unique vertices are approx 1/6 of total vertex accesses in simplices.
+    global_vertex_ids.reserve(cut_cells._cut_cells.size() * 4); 
 
     int cut_cell_id = 0;
-
-    //Build vector of unique vertex coordinates on current processor
     for(auto & cut_cell : cut_cells._cut_cells)
     {
       if(cut_cell._vertex_coords.size()==0)
       {
+        cut_cell_id++;
         continue;
       }
 
       int num_cut_cell_vertices = cut_cell._vertex_coords.size()/gdim;
-      int local_num_cells = cut_cell._connectivity.size();
       vertex_map[cut_cell_id].resize(num_cut_cell_vertices);
 
-      for(int local_id=0;local_id<num_cut_cell_vertices;local_id++)
+      // Determine whether we can use fast token-based dedup for this cut cell.
+      const bool has_tokens = (static_cast<int>(cut_cell._vertex_parent_entity.size()) == num_cut_cell_vertices);
+      const int parent_vertices = cutcells::cell::get_num_vertices(cut_cell._parent_cell_type);
+      const bool has_parent_ids = (static_cast<int>(cut_cell._parent_vertex_ids.size()) == parent_vertices);
+      const int parent_cell_id = cut_cells._parent_map.empty() ? -1 : cut_cells._parent_map[cut_cell_id];
+      const bool can_fast_dedup = has_tokens && has_parent_ids && (parent_cell_id >= 0);
+
+      if (can_fast_dedup)
       {
-        //check if vertex already exists to avoid doubling of vertices
-        int id = cutcells::utils::vertex_exists<T>(vertex_coords, cut_cell._vertex_coords, local_id, gdim);
-
-        if(id==-1) //not found
+        const auto parent_edges = cutcells::cell::edges(cut_cell._parent_cell_type);
+        for (int local_id = 0; local_id < num_cut_cell_vertices; ++local_id)
         {
-          //add vertex
-          merged_vertex_id=vertex_counter;
-          vertex_counter++;
+          const int32_t token = cut_cell._vertex_parent_entity[local_id];
+          VertexKey key;
 
-          for(int j=0;j<gdim;j++)
+          if (token >= 100 && token < 200)
           {
-            vertex_coords.push_back(cut_cell._vertex_coords[local_id*gdim+j]);
+            const int ref_vid = static_cast<int>(token - 100);
+            if (ref_vid < 0 || ref_vid >= parent_vertices)
+            {
+              key.kind = 2; key.a = parent_cell_id; key.b = token;
+            }
+            else
+            {
+              key.kind = 0;
+              key.a = static_cast<int32_t>(cut_cell._parent_vertex_ids[ref_vid]);
+              key.b = 0;
+            }
+          }
+          else if (token >= 200)
+          {
+            key.kind = 2; key.a = parent_cell_id; key.b = static_cast<int32_t>(token - 200);
+          }
+          else
+          {
+            const int edge_id = static_cast<int>(token);
+            if (edge_id < 0 || edge_id >= static_cast<int>(parent_edges.size()))
+            {
+              key.kind = 2; key.a = parent_cell_id; key.b = token;
+            }
+            else
+            {
+              const int v0 = parent_edges[edge_id][0];
+              const int v1 = parent_edges[edge_id][1];
+              const int32_t gv0 = static_cast<int32_t>(cut_cell._parent_vertex_ids[v0]);
+              const int32_t gv1 = static_cast<int32_t>(cut_cell._parent_vertex_ids[v1]);
+              key.kind = 1;
+              key.a = std::min(gv0, gv1);
+              key.b = std::max(gv0, gv1);
+            }
+          }
+
+          auto it = global_vertex_ids.find(key);
+          if (it == global_vertex_ids.end())
+          {
+            const int merged_vertex_id = static_cast<int>(vertex_coords.size() / gdim);
+            append_vertex_coords<T>(vertex_coords, cut_cell._vertex_coords, local_id, static_cast<int>(gdim));
+            global_vertex_ids.emplace(key, merged_vertex_id);
+            vertex_map[cut_cell_id][local_id] = merged_vertex_id;
+          }
+          else
+          {
+            vertex_map[cut_cell_id][local_id] = it->second;
           }
         }
-        else //found
+      }
+      else
+      {
+        // Fallback: coordinate-based dedup
+        for (int local_id = 0; local_id < num_cut_cell_vertices; ++local_id)
         {
-          //take already existing vertex for local mapping
-          merged_vertex_id = id;
+          int id = cutcells::utils::vertex_exists<T>(vertex_coords, cut_cell._vertex_coords, local_id, gdim);
+          if (id == -1)
+          {
+            int merged_vertex_id = static_cast<int>(vertex_coords.size() / gdim);
+            for (int j = 0; j < gdim; j++) vertex_coords.push_back(cut_cell._vertex_coords[local_id * gdim + j]);
+            vertex_map[cut_cell_id][local_id] = merged_vertex_id;
+          }
+          else
+          {
+            vertex_map[cut_cell_id][local_id] = id;
+          }
         }
-        //offset is vertex_id
-        vertex_map[cut_cell_id][local_id] = merged_vertex_id;
       }
       cut_cell_id++;
     }
