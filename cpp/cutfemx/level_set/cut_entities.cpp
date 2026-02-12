@@ -17,6 +17,7 @@
 #include <dolfinx/fem/DofMap.h>
 
 #include <dolfinx/common/MPI.h>
+#include <dolfinx/common/IndexMap.h>
 #include <dolfinx/graph/AdjacencyList.h>
 #include <dolfinx/mesh/utils.h>
 
@@ -70,6 +71,14 @@ namespace cutfemx::level_set
         // needs to be changed for prisms and pyramids
         dolfinx::mesh::CellType entity_type = dolfinx::mesh::cell_entity_type(cell_type, tdim, 0);
         auto cutcells_cell_type = mesh::dolfinx_to_cutcells_cell_type(entity_type);
+
+        // Create connectivity to vertices for topological IDs
+        mesh->topology_mutable()->create_connectivity(tdim, 0);
+        auto e_to_v = mesh->topology()->connectivity(tdim, 0);
+        assert(e_to_v);
+        auto vertex_map = mesh->topology()->index_map(0);
+        assert(vertex_map);
+        auto vertex_globals = vertex_map->global_indices();
 
         // Get level set values
         const std::span<const U>& ls_values = level_set->x()->array();
@@ -139,6 +148,14 @@ namespace cutfemx::level_set
                           throw std::invalid_argument( "Cut routines are only implemented for linear and quadratic elements" );
                         }
               }
+
+              cut_cell._parent_cell_type = cutcells_cell_type;
+              
+              // Populate parent_vertex_ids with topological global indices
+              auto entity_vertices = e_to_v->links(entity_index);
+              cut_cell._parent_vertex_ids.resize(entity_vertices.size());
+              for (std::size_t j = 0; j < entity_vertices.size(); ++j)
+                cut_cell._parent_vertex_ids[j] = static_cast<int>(vertex_globals[entity_vertices[j]]);
 
               cut_mesh._cut_cells[cut_cell_id] = cut_cell;
               int cell_index = entity_index;
@@ -210,6 +227,14 @@ namespace cutfemx::level_set
       basix::cell::type basix_cell_type = dolfinx::mesh::cell_type_to_basix_type(bg_cell_type);
       cutcells::cell::type cutcells_cell_type = mesh::dolfinx_to_cutcells_cell_type(bg_cell_type);
 
+      // Create connectivity to vertices for topological IDs
+      mesh->topology_mutable()->create_connectivity(tdim, 0);
+      auto e_to_v = mesh->topology()->connectivity(tdim, 0);
+      assert(e_to_v);
+      auto vertex_map = mesh->topology()->index_map(0);
+      assert(vertex_map);
+      auto vertex_globals = vertex_map->global_indices();
+
       //get reference cell geometry (vertex coordinates in reference space of parent cell)
       auto [xdata, xshape] = basix_element.points();
 
@@ -244,6 +269,14 @@ namespace cutfemx::level_set
                       throw std::invalid_argument( "Cut routines are only implemented for linear and quadratic elements" );
                     }
           }
+
+          // Populate parent context
+          cut_cells[i]._parent_cell_type = cutcells_cell_type;
+          
+          auto entity_vertices = e_to_v->links(entity_index);
+          cut_cells[i]._parent_vertex_ids.resize(entity_vertices.size());
+          for (std::size_t j = 0; j < entity_vertices.size(); ++j)
+            cut_cells[i]._parent_vertex_ids[j] = static_cast<int>(vertex_globals[entity_vertices[j]]);
       }
     }
 
