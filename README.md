@@ -33,6 +33,44 @@ Poisson problem in a circular domain described by a level set function.
 
 ## Installation Instructions
 
+### Current migration branch
+
+For the current FEniCSx development migration, build CutFEMx from the prepared
+`fenicsx-pr-clean` environment. No explicit `cmake` command is needed for the
+Python package workflow; `pip` invokes `scikit-build-core`, which runs CMake
+internally.
+
+Run from the `CutFEMx` repository root:
+
+```bash
+env CONDA_PREFIX=/Users/sclaus/miniforge3/envs/fenicsx-pr-clean \
+  CMAKE_PREFIX_PATH=/Users/sclaus/miniforge3/envs/fenicsx-pr-clean \
+  PYTHONNOUSERSITE=1 \
+  CC=/Users/sclaus/miniforge3/envs/fenicsx-pr-clean/bin/clang \
+  CXX=/Users/sclaus/miniforge3/envs/fenicsx-pr-clean/bin/clang++ \
+  /Users/sclaus/miniforge3/envs/fenicsx-pr-clean/bin/python \
+  -m pip install --no-build-isolation --no-deps .
+```
+
+For iterative development, add `--force-reinstall`:
+
+```bash
+env CONDA_PREFIX=/Users/sclaus/miniforge3/envs/fenicsx-pr-clean \
+  CMAKE_PREFIX_PATH=/Users/sclaus/miniforge3/envs/fenicsx-pr-clean \
+  PYTHONNOUSERSITE=1 \
+  CC=/Users/sclaus/miniforge3/envs/fenicsx-pr-clean/bin/clang \
+  CXX=/Users/sclaus/miniforge3/envs/fenicsx-pr-clean/bin/clang++ \
+  /Users/sclaus/miniforge3/envs/fenicsx-pr-clean/bin/python \
+  -m pip install --no-build-isolation --no-deps --force-reinstall .
+```
+
+`--no-build-isolation` is required because the build must use the active
+FEniCSx/MPI/PETSc/runintgen environment and the DOLFINx Python wrapper headers.
+`--no-deps` prevents `pip` from replacing development FEniCSx packages with
+incompatible release packages.
+
+### Legacy FEniCSx 0.9 instructions
+
 The CutFEMx library requires a FEniCSx installation version 0.9.0 with an extended version of ffcx from here `git clone git@github.com:sclaus2/ffcx-runtime-0.9.0.git` . CutFEMx also requires CutCells. The installation instructions using conda to manage the dependencies are detailed below. Make sure to use python 3.12. 
 
 1. Create and activate a new conda environment:

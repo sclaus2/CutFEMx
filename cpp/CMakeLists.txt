@@ -17,9 +17,26 @@ option(CUTFEMX_USE_MULTIPRECISION_PSM "Use MultiPrecision_psm library for high p
 include(FeatureSummary)
 
 # Find DOLFINx config file
-find_package(CutCells REQUIRED)
-find_package(DOLFINX REQUIRED)
-find_package(spdlog REQUIRED)
+if(NOT TARGET OpenMP::OpenMP_CXX)
+  find_package(OpenMP REQUIRED COMPONENTS CXX)
+endif()
+if(NOT TARGET CUTCELLS::cutcells)
+  set(CUTFEMX_LOCAL_CUTCELLS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../CutCells/cpp")
+  if(EXISTS "${CUTFEMX_LOCAL_CUTCELLS_DIR}/CMakeLists.txt")
+    add_subdirectory("${CUTFEMX_LOCAL_CUTCELLS_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/_deps/cutcells" EXCLUDE_FROM_ALL)
+    if(NOT TARGET CUTCELLS::cutcells)
+      add_library(CUTCELLS::cutcells ALIAS cutcells)
+    endif()
+  else()
+    find_package(CutCells REQUIRED)
+  endif()
+endif()
+if(NOT TARGET dolfinx)
+  find_package(DOLFINX REQUIRED)
+endif()
+if(NOT TARGET spdlog::spdlog)
+  find_package(spdlog REQUIRED)
+endif()
 
 # Source files
 add_subdirectory(cutfemx)
@@ -58,7 +75,4 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/CUTFEMXConfig.cmake ${CMAKE_CURRENT_BI
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/cutfemx COMPONENT Development)
 install(EXPORT CUTFEMXTargets FILE CUTFEMXTargets.cmake NAMESPACE CUTFEMX::
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/cutfemx)
-
-
-
 

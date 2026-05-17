@@ -7,7 +7,22 @@ add_library(cutfemx)
 
 # ------------------------------------------------------------------------------
 # Add source files to the target
-set(CUTFEMX_DIRS level_set fem mesh quadrature)
+set(CUTFEMX_DIRS)
+if(CUTFEMX_BUILD_LEGACY_LEVEL_SET)
+  list(APPEND CUTFEMX_DIRS level_set)
+endif()
+if(CUTFEMX_BUILD_LEGACY_FEM)
+  list(APPEND CUTFEMX_DIRS fem)
+endif()
+if(CUTFEMX_BUILD_LEGACY_MESH)
+  list(APPEND CUTFEMX_DIRS mesh)
+endif()
+if(CUTFEMX_BUILD_LEGACY_QUADRATURE)
+  list(APPEND CUTFEMX_DIRS quadrature)
+endif()
+if(CUTFEMX_BUILD_MESH_CUTTER)
+  list(APPEND CUTFEMX_DIRS mesh_cutter)
+endif()
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.h.in version.h)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
@@ -23,8 +38,10 @@ foreach(DIR ${CUTFEMX_DIRS})
     COMPONENT Development)
 endforeach()
 
-install(FILES ${HEADERS_mesh_stl} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/cutfemx/mesh/stl
-  COMPONENT Development)
+if(CUTFEMX_BUILD_LEGACY_MESH)
+  install(FILES ${HEADERS_mesh_stl} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/cutfemx/mesh/stl
+    COMPONENT Development)
+endif()
 
 target_include_directories(cutfemx PUBLIC
   $<INSTALL_INTERFACE:include>
@@ -47,4 +64,3 @@ if(CUTFEMX_USE_MULTIPRECISION_PSM)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/geogram.psm.MultiPrecision>)
   target_compile_definitions(cutfemx PUBLIC CUTFEMX_USE_MULTIPRECISION_PSM)
 endif()
-

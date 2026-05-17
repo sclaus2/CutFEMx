@@ -58,10 +58,8 @@ cmake.build-type = "Release"
 cmake.define = { BUILD_SHARED_LIBS = "ON", CMAKE_INSTALL_INCLUDEDIR = "cutfemx/include" }
 wheel.license-files = ["LICENSE"]
 
-[tool.pytest]
-junit_family = "xunit2"
-
 [tool.pytest.ini_options]
+junit_family = "xunit2"
 markers = [
       "skip_in_parallel: marks tests that should be run in serial only.",
       "petsc4py: tests that require PETSc/petsc4py (deselect with '-m \"not petsc4py\"').",

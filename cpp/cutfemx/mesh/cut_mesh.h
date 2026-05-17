@@ -5,6 +5,8 @@
 // SPDX-License-Identifier:    MIT
 #pragma once
 
+#include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <dolfinx/mesh/Mesh.h>
@@ -15,7 +17,7 @@ namespace cutfemx::mesh
   struct CutMesh
   {
     // original background mesh
-    std::shared_ptr<dolfinx::mesh::Mesh<T>> _bg_mesh;
+    std::shared_ptr<const dolfinx::mesh::Mesh<T>> _bg_mesh;
     // cut out part of background mesh
     // in parallel vertices on processor boundaries are doubled
     // as cut mesh is only used for visualisation purposes
@@ -26,6 +28,6 @@ namespace cutfemx::mesh
     // tag if cell in cut_mesh is same cell geometry in background or not
     // if true -> geometry has changed, i.e. original background cell has been cut
     // this is important for interpolation from background mesh to cut mesh
-    std::vector<bool> _is_cut_cell;
+    std::vector<std::int8_t> _is_cut_cell;
   };
 }
