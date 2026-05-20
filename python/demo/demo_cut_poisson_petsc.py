@@ -6,9 +6,9 @@ from cutfemx.level_set import locate_entities, cut_entities, ghost_penalty_facet
 from cutfemx.level_set import compute_normal
 from cutfemx.mesh import create_cut_mesh, create_cut_cells_mesh
 from cutfemx.quadrature import runtime_quadrature, physical_points
-from cutfemx.fem import cut_form, cut_function
+from cutfemx.fem import active_domain, cut_form, cut_function
 
-from cutfemx.petsc import assemble_vector, assemble_matrix, deactivate, locate_dofs
+from cutfemx.petsc import assemble_vector, assemble_matrix
 
 from dolfinx import fem, mesh, plot, la
 
@@ -116,7 +116,8 @@ jit_options = {"cache_dir": os.getcwd()}
 a_cut = cut_form(a,  jit_options=jit_options)
 L_cut = cut_form(L,  jit_options=jit_options)
 
-dofs = locate_dofs("phi>0",level_set,[V])
+domain = active_domain(a_cut)
+dofs = domain.inactive_dofs
 bc = fem.dirichletbc(value=PETSc.ScalarType(0), dofs=dofs, V=V)
 
 A = assemble_matrix(a_cut, [bc])
@@ -163,4 +164,3 @@ with XDMFFile(msh.comm, "results/uh_cut.xdmf", "w") as file:
 
 with XDMFFile(msh.comm, "results/uh_I.xdmf", "w") as file:
     file.write_mesh(interface_mesh._mesh)
-

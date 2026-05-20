@@ -6,7 +6,7 @@ from cutfemx.level_set import locate_entities, cut_entities, ghost_penalty_facet
 from cutfemx.level_set import compute_normal
 from cutfemx.mesh import create_cut_mesh
 from cutfemx.quadrature import runtime_quadrature, physical_points
-from cutfemx.fem import assemble_vector, cut_form, assemble_matrix, deactivate, cut_function
+from cutfemx.fem import assemble_vector, cut_form, assemble_matrix, cut_function
 
 from dolfinx import fem, mesh, plot, default_scalar_type, la, io
 from dolfinx.fem import Constant
@@ -204,9 +204,8 @@ fem.apply_lifting(b.array, [a_cut._form], [bcs])
 b.scatter_reverse(la.InsertMode.add)
 fem.set_bc(b.array, bcs)
 
-# Deactivation Strategy:
-deactivate(A, "phi<0", level_set, [W, 0], diagonal=1.0)
-deactivate(A, "phi<0", level_set, [W, 1], diagonal=1.0)
+# Mixed-space active-domain deactivation is intentionally out of scope for v1.
+raise NotImplementedError("CutFEMx active-domain deactivation does not support mixed spaces in v1.")
 
 # Solve
 # Direct solver (MUMPS via PETSc or Scipy)

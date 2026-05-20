@@ -10,23 +10,24 @@
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
 #include <span>
 
 #include <dolfinx/fem/Function.h>
 
 #include <cutfemx/mesh/cut_mesh.h>
-#include <cutfemx/mesh_cutter/MeshCutter.h>
-#include <cutfemx/mesh_cutter/RuntimeQuadrature.h>
+#include <cutfemx/cut/cut.h>
+#include <cutfemx/cut/RuntimeQuadrature.h>
 
 namespace nb = nanobind;
 
 namespace
 {
 template <typename T>
-void declare_mesh_cutter(nb::module_& m, std::string type)
+void declare_cut_api(nb::module_& m, std::string type)
 {
-  using Cutter = cutfemx::MeshCutter<T>;
+  using CutData = cutfemx::CutData<T>;
   using CutMesh = cutfemx::mesh::CutMesh<T>;
   using RuntimeQuadrature = cutfemx::RuntimeQuadrature<T>;
 
@@ -123,74 +124,108 @@ void declare_mesh_cutter(nb::module_& m, std::string type)
       .def_prop_ro("kind",
                    [](RuntimeQuadrature&) { return std::string("per_entity"); });
 
-  std::string pyclass_name = "MeshCutter_" + type;
-  nb::class_<Cutter>(m, pyclass_name.c_str(), "CutFEMx mesh cutter")
-      .def("update", &Cutter::update)
-      .def(
-          "locate_entities",
-          [](const Cutter& self, const std::string& ls_part)
-          { return dolfinx_wrappers::as_nbarray(self.locate_entities(ls_part)); },
-          nb::arg("ls_part"))
-      .def(
-          "locate_entities_subset",
-          [](const Cutter& self, const std::string& ls_part,
-             nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> entities,
-             int entity_dim)
-          {
-            return dolfinx_wrappers::as_nbarray(self.locate_entities(
-                std::span<const std::int32_t>(entities.data(), entities.size()),
-                entity_dim, ls_part));
-          },
-          nb::arg("ls_part"), nb::arg("entities"), nb::arg("entity_dim"))
-      .def(
-          "create_cut_mesh",
-          [](const Cutter& self, const std::string& ls_part,
-             const std::string& mode)
-          { return self.create_cut_mesh(ls_part, mode); },
-          nb::arg("ls_part"), nb::arg("mode"))
-      .def(
-          "create_cut_mesh_subset",
-          [](const Cutter& self, const std::string& ls_part,
-             nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> entities,
-             int entity_dim, const std::string& mode)
-          {
-            return self.create_cut_mesh(
-                std::span<const std::int32_t>(entities.data(), entities.size()),
-                entity_dim, ls_part, mode);
-          },
-          nb::arg("ls_part"), nb::arg("entities"), nb::arg("entity_dim"),
-          nb::arg("mode"))
-      .def(
-          "runtime_quadrature",
-          [](const Cutter& self, const std::string& ls_part, int order)
-          { return self.runtime_quadrature(ls_part, order); },
-          nb::arg("ls_part"), nb::arg("order"))
-      .def(
-          "runtime_quadrature_subset",
-          [](const Cutter& self, const std::string& ls_part, int order,
-             nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> entities,
-             int entity_dim)
-          {
-            return self.runtime_quadrature(
-                std::span<const std::int32_t>(entities.data(), entities.size()),
-                entity_dim, ls_part, order);
-          },
-          nb::arg("ls_part"), nb::arg("order"), nb::arg("entities"),
-          nb::arg("entity_dim"));
+  std::string pyclass_name = "CutData_" + type;
+  nb::class_<CutData>(m, pyclass_name.c_str(), "CutFEMx cut data")
+      .def("update", [](CutData& self) { cutfemx::update(self); })
+      .def_prop_ro("num_local_cells",
+                   [](const CutData& self) { return self.num_local_cells; })
+      .def_prop_ro("tdim", [](const CutData& self) { return self.tdim; })
+      .def_prop_ro("gdim", [](const CutData& self) { return self.gdim; })
+      .def_prop_ro("level_set_names",
+                   [](const CutData& self) { return self.level_set_names; });
 
   m.def(
-      "mesh_cutter",
+      "cut",
       [](std::shared_ptr<const dolfinx::fem::Function<T>> level_set)
-      { return std::make_shared<Cutter>(std::move(level_set)); },
+      { return std::make_shared<CutData>(cutfemx::cut(std::move(level_set))); },
       nb::arg("level_set"));
+
+  m.def(
+      "cut_multi",
+      [](std::vector<std::shared_ptr<const dolfinx::fem::Function<T>>> level_sets)
+      {
+        return std::make_shared<CutData>(cutfemx::cut<T>(
+            std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>(
+                level_sets.data(), level_sets.size())));
+      },
+      nb::arg("level_sets"));
+
+  m.def(
+      "update_cut",
+      [](CutData& cut_data) { cutfemx::update(cut_data); },
+      nb::arg("cut"));
+
+  m.def(
+      "locate_entities",
+      [](const CutData& cut_data, const std::string& ls_part)
+      {
+        return dolfinx_wrappers::as_nbarray(
+            cutfemx::locate_entities(cut_data, ls_part));
+      },
+      nb::arg("cut"), nb::arg("ls_part"));
+
+  m.def(
+      "locate_entities_subset",
+      [](const CutData& cut_data, const std::string& ls_part,
+         nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> entities,
+         int entity_dim)
+      {
+        return dolfinx_wrappers::as_nbarray(cutfemx::locate_entities(
+            cut_data,
+            std::span<const std::int32_t>(entities.data(), entities.size()),
+            entity_dim, ls_part));
+      },
+      nb::arg("cut"), nb::arg("ls_part"), nb::arg("entities"),
+      nb::arg("entity_dim"));
+
+  m.def(
+      "create_cut_mesh",
+      [](const CutData& cut_data, const std::string& ls_part,
+         const std::string& mode)
+      { return cutfemx::create_cut_mesh(cut_data, ls_part, mode); },
+      nb::arg("cut"), nb::arg("ls_part"), nb::arg("mode"));
+
+  m.def(
+      "create_cut_mesh_subset",
+      [](const CutData& cut_data, const std::string& ls_part,
+         nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> entities,
+         int entity_dim, const std::string& mode)
+      {
+        return cutfemx::create_cut_mesh(
+            cut_data,
+            std::span<const std::int32_t>(entities.data(), entities.size()),
+            entity_dim, ls_part, mode);
+      },
+      nb::arg("cut"), nb::arg("ls_part"), nb::arg("entities"),
+      nb::arg("entity_dim"), nb::arg("mode"));
+
+  m.def(
+      "runtime_quadrature",
+      [](const CutData& cut_data, const std::string& ls_part, int order)
+      { return cutfemx::runtime_quadrature(cut_data, ls_part, order); },
+      nb::arg("cut"), nb::arg("ls_part"), nb::arg("order"));
+
+  m.def(
+      "runtime_quadrature_subset",
+      [](const CutData& cut_data, const std::string& ls_part, int order,
+         nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> entities,
+         int entity_dim)
+      {
+        return cutfemx::runtime_quadrature(
+            cut_data,
+            std::span<const std::int32_t>(entities.data(), entities.size()),
+            entity_dim, ls_part, order);
+      },
+      nb::arg("cut"), nb::arg("ls_part"), nb::arg("order"),
+      nb::arg("entities"), nb::arg("entity_dim"));
 }
 } // namespace
 
 namespace cutfemx_wrappers
 {
-void mesh_cutter(nb::module_& m)
+void cut(nb::module_& m)
 {
-  declare_mesh_cutter<float>(m, "float32");
-  declare_mesh_cutter<double>(m, "float64");
+  declare_cut_api<float>(m, "float32");
+  declare_cut_api<double>(m, "float64");
 }
 } // namespace cutfemx_wrappers

@@ -6,7 +6,14 @@ from cutfemx.level_set import locate_entities, cut_entities, ghost_penalty_facet
 from cutfemx.level_set import compute_normal
 from cutfemx.mesh import create_cut_mesh
 from cutfemx.quadrature import runtime_quadrature, physical_points
-from cutfemx.fem import assemble_vector, cut_form, assemble_matrix, deactivate, cut_function
+from cutfemx.fem import (
+  active_domain,
+  assemble_vector,
+  cut_form,
+  assemble_matrix,
+  deactivate_outside,
+  cut_function,
+)
 
 from dolfinx import fem, mesh, plot
 from dolfinx import default_real_type
@@ -138,7 +145,7 @@ while t<T:
 
   b = assemble_vector(L_cut)
   A = assemble_matrix(a_cut)
-  deactivate(A,"phi>0",level_set,[V])
+  deactivate_outside(A, active_domain(a_cut))
   A_py = A.to_scipy()
 
   u_sol = spsolve(A_py, b.array)
@@ -170,4 +177,3 @@ warped3 = grid.warp_by_scalar(scale_factor=10.0)
 plotter.add_mesh(warped3)
 
 plotter.show()
-

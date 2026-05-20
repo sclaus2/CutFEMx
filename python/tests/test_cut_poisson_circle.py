@@ -7,7 +7,14 @@ from dolfinx import mesh, fem, default_real_type
 from dolfinx.fem import form
 from cutfemx.level_set import locate_entities, compute_normal, ghost_penalty_facets, facet_topology
 from cutfemx.quadrature import runtime_quadrature
-from cutfemx.fem import assemble_vector, cut_form, assemble_matrix, deactivate, assemble_scalar
+from cutfemx.fem import (
+    active_domain,
+    assemble_vector,
+    cut_form,
+    assemble_matrix,
+    deactivate_outside,
+    assemble_scalar,
+)
 
 def solve_poisson(degree, n_ele=32):
     # 1. Create Mesh
@@ -99,7 +106,7 @@ def solve_poisson(degree, n_ele=32):
     b = assemble_vector(L_cut)
     
     # Deactivate outside DOFs
-    deactivate(A, "phi>0", level_set, [V])
+    deactivate_outside(A, active_domain(a_cut))
     
     # Solve
     from scipy.sparse.linalg import spsolve

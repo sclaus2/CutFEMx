@@ -20,6 +20,12 @@ It is developed to support cut finite element methods as described in
 
 The current version supports FEniCSx 0.9 with a customised ffcx version for runtime quadrature at [ffcx-runtime](https://github.com/sclaus2/ffcx-runtime-0.9.0).
 
+## License
+
+CutFEMx is licensed under the MIT License except for DOLFINx-derived form and
+assembler sources under `cpp/dolfinx_custom_data`, which are licensed under
+LGPL-3.0-or-later. See `THIRD_PARTY_NOTICES.md` for provenance and details.
+
 ![SVG Image](img/quadrature.svg)
 
 ![image info](img/cut_poisson_2.png)

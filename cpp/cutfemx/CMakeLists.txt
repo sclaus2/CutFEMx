@@ -1,53 +1,28 @@
-# ------------------------------------------------------------------------------
 include(GNUInstallDirs)
 
-# ------------------------------------------------------------------------------
-# Declare the library (target)
 add_library(cutfemx)
 
-# ------------------------------------------------------------------------------
-# Add source files to the target
-set(CUTFEMX_DIRS)
-if(CUTFEMX_BUILD_LEGACY_LEVEL_SET)
-  list(APPEND CUTFEMX_DIRS level_set)
-endif()
-if(CUTFEMX_BUILD_LEGACY_FEM)
-  list(APPEND CUTFEMX_DIRS fem)
-endif()
-if(CUTFEMX_BUILD_LEGACY_MESH)
-  list(APPEND CUTFEMX_DIRS mesh)
-endif()
-if(CUTFEMX_BUILD_LEGACY_QUADRATURE)
-  list(APPEND CUTFEMX_DIRS quadrature)
-endif()
-if(CUTFEMX_BUILD_MESH_CUTTER)
-  list(APPEND CUTFEMX_DIRS mesh_cutter)
-endif()
+set(CUTFEMX_DIRS
+  cut
+  fem
+  mesh)
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.h.in version.h)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
-# Add source to dolfinx target, and get sets of header files
 foreach(DIR ${CUTFEMX_DIRS})
   add_subdirectory(${DIR})
 endforeach()
 
 foreach(DIR ${CUTFEMX_DIRS})
-  set_target_properties(cutfemx PROPERTIES PRIVATE_HEADER "${HEADERS_${DIR}}")
   install(FILES ${HEADERS_${DIR}} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/cutfemx/${DIR}
     COMPONENT Development)
 endforeach()
-
-if(CUTFEMX_BUILD_LEGACY_MESH)
-  install(FILES ${HEADERS_mesh_stl} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/cutfemx/mesh/stl
-    COMPONENT Development)
-endif()
 
 target_include_directories(cutfemx PUBLIC
   $<INSTALL_INTERFACE:include>
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..;${CMAKE_CURRENT_SOURCE_DIR}>")
 
-# dolfinx
 target_link_libraries(cutfemx PUBLIC CUTCELLS::cutcells)
 target_link_libraries(cutfemx PUBLIC dolfinx)
 target_link_libraries(cutfemx PUBLIC spdlog::spdlog)

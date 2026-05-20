@@ -1,5 +1,28 @@
 # Third Party Notices
 
+## DOLFINx Form and Assembler Copies
+
+CutFEMx may include modified copies of selected DOLFINx form and assembler
+sources in `cpp/dolfinx_custom_data`.
+
+The copied code is derived from DOLFINx, which is licensed under
+LGPL-3.0-or-later:
+
+- Project: https://github.com/FEniCS/dolfinx
+- License: LGPL-3.0-or-later
+- Local source reference for the initial custom-data copy:
+  `../dolfinx`, branch `sclaus2/pass_local_index_to_integration_kernel`
+- Upstream PR reference: https://github.com/FEniCS/dolfinx/pull/4210
+- DOLFINx-derived/adapted paths currently kept under `cpp/dolfinx_custom_data`:
+  - `cpp/dolfinx_custom_data/fem/Form.h`
+  - `cpp/dolfinx_custom_data/fem/assemble_scalar_impl.h`
+  - `cpp/dolfinx_custom_data/fem/assemble_vector_impl.h`
+  - `cpp/dolfinx_custom_data/fem/assemble_matrix_impl.h`
+  - `cpp/dolfinx_custom_data/fem/assembler.h`
+  - `cpp/dolfinx_custom_data/fem/pack_form.h`
+  - `cpp/dolfinx_custom_data/fem/forward.h`
+
+
 ## geogram.psm.MultiPrecision
 
 This software includes code from [geogram.psm.MultiPrecision](https://github.com/BrunoLevy/geogram.psm.MultiPrecision), which is licensed under the BSD-3-Clause license.
