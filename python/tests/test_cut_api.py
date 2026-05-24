@@ -56,6 +56,24 @@ def test_cut_api_locate_entities_default_cells():
     assert np.array_equal(intersected_entities, entities_exact)
 
 
+def test_cut_api_locate_entities_accepts_inclusive_selectors():
+    _, level_set = _line_level_set()
+
+    cutter = cutfemx.cut(level_set)
+    negative = cutfemx.locate_entities(cutter, "phi<0")
+    positive = cutfemx.locate_entities(cutter, "phi>0")
+    interface = cutfemx.locate_entities(cutter, "phi=0")
+
+    assert np.array_equal(
+        cutfemx.locate_entities(cutter, "phi<=0"),
+        np.union1d(negative, interface),
+    )
+    assert np.array_equal(
+        cutfemx.locate_entities(cutter, "phi>=0"),
+        np.union1d(positive, interface),
+    )
+
+
 def test_cut_api_cut_accepts_cell_subset_as_host():
     msh, level_set = _line_level_set()
 
@@ -496,12 +514,15 @@ def test_cut_api_runtime_quadrature_physical_points_are_lazy_cpp_cache():
     assert np.shares_memory(mapped.parent_map, parent_map)
 
 
-def test_cut_api_runtime_quadrature_rejects_inclusive_selector():
+def test_cut_api_runtime_quadrature_accepts_inclusive_selector():
     _, level_set = _line_level_set()
 
     cutter = cutfemx.cut(level_set)
-    with pytest.raises(RuntimeError, match="right-hand side must be '0'"):
-        cutfemx.runtime_quadrature(cutter, "phi<=0", order=2)
+    inclusive_rules = cutfemx.runtime_quadrature(cutter, "phi<=0", order=2)
+    negative_rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
+
+    assert np.array_equal(inclusive_rules.parent_map, negative_rules.parent_map)
+    assert np.allclose(inclusive_rules.weights, negative_rules.weights)
 
 
 def test_cut_api_multiple_level_sets_names_and_or_selector():
@@ -655,6 +676,7 @@ def test_cutfemx_quadrature_function_normal_assembles_runtime_cell_scalar():
 
     cutter = cutfemx.cut(level_set)
     rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
+    assert cutfemx.normal is cutfemx.level_set.normal
     n_gamma = cutfemx.normal(level_set)
 
     dx_rules = ufl.Measure("dx", domain=msh, subdomain_data=rules)

@@ -235,11 +235,13 @@ set(WRAPPER_SOURCES
   python/cutfemx/wrappers/cutfemx.cpp
   python/cutfemx/wrappers/cut.cpp
   python/cutfemx/wrappers/distance.cpp
+  python/cutfemx/wrappers/level_set.cpp
   python/cutfemx/wrappers/cut_function.cpp
   python/cutfemx/wrappers/fem.cpp)
 set(CUTFEMX_WRAPPER_DEFINITIONS
   CUTFEMX_HAS_CUT_API
   CUTFEMX_HAS_DISTANCE
+  CUTFEMX_HAS_LEVEL_SET
   CUTFEMX_HAS_FEM_INTERPOLATION
   CUTFEMX_HAS_RUNTIME_FEM)
 if(PETSC4PY_INCLUDE_DIR)

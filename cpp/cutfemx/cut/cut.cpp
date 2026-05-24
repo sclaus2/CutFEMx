@@ -257,8 +257,14 @@ bool relation_matches_domain(cutcells::cell::domain domain,
   {
   case cutcells::Relation::LessThan:
     return domain == cutcells::cell::domain::inside;
+  case cutcells::Relation::LessEqual:
+    return domain == cutcells::cell::domain::inside
+           || domain == cutcells::cell::domain::intersected;
   case cutcells::Relation::GreaterThan:
     return domain == cutcells::cell::domain::outside;
+  case cutcells::Relation::GreaterEqual:
+    return domain == cutcells::cell::domain::outside
+           || domain == cutcells::cell::domain::intersected;
   case cutcells::Relation::EqualTo:
     return domain == cutcells::cell::domain::intersected;
   }
@@ -816,6 +822,59 @@ locate_entities(const CutData<T>& cut_data, std::string_view ls_part)
 }
 
 template <std::floating_point T>
+std::vector<std::int32_t> interior_facets_for_cells(
+    std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
+    std::span<const std::int32_t> cells, bool include_ghosts)
+{
+  if (!mesh)
+    throw std::runtime_error("Cannot locate interior facets without a mesh.");
+
+  const int tdim = mesh->topology()->dim();
+  if (tdim < 1)
+    throw std::runtime_error("Interior facets require mesh tdim >= 1.");
+  const int fdim = tdim - 1;
+
+  mesh->topology_mutable()->create_entities(fdim);
+  mesh->topology_mutable()->create_connectivity(tdim, fdim);
+  mesh->topology_mutable()->create_connectivity(fdim, tdim);
+
+  auto c_to_f = mesh->topology()->connectivity(tdim, fdim);
+  auto f_to_c = mesh->topology()->connectivity(fdim, tdim);
+  if (!c_to_f || !f_to_c)
+    throw std::runtime_error("Facet-cell connectivity is unavailable.");
+
+  auto cell_map = mesh->topology()->index_map(tdim);
+  auto facet_map = mesh->topology()->index_map(fdim);
+  if (!cell_map || !facet_map)
+    throw std::runtime_error("Mesh index maps are unavailable.");
+
+  const std::int32_t num_cells = static_cast<std::int32_t>(
+      cell_map->size_local() + cell_map->num_ghosts());
+  const std::int32_t num_owned_facets
+      = static_cast<std::int32_t>(facet_map->size_local());
+
+  std::vector<std::int32_t> facets;
+  for (std::int32_t cell : cells)
+  {
+    if (cell < 0 || cell >= num_cells)
+      throw std::out_of_range("Cell index is out of range.");
+
+    for (std::int32_t facet : c_to_f->links(cell))
+    {
+      if (!include_ghosts && facet >= num_owned_facets)
+        continue;
+      if (f_to_c->links(facet).size() == 2)
+        facets.push_back(facet);
+    }
+  }
+
+  std::ranges::sort(facets);
+  auto first_duplicate = std::unique(facets.begin(), facets.end());
+  facets.erase(first_duplicate, facets.end());
+  return facets;
+}
+
+template <std::floating_point T>
 cutcells::HOMeshPart<T, std::int32_t> select_mesh_part(
     const cutcells::MeshView<T, std::int32_t>& mesh_view,
     const cutcells::HOCutCells<T, std::int32_t>& cut_cells,
@@ -1137,6 +1196,13 @@ template std::vector<std::int32_t> locate_entities(
     const CutData<double>&, std::string_view);
 template std::vector<std::int32_t> locate_entities(
     const CutData<float>&, std::string_view);
+
+template std::vector<std::int32_t> interior_facets_for_cells(
+    std::shared_ptr<const dolfinx::mesh::Mesh<double>>,
+    std::span<const std::int32_t>, bool);
+template std::vector<std::int32_t> interior_facets_for_cells(
+    std::shared_ptr<const dolfinx::mesh::Mesh<float>>,
+    std::span<const std::int32_t>, bool);
 
 template mesh::CutMesh<double> create_cut_mesh(
     const CutData<double>&, std::string_view, std::string_view);

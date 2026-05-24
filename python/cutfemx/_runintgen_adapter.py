@@ -170,36 +170,6 @@ def QuadratureFunction(
     return function
 
 
-def normal(level_set: Any, *, name: str | None = None, sign: float = 1.0) -> Any:
-    """Return a lazy quadrature function for ``sign * grad(phi)/|grad(phi)|``."""
-    mesh = level_set.function_space.mesh
-    gdim = mesh.geometry.dim
-    qf = QuadratureFunction(mesh, name=name or "normal", shape=(gdim,))
-    qf.set_evaluator(NormalEvaluator(level_set, sign=sign))
-    return qf
-
-
-class NormalEvaluator:
-    """Batch evaluator for level-set normals at runtime quadrature points."""
-
-    def __init__(self, level_set: Any, *, sign: float = 1.0) -> None:
-        self.level_set = level_set
-        self.sign = float(sign)
-        self.version = 0
-
-    def cache_key(self, context: Any) -> tuple[int, int, float]:
-        return (id(self.level_set), self.version, self.sign)
-
-    def invalidate(self) -> None:
-        self.version += 1
-
-    def update(self, *, version: int | None = None) -> None:
-        self.version = self.version + 1 if version is None else int(version)
-
-    def evaluate(self, context: Any) -> npt.NDArray[np.float64]:
-        return _evaluate_level_set_normals(self.level_set, context.rules, self.sign)
-
-
 def jit(
     comm: Any,
     ufl_object: Any,
@@ -926,87 +896,8 @@ def _evaluate_background_quadrature_function(
     return values
 
 
-def _evaluate_level_set_normals(
-    level_set: Any,
-    rules: QuadratureRules,
-    sign: float,
-) -> npt.NDArray[np.float64]:
-    """Evaluate normalized level-set gradients at parent-cell reference points."""
-    V = level_set.function_space
-    mesh = V.mesh
-    element = V.element
-    basix_element = element.basix_element
-    tdim = mesh.topology.dim
-    gdim = mesh.geometry.dim
-    if rules.parent_map is None:
-        raise ValueError("NormalEvaluator requires QuadratureRules.parent_map.")
-    if rules.kind != "per_entity":
-        raise ValueError("NormalEvaluator currently requires per-entity rules.")
-    if rules.offsets is None:
-        raise ValueError("NormalEvaluator requires per-entity offsets.")
-
-    points = _points_as_2d(rules.points, rules.tdim)
-    basis = basix_element.tabulate(1, points)
-    values = level_set.x.array
-
-    geometry = mesh.geometry
-    x = geometry.x
-    x_dofmap = geometry.dofmap
-
-    out = np.empty((rules.total_points, gdim), dtype=np.float64)
-    for rule_index, cell in enumerate(np.asarray(rules.parent_map, dtype=np.int32)):
-        q0 = int(rules.offsets[rule_index])
-        q1 = int(rules.offsets[rule_index + 1])
-        if q0 == q1:
-            continue
-        cell_dofs = V.dofmap.cell_dofs(int(cell))
-        cell_values = np.asarray(values[cell_dofs], dtype=np.float64)
-        cell_geometry = np.asarray(x[x_dofmap[int(cell)], :gdim], dtype=np.float64)
-        J = _affine_cell_jacobian(mesh, cell_geometry, tdim, gdim)
-        K = np.linalg.pinv(J)
-        for q in range(q0, q1):
-            dphi_ref = np.asarray(basis[1 : tdim + 1, q, :, 0], dtype=np.float64)
-            grad_ref = dphi_ref @ cell_values
-            grad = K.T @ grad_ref
-            norm = np.linalg.norm(grad)
-            if norm < 1.0e-14:
-                norm = 1.0e-14
-            out[q, :] = sign * grad / norm
-    return out
-
-
-def _affine_cell_jacobian(
-    mesh: Any,
-    cell_geometry: npt.NDArray[np.float64],
-    tdim: int,
-    gdim: int,
-) -> npt.NDArray[np.float64]:
-    """Return an affine cell Jacobian for simplex coordinate maps."""
-    cell_name = str(mesh.topology.cell_type.name)
-    if cell_name == "interval" and tdim == 1:
-        vertex_ids = (0, 1)
-    elif cell_name == "triangle" and tdim == 2:
-        vertex_ids = (0, 1, 2)
-    elif cell_name == "tetrahedron" and tdim == 3:
-        vertex_ids = (0, 1, 2, 3)
-    else:
-        raise NotImplementedError(
-            "NormalEvaluator currently supports affine interval, triangle, "
-            "and tetrahedron meshes. Use explicit QuadratureFunction values "
-            "for other cell types or curved geometry."
-        )
-
-    vertices = cell_geometry[np.asarray(vertex_ids, dtype=np.int32), :gdim]
-    J = np.empty((gdim, tdim), dtype=np.float64)
-    origin = vertices[0]
-    for j in range(tdim):
-        J[:, j] = vertices[j + 1] - origin
-    return J
-
-
 __all__ = [
     "CompiledRunintForm",
-    "NormalEvaluator",
     "QuadratureFunction",
     "_active_coefficients",
     "_as_cpp_object",
@@ -1019,5 +910,4 @@ __all__ = [
     "_ufl_to_dolfinx_integral_type",
     "compile_form",
     "jit",
-    "normal",
 ]

@@ -356,7 +356,7 @@ def main(
     x = ufl.SpatialCoordinate(msh)
     u_exact = ufl.sin(np.pi * x[0]) * ufl.sin(np.pi * x[1])
     f = 2.0 * np.pi**2 * u_exact
-    n_gamma = cutfemx.normal(phi, name="n_gamma")
+    n_gamma = cutfemx.normal(phi)
     n_facet = ufl.FacetNormal(msh)
     h = ufl.CellDiameter(msh)
     h_avg = ufl.avg(h)

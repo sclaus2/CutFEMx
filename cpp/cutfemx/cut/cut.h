@@ -143,6 +143,11 @@ std::vector<std::int32_t> locate_entities(const CutData<T>& cut_data,
                                           std::string_view ls_part);
 
 template <std::floating_point T>
+std::vector<std::int32_t> interior_facets_for_cells(
+    std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
+    std::span<const std::int32_t> cells, bool include_ghosts);
+
+template <std::floating_point T>
 mesh::CutMesh<T> create_cut_mesh(const CutData<T>& cut_data,
                                  std::string_view ls_part,
                                  std::string_view mode);

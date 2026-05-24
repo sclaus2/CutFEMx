@@ -134,22 +134,19 @@ def main() -> None:
         # ## Runtime quadrature on cells
         #
         # Cells completely inside Omega can use ordinary cell quadrature. Cut
-        # cells receive runtime quadrature rules for the part phi < 0. The same
-        # cell cut also gives the embedded-boundary rules on phi = 0.
+        # cells receive runtime quadrature rules for the part phi < 0. The
+        # inclusive selector phi <= 0 marks the full active cell set: ordinary
+        # inside cells plus cells intersected by Gamma. The same cell cut also
+        # gives the embedded-boundary rules on phi = 0.
         cell_cut = cutfemx.cut(phi)
-        inside_cells = np.asarray(cutfemx.locate_entities(cell_cut, "phi<0"), dtype=np.int32)
+        inside_cells = cutfemx.locate_entities(cell_cut, "phi<0")
         cell_rules = cutfemx.runtime_quadrature(cell_cut, "phi<0", args.order)
         interface_rules = cutfemx.runtime_quadrature(cell_cut, "phi=0", args.order)
-        interface_cells = np.asarray(cutfemx.locate_entities(cell_cut, "phi=0"), dtype=np.int32)
-        cut_cells = np.asarray(
-            [] if cell_rules.parent_map is None else cell_rules.parent_map,
-            dtype=np.int32,
-        )
+        cut_cells = cutfemx.locate_entities(cell_cut, "phi=0")
+        active_cells = cutfemx.locate_entities(cell_cut, "phi<=0")
 
-        active_parts = [part for part in (inside_cells, cut_cells) if part.size > 0]
-        if not active_parts:
+        if active_cells.size == 0:
             raise RuntimeError("The selected cut domain has no active cells.")
-        active_cells = np.unique(np.concatenate(active_parts).astype(np.int32))
 
         # ## Runtime quadrature on the DG skeleton
         #
@@ -159,19 +156,13 @@ def main() -> None:
         fdim = msh.topology.dim - 1
         skeleton_facets = cutfemx.interior_facets_for_cells(msh, active_cells)
         skeleton_cut = cutfemx.cut(phi, skeleton_facets, fdim)
-        inside_skeleton_facets = np.asarray(
-            cutfemx.locate_entities(skeleton_cut, "phi<0"),
-            dtype=np.int32,
-        )
+        inside_skeleton_facets = cutfemx.locate_entities(skeleton_cut, "phi<0")
         skeleton_rules = cutfemx.runtime_quadrature(skeleton_cut, "phi<0", args.order)
-        cut_skeleton_facets = np.asarray(
-            cutfemx.locate_entities(skeleton_cut, "phi=0"),
-            dtype=np.int32,
-        )
+        cut_skeleton_facets = cutfemx.locate_entities(skeleton_cut, "phi=0")
 
         # The ghost penalty is a standard interior-facet integral on a narrow
         # band surrounding the cut cells. It stabilizes small cut-cell slivers.
-        ghost_facets = np.asarray(cutfemx.ghost_penalty_facets(cell_cut, "phi<0"), dtype=np.int32)
+        ghost_facets = cutfemx.ghost_penalty_facets(cell_cut, "phi<0")
 
         # ## Measures
         #
@@ -183,7 +174,7 @@ def main() -> None:
         dS_omega = dSq(0, domain=msh, subdomain_data=[inside_skeleton_facets, skeleton_rules])
         dx_gamma = dxq(1, domain=msh, subdomain_data=interface_rules)
         dS_ghost = ufl.Measure("dS", domain=msh, subdomain_id=2, subdomain_data=ghost_facets)
-        n_gamma = cutfemx.normal(phi, name="n_gamma")
+        n_gamma = cutfemx.normal(phi)
 
         # ## Variational formulation
         #
@@ -266,7 +257,7 @@ def main() -> None:
                 "skeleton_facets": inside_skeleton_facets.size,
                 "cut_skeleton_facets": cut_skeleton_facets.size,
                 "ghost_facets": ghost_facets.size,
-                "interface_cells": interface_cells.size,
+                "interface_cells": cut_cells.size,
                 "l2_error": l2_error,
                 "rate": rate,
                 "matrix_norm_sq": float(A.squared_norm()),

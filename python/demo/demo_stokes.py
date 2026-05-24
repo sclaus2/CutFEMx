@@ -3,8 +3,6 @@ from mpi4py import MPI
 import os
 
 import cutfemx
-from cutfemx.level_set import ghost_penalty_facets, facet_topology, interior_facets
-from cutfemx.level_set import compute_normal
 from cutfemx.fem import assemble_vector, cut_form, assemble_matrix, cut_function
 
 from dolfinx import fem, mesh, plot, default_scalar_type, la, io
@@ -80,9 +78,7 @@ intersected_entities = cutfemx.locate_entities(cut_data, "phi=0") # Interface
 
 # 4. Cut Mesh and Quadrature
 # Compute normal on intersected cells for Nitsche
-V_DG = fem.functionspace(msh, ("DG", 0, (msh.geometry.dim,)))
-n_K = fem.Function(V_DG)
-compute_normal(n_K, level_set, intersected_entities)
+n_K = cutfemx.normal(level_set)
 
 cut_mesh = cutfemx.create_cut_mesh(cut_data, "phi>0", mode="full")
 
@@ -94,8 +90,7 @@ interface_quad = cutfemx.runtime_quadrature(cut_data, "phi=0", order)
 quad_domains = [(0, fluid_quad), (1, interface_quad)]
 
 # Ghost Penalty Facets
-gp_ids = ghost_penalty_facets(level_set, "phi>0")
-gp_topo = facet_topology(msh, gp_ids)
+gp_ids = cutfemx.ghost_penalty_facets(cut_data, "phi>0")
 
 # Exclude cut cells from active_entities to avoid double integration
 uncut_cells = np.setdiff1d(active_entities, intersected_entities)
@@ -103,12 +98,12 @@ uncut_cells = np.setdiff1d(active_entities, intersected_entities)
 
 # Interior Facets (Fluid + Ghost Penalty)
 interior_entities = np.union1d(active_entities, intersected_entities)
-interior_ids = interior_facets(level_set, interior_entities, "phi>0")
-interior_topo = facet_topology(msh, interior_ids)
+interior_ids = cutfemx.interior_facets_for_cells(msh, interior_entities)
 
 # Measures
 dx = ufl.Measure("dx", subdomain_data=[(0, uncut_cells)], domain=msh)
-dS_gp = ufl.Measure("dS", subdomain_data=[(0, gp_topo),(1, interior_topo)], domain=msh) # For Ghost Penalty For Pressure CIP
+dS_ghost = ufl.Measure("dS", subdomain_id=0, subdomain_data=gp_ids, domain=msh)
+dS_interior = ufl.Measure("dS", subdomain_id=1, subdomain_data=interior_ids, domain=msh)
 dx_rt = ufl.Measure("dC", subdomain_data=quad_domains, domain=msh)
 
 dxq = dx_rt(0) + dx(0) # Fluid domain (uncut + cut)
@@ -136,11 +131,11 @@ a += -dot(dot(sigma(v, q), n_gamma), u) * dsq # Symmetric Nitsche
 a += (gamma_u / h) * inner(u, v) * dsq
 
 # Ghost Penalty (Velocity - Cut Region)
-a += avg(gamma_g) * avg(h) * inner(jump(grad(u), n), jump(grad(v), n)) * dS_gp(0)
+a += avg(gamma_g) * avg(h) * inner(jump(grad(u), n), jump(grad(v), n)) * dS_ghost
 
 # Pressure Consistent Interior Penalty (Stabilization for P1-P1) - Global
 # Apply on active interior facets (dS_fluid) to allow pressure deactivation
-a += avg(gamma_p) * avg(h)**3 * inner(jump(grad(p), n), jump(grad(q), n)) * dS_gp(1)
+a += avg(gamma_p) * avg(h)**3 * inner(jump(grad(p), n), jump(grad(q), n)) * dS_interior
 
 # Add L2 Regularization (soft-fix for pressure modes/nullspace)
 a += 1e-8 * inner(p, q) * dxq

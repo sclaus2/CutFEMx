@@ -273,6 +273,21 @@ void declare_cut_api(nb::module_& m, std::string type)
       nb::arg("cut"), nb::arg("ls_part"));
 
   m.def(
+      ("interior_facets_for_cells_" + type).c_str(),
+      [](std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
+         nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> cells,
+         bool include_ghosts)
+      {
+        return dolfinx_wrappers::as_nbarray(
+            cutfemx::interior_facets_for_cells<T>(
+                std::move(mesh),
+                std::span<const std::int32_t>(cells.data(), cells.size()),
+                include_ghosts));
+      },
+      nb::arg("mesh"), nb::arg("cells"), nb::arg("include_ghosts") = false,
+      "Return raw local interior facet ids touched by cells.");
+
+  m.def(
       "create_cut_mesh",
       [](const CutData& cut_data, const std::string& ls_part,
          const std::string& mode)

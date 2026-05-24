@@ -16,6 +16,9 @@ void cut(nb::module_& m);
 #ifdef CUTFEMX_HAS_DISTANCE
 void distance(nb::module_& m);
 #endif
+#ifdef CUTFEMX_HAS_LEVEL_SET
+void level_set(nb::module_& m);
+#endif
 #ifdef CUTFEMX_HAS_FEM_INTERPOLATION
 void fem_interpolation(nb::module_& m);
 #endif
@@ -43,6 +46,11 @@ NB_MODULE(cutfemx_cpp, m)
 #ifdef CUTFEMX_HAS_DISTANCE
   nb::module_ distance = m.def_submodule("distance", "Distance module");
   cutfemx_wrappers::distance(distance);
+#endif
+
+#ifdef CUTFEMX_HAS_LEVEL_SET
+  nb::module_ level_set = m.def_submodule("level_set", "Level-set module");
+  cutfemx_wrappers::level_set(level_set);
 #endif
 
 #if defined(CUTFEMX_HAS_FEM_INTERPOLATION) || defined(CUTFEMX_HAS_RUNTIME_FEM)

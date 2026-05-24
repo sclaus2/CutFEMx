@@ -9,14 +9,9 @@
 from cutfemx import cutfemx_cpp as cutfemx_cpp
 from cutfemx import distance as distance
 from cutfemx import fem as fem
-from cutfemx._runintgen_adapter import (
-    NormalEvaluator as NormalEvaluator,
-)
+from cutfemx import level_set as level_set
 from cutfemx._runintgen_adapter import (
     QuadratureFunction as QuadratureFunction,
-)
-from cutfemx._runintgen_adapter import (
-    normal as normal,
 )
 from cutfemx.cut import (
     CutData as CutData,
@@ -45,9 +40,14 @@ from cutfemx.cut import (
 from cutfemx.cut import (
     update as update,
 )
+from cutfemx.level_set import (
+    NormalEvaluator as NormalEvaluator,
+)
+from cutfemx.level_set import (
+    normal as normal,
+)
 
 cut_function = fem.cut_function
-level_set = None
 mesh = None
 quadrature = None
 

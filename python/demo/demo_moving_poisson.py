@@ -3,8 +3,6 @@ from mpi4py import MPI
 import os
 
 import cutfemx
-from cutfemx.level_set import ghost_penalty_facets, facet_topology
-from cutfemx.level_set import compute_normal
 from cutfemx.fem import (
   active_domain,
   assemble_vector,
@@ -66,9 +64,7 @@ dim = msh.topology.dim
 intersected_entities = cutfemx.locate_entities(cut_data, "phi=0")
 inside_entities = cutfemx.locate_entities(cut_data, "phi<0")
 
-V_DG = fem.functionspace(msh, ("DG", 0, (msh.geometry.dim,)))
-n_K = fem.Function(V_DG)
-compute_normal(n_K,level_set,intersected_entities)
+n_K = cutfemx.normal(level_set)
 
 order = 2
 inside_quadrature = cutfemx.runtime_quadrature(cut_data, "phi<0", order)
@@ -76,11 +72,10 @@ interface_quadrature = cutfemx.runtime_quadrature(cut_data, "phi=0", order)
 
 quad_domains = [(0,inside_quadrature), (1,interface_quadrature)]
 
-gp_ids =  ghost_penalty_facets(level_set, "phi<0")
-gp_topo = facet_topology(msh,gp_ids)
+gp_ids = cutfemx.ghost_penalty_facets(cut_data, "phi<0")
 
 dx = ufl.Measure("dx", subdomain_data=[(0, inside_entities)], domain=msh)
-dS = ufl.Measure("dS", subdomain_data=[(0, gp_topo)], domain=msh)
+dS = ufl.Measure("dS", subdomain_id=0, subdomain_data=gp_ids, domain=msh)
 dx_rt = ufl.Measure("dC", subdomain_data=quad_domains, domain=msh)
 
 dxq = dx_rt(0) + dx(0)
@@ -92,7 +87,7 @@ a  = inner(grad(u), grad(v))*dxq
 a += - dot(grad(u), n_K)*v*dsq
 a += - dot(grad(v), n_K)*u*dsq
 a += gamma*1.0/h*u*v*dsq
-a += avg(gamma_g)*avg(h)*dot(jump(grad(u), n), jump(grad(v), n))*dS(0)
+a += avg(gamma_g)*avg(h)*dot(jump(grad(u), n), jump(grad(v), n))*dS
 
 L  = f*v*dxq
 L += - dot(grad(v), n_K)*g*dsq
@@ -121,13 +116,12 @@ while t<T:
   intersected_entities = cutfemx.locate_entities(cut_data, "phi=0")
   inside_entities = cutfemx.locate_entities(cut_data, "phi<0")
 
-  gp_ids =  ghost_penalty_facets(level_set, "phi<0")
-  gp_topo = facet_topology(msh,gp_ids)
+  gp_ids = cutfemx.ghost_penalty_facets(cut_data, "phi<0")
 
   inside_quadrature = cutfemx.runtime_quadrature(cut_data, "phi<0", order)
   interface_quadrature = cutfemx.runtime_quadrature(cut_data, "phi=0", order)
 
-  subdomain_data={"cell": [(0, inside_entities)], "interior_facet": [(0, gp_topo)]}
+  subdomain_data={"cell": [(0, inside_entities)], "interior_facet": [(0, gp_ids)]}
   quad_domains = {"cutcell": [(0,inside_quadrature), (1,interface_quadrature)]}
   subdomain_data_L={"cell": [(0, inside_entities)]}
 
@@ -136,8 +130,6 @@ while t<T:
 
   L_cut.update_integration_domains(subdomain_data_L)
   L_cut.update_runtime_domains(quad_domains)
-
-  compute_normal(n_K,level_set,intersected_entities)
 
   b = assemble_vector(L_cut)
   A = assemble_matrix(a_cut)

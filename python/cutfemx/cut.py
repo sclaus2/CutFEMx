@@ -265,25 +265,17 @@ def interior_facets_for_cells(
     include_ghosts: bool = False,
 ) -> npt.NDArray[np.int32]:
     """Return raw local interior facet ids touched by ``cells``."""
-    tdim = msh.topology.dim
-    fdim = tdim - 1
-    msh.topology.create_entities(fdim)
-    msh.topology.create_connectivity(tdim, fdim)
-    msh.topology.create_connectivity(fdim, tdim)
-    cell_to_facet = msh.topology.connectivity(tdim, fdim)
-    facet_to_cell = msh.topology.connectivity(fdim, tdim)
-    if cell_to_facet is None or facet_to_cell is None:
-        raise RuntimeError("Facet-cell connectivity is unavailable.")
-
-    num_owned_facets = msh.topology.index_map(fdim).size_local
-    facet_ids: set[int] = set()
-    for cell in np.asarray(cells, dtype=np.int32).ravel():
-        for facet in cell_to_facet.links(int(cell)):
-            if not include_ghosts and int(facet) >= num_owned_facets:
-                continue
-            if len(facet_to_cell.links(int(facet))) == 2:
-                facet_ids.add(int(facet))
-    return np.asarray(sorted(facet_ids), dtype=np.int32)
+    local_cells = np.ascontiguousarray(np.asarray(cells, dtype=np.int32).ravel())
+    dtype = np.dtype(msh.geometry.x.dtype)
+    if dtype == np.dtype(np.float64):
+        return _cpp.interior_facets_for_cells_float64(
+            msh._cpp_object, local_cells, include_ghosts
+        )
+    if dtype == np.dtype(np.float32):
+        return _cpp.interior_facets_for_cells_float32(
+            msh._cpp_object, local_cells, include_ghosts
+        )
+    raise ValueError(f"Unsupported mesh geometry dtype {dtype}.")
 
 
 def ghost_penalty_facets(
