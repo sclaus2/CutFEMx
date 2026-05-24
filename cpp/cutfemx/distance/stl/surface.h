@@ -7,7 +7,9 @@
 #include <string>
 #include <limits>
 
-namespace cutfemx::mesh {
+#include <spdlog/spdlog.h>
+
+namespace cutfemx::distance {
 
 template <typename Real>
 struct TriSoup
@@ -91,4 +93,4 @@ bounding_box(const TriSoup<Real>& soup)
     return {min_corner, max_corner};
 }
 
-} // namespace cutfemx::mesh
+} // namespace cutfemx::distance

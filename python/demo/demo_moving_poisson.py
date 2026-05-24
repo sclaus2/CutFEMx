@@ -2,10 +2,9 @@ import numpy as np
 from mpi4py import MPI
 import os
 
-from cutfemx.level_set import locate_entities, cut_entities, ghost_penalty_facets, facet_topology
+import cutfemx
+from cutfemx.level_set import ghost_penalty_facets, facet_topology
 from cutfemx.level_set import compute_normal
-from cutfemx.mesh import create_cut_mesh
-from cutfemx.quadrature import runtime_quadrature, physical_points
 from cutfemx.fem import (
   active_domain,
   assemble_vector,
@@ -61,23 +60,19 @@ def circle(x):
 
 level_set = fem.Function(V)
 level_set.interpolate(circle)
+cut_data = cutfemx.cut(level_set)
 dim = msh.topology.dim
 
-intersected_entities = locate_entities(level_set,dim,"phi=0")
-inside_entities = locate_entities(level_set,dim,"phi<0")
+intersected_entities = cutfemx.locate_entities(cut_data, "phi=0")
+inside_entities = cutfemx.locate_entities(cut_data, "phi<0")
 
 V_DG = fem.functionspace(msh, ("DG", 0, (msh.geometry.dim,)))
 n_K = fem.Function(V_DG)
 compute_normal(n_K,level_set,intersected_entities)
 
-dof_coordinates = V.tabulate_dof_coordinates()
-
-cut_cells = cut_entities(level_set, dof_coordinates, intersected_entities, tdim, "phi<0")
-cut_mesh = create_cut_mesh(msh.comm,cut_cells,msh,inside_entities)
-
 order = 2
-inside_quadrature = runtime_quadrature(level_set,"phi<0",order)
-interface_quadrature = runtime_quadrature(level_set,"phi=0",order)
+inside_quadrature = cutfemx.runtime_quadrature(cut_data, "phi<0", order)
+interface_quadrature = cutfemx.runtime_quadrature(cut_data, "phi=0", order)
 
 quad_domains = [(0,inside_quadrature), (1,interface_quadrature)]
 
@@ -121,15 +116,16 @@ while t<T:
   #update circle midpoint
   xM = xM + dx
   level_set.interpolate(circle)
+  cut_data.update()
 
-  intersected_entities = locate_entities(level_set,dim,"phi=0")
-  inside_entities = locate_entities(level_set,dim,"phi<0")
+  intersected_entities = cutfemx.locate_entities(cut_data, "phi=0")
+  inside_entities = cutfemx.locate_entities(cut_data, "phi<0")
 
   gp_ids =  ghost_penalty_facets(level_set, "phi<0")
   gp_topo = facet_topology(msh,gp_ids)
 
-  inside_quadrature = runtime_quadrature(level_set,"phi<0",order)
-  interface_quadrature = runtime_quadrature(level_set,"phi=0",order)
+  inside_quadrature = cutfemx.runtime_quadrature(cut_data, "phi<0", order)
+  interface_quadrature = cutfemx.runtime_quadrature(cut_data, "phi=0", order)
 
   subdomain_data={"cell": [(0, inside_entities)], "interior_facet": [(0, gp_topo)]}
   quad_domains = {"cutcell": [(0,inside_quadrature), (1,interface_quadrature)]}

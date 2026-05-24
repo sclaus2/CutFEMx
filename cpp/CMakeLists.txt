@@ -136,7 +136,6 @@ endif()
 
 if(CUTFEMX_BUILD_DEMOS)
   add_subdirectory(demo/fmm_distance)
-  add_subdirectory(demo/reinit)
 endif()
 
 # Install the cutfemx library

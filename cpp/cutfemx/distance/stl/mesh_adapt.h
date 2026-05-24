@@ -6,14 +6,14 @@
 #include <dolfinx/graph/AdjacencyList.h>
 
 #include "cell_triangle_map.h"
-#include "distribute_stl.h"
+#include "distribute.h"
 
 #include <vector>
 #include <algorithm>
 #include <set>
 #include <span>
 
-namespace cutfemx::mesh::stl {
+namespace cutfemx::distance::stl {
 
 /// Mark cut cells from CellTriangleMap
 /// Returns list of local cell indices that intersect the STL
@@ -142,4 +142,4 @@ inline std::vector<std::int32_t> refinement_edges_from_stl(
     return edges;
 }
 
-} // namespace cutfemx::mesh::stl
+} // namespace cutfemx::distance::stl

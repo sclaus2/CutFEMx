@@ -7,7 +7,7 @@
 #include <iostream>
 #include <array>
 
-namespace cutfemx::mesh {
+namespace cutfemx::distance {
 
 template <typename Real>
 void read_stl_facets(const std::string& path,
@@ -238,4 +238,4 @@ compute_stl_bbox(const std::string& path)
     return {min_c, max_c};
 }
 
-} // namespace cutfemx::mesh
+} // namespace cutfemx::distance

@@ -2,9 +2,7 @@ import numpy as np
 from mpi4py import MPI
 import os
 
-from cutfemx.level_set import locate_entities, cut_entities
-from cutfemx.mesh import create_cut_mesh
-from cutfemx.quadrature import runtime_quadrature, physical_points
+import cutfemx
 from cutfemx.fem import assemble_scalar, cut_form
 
 from dolfinx import fem, mesh, plot
@@ -36,19 +34,16 @@ def circle(x):
 
 level_set = fem.Function(V)
 level_set.interpolate(circle)
+cut_data = cutfemx.cut(level_set)
 dim = msh.topology.dim
 
-intersected_entities = locate_entities(level_set,dim,"phi=0")
-inside_entities = locate_entities(level_set,dim,"phi<0")
-
-dof_coordinates = V.tabulate_dof_coordinates()
-
-cut_cells = cut_entities(level_set, dof_coordinates, intersected_entities, tdim, "phi<0")
-cut_mesh = create_cut_mesh(msh.comm,cut_cells,msh,inside_entities)
+intersected_entities = cutfemx.locate_entities(cut_data, "phi=0")
+inside_entities = cutfemx.locate_entities(cut_data, "phi<0")
+cut_mesh = cutfemx.create_cut_mesh(cut_data, "phi<0", mode="full")
 
 order = 2
-inside_quadrature = runtime_quadrature(level_set,"phi<0",order)
-interface_quadrature = runtime_quadrature(level_set,"phi=0",order)
+inside_quadrature = cutfemx.runtime_quadrature(cut_data, "phi<0", order)
+interface_quadrature = cutfemx.runtime_quadrature(cut_data, "phi=0", order)
 
 quad_domains = [(0,inside_quadrature), (1,interface_quadrature)]
 
@@ -78,15 +73,20 @@ print("circumference=", surface)
 print("value theoretical circumference=", 2*0.5*np.pi)
 
 #Plot runtime quadrature points on cut mesh
-points_phys = physical_points(inside_quadrature,msh)
-points_phys_interface = physical_points(interface_quadrature,msh)
+points_phys = inside_quadrature.with_physical_points().physical_points.T
+points_phys_interface = interface_quadrature.with_physical_points().physical_points.T
+if points_phys.shape[1] == 2:
+    points_phys = np.column_stack([points_phys, np.zeros(points_phys.shape[0])])
+if points_phys_interface.shape[1] == 2:
+    points_phys_interface = np.column_stack(
+        [points_phys_interface, np.zeros(points_phys_interface.shape[0])]
+    )
 
 plotter = pyvista.Plotter()
-cells, types, x = plot.vtk_mesh(cut_mesh._mesh)
+cells, types, x = plot.vtk_mesh(cut_mesh.mesh)
 grid = pyvista.UnstructuredGrid(cells, types, x)
 plotter.add_mesh(grid, show_edges=True, show_scalar_bar=True, color='lightgray')
 plotter.add_points(points_phys, render_points_as_spheres=True, color='black')
 plotter.add_points(points_phys_interface, render_points_as_spheres=True, color='red')
 plotter.view_xy()
 plotter.show()
-

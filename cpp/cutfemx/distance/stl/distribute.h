@@ -1,9 +1,10 @@
 #pragma once
-#include "stl_surface.h"
+#include "surface.h"
+#include "../parallel_exchange.h"
 #include <string>
 #include <dolfinx/mesh/Mesh.h>
 #include <mpi.h>
-#include "stl_reader.h"
+#include "reader.h"
 #include <dolfinx/common/MPI.h>
 #include <dolfinx/geometry/BoundingBoxTree.h>
 #include <numeric>
@@ -12,7 +13,7 @@
 #include <cmath>
 #include <stack>
 
-namespace cutfemx::mesh {
+namespace cutfemx::distance {
 
 struct DistributeSTLOptions
 {
@@ -59,7 +60,8 @@ TriSoup<Real> distribute_stl_facets(MPI_Comm comm,
     std::vector<std::int32_t> entities(num_entities);
     std::iota(entities.begin(), entities.end(), 0);
 
-    dolfinx::geometry::BoundingBoxTree<Real> local_tree(mesh, tdim, entities, opt.aabb_padding);
+    dolfinx::geometry::BoundingBoxTree<Real> local_tree(mesh, tdim,
+                                                        opt.aabb_padding);
     
     // Compute global tree (each leaf is a rank)
     dolfinx::geometry::BoundingBoxTree<Real> global_tree = local_tree.create_global_tree(comm);
@@ -236,8 +238,10 @@ TriSoup<Real> distribute_stl_facets(MPI_Comm comm,
     MPI_Alltoallv(send_gids_flat.data(), send_counts_gids.data(), send_displs_gids.data(), MPI_INT,
                   soup.tri_gid.data(), recv_counts_gids.data(), recv_displs_gids.data(), MPI_INT, comm);
                   
-    MPI_Alltoallv(send_facets_flat.data(), send_counts_facets.data(), send_displs_facets.data(), dolfinx::MPI::mpi_type<Real>(),
-                  recv_facets.data(), recv_counts_facets.data(), recv_displs_facets.data(), dolfinx::MPI::mpi_type<Real>(), comm);
+    MPI_Alltoallv(send_facets_flat.data(), send_counts_facets.data(),
+                  send_displs_facets.data(), get_mpi_type<Real>(),
+                  recv_facets.data(), recv_counts_facets.data(),
+                  recv_displs_facets.data(), get_mpi_type<Real>(), comm);
 
     // 6. Unpack
     soup.tri.resize(my_nT * 3);
@@ -272,4 +276,4 @@ TriSoup<Real> distribute_stl_facets(MPI_Comm comm,
     return soup;
 }
 
-} // namespace cutfemx::mesh
+} // namespace cutfemx::distance

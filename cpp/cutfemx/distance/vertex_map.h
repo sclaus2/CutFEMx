@@ -8,7 +8,7 @@
 #include <vector>
 #include <span>
 
-namespace cutfemx::level_set {
+namespace cutfemx::distance {
 
 /// Cache for commonly needed vertex mappings
 /// Build once, reuse in fmm.h, sign.h, winding.h, etc.
@@ -94,4 +94,4 @@ struct VertexMapCache {
     }
 };
 
-} // namespace cutfemx::level_set
+} // namespace cutfemx::distance

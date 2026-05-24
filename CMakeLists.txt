@@ -234,14 +234,16 @@ _cutfemx_python_query(
 set(WRAPPER_SOURCES
   python/cutfemx/wrappers/cutfemx.cpp
   python/cutfemx/wrappers/cut.cpp
+  python/cutfemx/wrappers/distance.cpp
   python/cutfemx/wrappers/cut_function.cpp
-  python/cutfemx/wrappers/fem_runtime.cpp)
+  python/cutfemx/wrappers/fem.cpp)
 set(CUTFEMX_WRAPPER_DEFINITIONS
   CUTFEMX_HAS_CUT_API
+  CUTFEMX_HAS_DISTANCE
   CUTFEMX_HAS_FEM_INTERPOLATION
   CUTFEMX_HAS_RUNTIME_FEM)
 if(PETSC4PY_INCLUDE_DIR)
-  list(APPEND WRAPPER_SOURCES python/cutfemx/wrappers/petsc_runtime.cpp)
+  list(APPEND WRAPPER_SOURCES python/cutfemx/wrappers/petsc.cpp)
   list(APPEND CUTFEMX_WRAPPER_DEFINITIONS
     CUTFEMX_HAS_RUNTIME_PETSC
     HAS_PETSC4PY)

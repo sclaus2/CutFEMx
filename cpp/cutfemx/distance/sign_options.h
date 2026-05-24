@@ -2,7 +2,7 @@
 
 #include <array>
 
-namespace cutfemx::level_set {
+namespace cutfemx::distance {
 
 enum class SignMode {
     LocalNormalBand,   ///< Method 1: Local closest triangle normal (fast, band only)
@@ -28,4 +28,4 @@ struct SignOptions {
     int max_triangles_per_query = 10000;
 };
 
-} // namespace cutfemx::level_set
+} // namespace cutfemx::distance

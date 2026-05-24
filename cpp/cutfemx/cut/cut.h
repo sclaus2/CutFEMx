@@ -23,7 +23,7 @@
 #include <dolfinx/mesh/Mesh.h>
 
 #include "../mesh/cut_mesh.h"
-#include "RuntimeQuadrature.h"
+#include "runtime_quadrature.h"
 
 namespace cutfemx
 {

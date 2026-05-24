@@ -18,7 +18,7 @@
 
 #include <cutfemx/mesh/cut_mesh.h>
 #include <cutfemx/cut/cut.h>
-#include <cutfemx/cut/RuntimeQuadrature.h>
+#include <cutfemx/cut/runtime_quadrature.h>
 
 namespace nb = nanobind;
 

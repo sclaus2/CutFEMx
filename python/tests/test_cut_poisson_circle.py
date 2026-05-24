@@ -5,8 +5,8 @@ from mpi4py import MPI
 import ufl
 from dolfinx import mesh, fem, default_real_type
 from dolfinx.fem import form
+import cutfemx
 from cutfemx.level_set import locate_entities, compute_normal, ghost_penalty_facets, facet_topology
-from cutfemx.quadrature import runtime_quadrature
 from cutfemx.fem import (
     active_domain,
     assemble_vector,
@@ -31,6 +31,7 @@ def solve_poisson(degree, n_ele=32):
     level_set = fem.Function(V)
     expr = fem.Expression(phi_expr, V.element.interpolation_points())
     level_set.interpolate(expr)
+    cut_data = cutfemx.cut(level_set)
     
     # 3. Define Analysis Function Space & Functions
     u = ufl.TrialFunction(V)
@@ -41,8 +42,8 @@ def solve_poisson(degree, n_ele=32):
     f = 8 * (ufl.pi**2) * u_ex
     
     # 5. CutFEM Setup
-    intersected_entities = locate_entities(level_set, tdim, "phi=0")
-    inside_entities = locate_entities(level_set, tdim, "phi<0")
+    intersected_entities = cutfemx.locate_entities(cut_data, "phi=0")
+    inside_entities = cutfemx.locate_entities(cut_data, "phi<0")
     
     # Compute Level Set Normal
     V_DG = fem.functionspace(msh, ("DG", 0, (msh.geometry.dim,)))
@@ -54,8 +55,8 @@ def solve_poisson(degree, n_ele=32):
     # Demo uses order=1 for P2? That seems low.
     # Typically 2*degree is safe.
     q_order = 2 * degree + 1 # For safety
-    inside_quadrature = runtime_quadrature(level_set, "phi<0", q_order)
-    interface_quadrature = runtime_quadrature(level_set, "phi=0", q_order)
+    inside_quadrature = cutfemx.runtime_quadrature(cut_data, "phi<0", q_order)
+    interface_quadrature = cutfemx.runtime_quadrature(cut_data, "phi=0", q_order)
     
     quad_domains = [(0, inside_quadrature), (1, interface_quadrature)]
     

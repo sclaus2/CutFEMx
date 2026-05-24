@@ -5,12 +5,12 @@
 // Uses Octree approximation for far-field triangles to reduce complexity from O(N*M) to O(N*logM).
 
 #include "sign_options.h"
-#include <cutfemx/mesh/stl/stl_surface.h>
+#include <cutfemx/distance/stl/surface.h>
 
 #include <dolfinx/fem/Function.h>
 #include <dolfinx/mesh/Mesh.h>
 #include <dolfinx/common/MPI.h>
-#include "geom_map.h"
+#include "vertex_map.h"
 
 #include <vector>
 #include <cmath>
@@ -19,7 +19,7 @@
 #include <memory>
 #include <numeric>
 
-namespace cutfemx::level_set {
+namespace cutfemx::distance {
 
 namespace winding_detail {
 
@@ -242,14 +242,14 @@ double compute_winding_bh(const Real* p, const Node* node, const std::vector<Rea
 template <typename Real>
 void apply_sign_winding_number(
     dolfinx::fem::Function<Real>& phi,
-    const ::cutfemx::mesh::TriSoup<Real>& soup,
+    const ::cutfemx::distance::TriSoup<Real>& soup,
     const SignOptions& opt)
 {
     auto mesh = phi.function_space()->mesh();
     VertexMapCache<Real> vmap;
     vmap.build(*mesh, phi.function_space().get());
     
-    std::span<Real> data = phi.x()->mutable_array();
+    std::span<Real> data = phi.x()->array();
     
     // 1. Gather all triangles (Robustness > Memory efficiency for now)
     std::vector<Real> all_triangles;
@@ -324,4 +324,4 @@ void apply_sign_winding_number(
     phi.x()->scatter_fwd();
 }
 
-} // namespace cutfemx::level_set
+} // namespace cutfemx::distance

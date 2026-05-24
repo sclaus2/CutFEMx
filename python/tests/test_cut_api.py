@@ -10,6 +10,7 @@ from mpi4py import MPI
 
 import cutfemx
 from dolfinx import fem, la, mesh
+from runintgen import dsq
 import ufl
 
 
@@ -159,6 +160,64 @@ def test_cut_api_runtime_quadrature_returns_runintgen_rules():
     assert rules.parent_map.size == rules.offsets.size - 1
     assert set(rules.parent_map.tolist()).issubset(set(intersected_entities.tolist()))
     assert hasattr(rules, "_cutfemx_owner")
+
+
+def test_cut_api_runtime_quadrature_accepts_exterior_facets():
+    msh, level_set = _line_level_set()
+
+    msh.topology.create_entities(1)
+    msh.topology.create_connectivity(1, msh.topology.dim)
+    facets = mesh.exterior_facet_indices(msh.topology)
+    cutter = cutfemx.cut(level_set)
+    negative_facets = cutfemx.locate_entities(cutter, "phi<0", facets, 1)
+    cut_facets = cutfemx.locate_entities(cutter, "phi=0", facets, 1)
+    rules_from_all_facets = cutfemx.runtime_quadrature(
+        cutter, "phi<0", order=2, entities=facets, entity_dim=1
+    )
+    rules_from_cut_facets = cutfemx.runtime_quadrature(
+        cutter, "phi<0", order=2, entities=cut_facets, entity_dim=1
+    )
+
+    assert rules_from_all_facets.kind == "per_entity"
+    assert rules_from_all_facets.tdim == 1
+    assert rules_from_all_facets.points.shape[0] == rules_from_all_facets.weights.size
+    assert rules_from_all_facets.offsets[0] == 0
+    assert rules_from_all_facets.offsets[-1] == rules_from_all_facets.weights.size
+    assert (
+        rules_from_all_facets.parent_map.size
+        == rules_from_all_facets.offsets.size - 1
+    )
+    assert set(rules_from_all_facets.parent_map.tolist()).issubset(
+        set(np.concatenate([negative_facets, cut_facets]).tolist())
+    )
+    assert set(rules_from_cut_facets.parent_map.tolist()).issubset(
+        set(cut_facets.tolist())
+    )
+    assert rules_from_all_facets.weights.sum() > rules_from_cut_facets.weights.sum()
+
+
+def test_cutfemx_form_assembles_runtime_exterior_facet_scalar():
+    msh, level_set = _line_level_set()
+
+    msh.topology.create_entities(1)
+    msh.topology.create_connectivity(1, msh.topology.dim)
+    facets = mesh.exterior_facet_indices(msh.topology)
+    cutter = cutfemx.cut(level_set)
+    cut_facets = cutfemx.locate_entities(cutter, "phi=0", facets, 1)
+    rules = cutfemx.runtime_quadrature(
+        cutter, "phi<0", order=2, entities=facets, entity_dim=1
+    )
+    one = fem.Constant(msh, np.float64(1.0))
+
+    cut_form = cutfemx.fem.form(one * dsq(domain=msh, quadrature_provider=rules))
+    value = cutfemx.fem.assemble_scalar(cut_form)
+    value = msh.comm.allreduce(value, op=MPI.SUM)
+
+    assert cut_form.needs_runtime_data
+    assert ("exterior_facet", -1) in cut_form.runtime_providers
+    assert set(cut_facets.tolist()).issubset(set(rules.parent_map.tolist()))
+    assert np.isfinite(value)
+    assert np.isclose(value, 1.0 + 2.0 * 0.51)
 
 
 def test_cut_api_runtime_quadrature_physical_points_are_lazy_cpp_cache():

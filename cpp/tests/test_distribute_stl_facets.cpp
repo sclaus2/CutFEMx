@@ -4,8 +4,8 @@
 #include <dolfinx/mesh/generation.h>
 #include <dolfinx/mesh/utils.h>
 #include <dolfinx/common/MPI.h>
-#include <cutfemx/mesh/distribute_stl.h>
-#include <cutfemx/mesh/stl_surface.h>
+#include <cutfemx/distance/stl/distribute.h>
+#include <cutfemx/distance/stl/surface.h>
 #include <mpi.h>
 #include <fstream>
 #include <cmath>
@@ -14,7 +14,7 @@
 #include <numeric>
 #include <algorithm>
 
-using namespace cutfemx::mesh;
+using namespace cutfemx::distance;
 
 // Helper to create a simple ASCII STL file
 void create_test_stl(const std::string& filename)

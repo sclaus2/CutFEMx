@@ -2,10 +2,9 @@ import os
 import numpy as np
 from mpi4py import MPI
 
-from cutfemx.level_set import locate_entities, cut_entities, ghost_penalty_facets, facet_topology
+import cutfemx
+from cutfemx.level_set import ghost_penalty_facets, facet_topology
 from cutfemx.level_set import compute_normal
-from cutfemx.mesh import create_cut_mesh, create_cut_cells_mesh
-from cutfemx.quadrature import runtime_quadrature, physical_points
 from cutfemx.fem import active_domain, cut_form, cut_function
 
 from cutfemx.petsc import assemble_vector, assemble_matrix
@@ -67,26 +66,23 @@ def circle(x):
 
 level_set = fem.Function(V)
 level_set.interpolate(circle)
+cut_data = cutfemx.cut(level_set)
 dim = msh.topology.dim
 
-intersected_entities = locate_entities(level_set,dim,"phi=0")
-inside_entities = locate_entities(level_set,dim,"phi<0")
+intersected_entities = cutfemx.locate_entities(cut_data, "phi=0")
+inside_entities = cutfemx.locate_entities(cut_data, "phi<0")
 
 V_DG = fem.functionspace(msh, ("DG", 0, (msh.geometry.dim,)))
 n_K = fem.Function(V_DG)
 compute_normal(n_K,level_set,intersected_entities)
 #n_K = fem.Constant(msh, (PETSc.ScalarType(1.0),PETSc.ScalarType(0.0)))
 
-dof_coordinates = V.tabulate_dof_coordinates()
-
-cut_cells = cut_entities(level_set, dof_coordinates, intersected_entities, tdim, "phi<0")
-cut_mesh = create_cut_mesh(msh.comm,cut_cells,msh,inside_entities)
-interface_cells = cut_entities(level_set, dof_coordinates, intersected_entities, tdim, "phi=0")
-interface_mesh = create_cut_cells_mesh(msh.comm,interface_cells)
+cut_mesh = cutfemx.create_cut_mesh(cut_data, "phi<0", mode="full")
+interface_mesh = cutfemx.create_cut_mesh(cut_data, "phi=0", mode="cut_only")
 
 order = 2
-inside_quadrature = runtime_quadrature(level_set,"phi<0",order)
-interface_quadrature = runtime_quadrature(level_set,"phi=0",order)
+inside_quadrature = cutfemx.runtime_quadrature(cut_data, "phi<0", order)
+interface_quadrature = cutfemx.runtime_quadrature(cut_data, "phi=0", order)
 
 quad_domains = [(0,inside_quadrature), (1,interface_quadrature)]
 
@@ -159,8 +155,8 @@ with XDMFFile(msh.comm, "results/uh.xdmf", "w") as file:
 #    file.write_function(xi)
 
 with XDMFFile(msh.comm, "results/uh_cut.xdmf", "w") as file:
-    file.write_mesh(cut_mesh._mesh)
+    file.write_mesh(cut_mesh.mesh)
     file.write_function(u_cut)
 
 with XDMFFile(msh.comm, "results/uh_I.xdmf", "w") as file:
-    file.write_mesh(interface_mesh._mesh)
+    file.write_mesh(interface_mesh.mesh)

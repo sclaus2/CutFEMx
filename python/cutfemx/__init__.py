@@ -7,6 +7,7 @@
 """Main module for CutFEMx"""
 
 from cutfemx import cutfemx_cpp as _cpp
+from cutfemx import distance
 from cutfemx import fem
 from cutfemx.cut import (
     CutData,

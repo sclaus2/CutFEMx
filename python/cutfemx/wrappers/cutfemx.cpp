@@ -13,6 +13,9 @@ namespace cutfemx_wrappers
 #ifdef CUTFEMX_HAS_CUT_API
 void cut(nb::module_& m);
 #endif
+#ifdef CUTFEMX_HAS_DISTANCE
+void distance(nb::module_& m);
+#endif
 #ifdef CUTFEMX_HAS_FEM_INTERPOLATION
 void fem_interpolation(nb::module_& m);
 #endif
@@ -35,6 +38,11 @@ NB_MODULE(cutfemx_cpp, m)
 
 #ifdef CUTFEMX_HAS_CUT_API
   cutfemx_wrappers::cut(m);
+#endif
+
+#ifdef CUTFEMX_HAS_DISTANCE
+  nb::module_ distance = m.def_submodule("distance", "Distance module");
+  cutfemx_wrappers::distance(distance);
 #endif
 
 #if defined(CUTFEMX_HAS_FEM_INTERPOLATION) || defined(CUTFEMX_HAS_RUNTIME_FEM)

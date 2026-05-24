@@ -25,11 +25,11 @@
 #include <dolfinx/io/VTKFile.h>
 #include <dolfinx/io/XDMFFile.h>
 
-#include <cutfemx/mesh/stl_surface.h>
-#include <cutfemx/mesh/cell_triangle_map.h>
-#include <cutfemx/mesh/distribute_stl.h>
-#include <cutfemx/level_set/fmm.h>
-#include <cutfemx/level_set/sign.h>
+#include <cutfemx/distance/fast_iterative.h>
+#include <cutfemx/distance/sign.h>
+#include <cutfemx/distance/stl/cell_triangle_map.h>
+#include <cutfemx/distance/stl/distribute.h>
+#include <cutfemx/distance/stl/surface.h>
 
 using T = double;
 using namespace dolfinx;
@@ -58,8 +58,7 @@ int main(int argc, char* argv[])
     
     // Create background mesh (unit cube with tetrahedra)
     int N = 16;  // Resolution
-    // Use shared_vertex for deeper ghosts as requested by user
-    auto part = mesh::create_cell_partitioner(mesh::GhostMode::shared_vertex); 
+    auto part = mesh::create_cell_partitioner(mesh::GhostMode::shared_facet);
     auto bg_mesh = std::make_shared<mesh::Mesh<T>>(
         mesh::create_box<T>(MPI_COMM_WORLD, 
                            {{{0.0, 0.0, 0.0}, {1.0, 1.0, 1.0}}},
@@ -114,10 +113,10 @@ int main(int argc, char* argv[])
     }
     MPI_Barrier(MPI_COMM_WORLD);
     
-    cutfemx::mesh::DistributeSTLOptions stl_opt;
+    cutfemx::distance::DistributeSTLOptions stl_opt;
     stl_opt.aabb_padding = 0.05;
     
-    auto sphere_soup = cutfemx::mesh::distribute_stl_facets(
+    auto sphere_soup = cutfemx::distance::distribute_stl_facets(
         MPI_COMM_WORLD, *bg_mesh, stl_filename, stl_opt);
     
     if (rank == 0)
@@ -126,11 +125,11 @@ int main(int argc, char* argv[])
     }
     
     // Build cell-triangle map
-    cutfemx::mesh::CellTriangleMapOptions map_opt;
-    auto cell_tri_map = cutfemx::mesh::build_cell_triangle_map(*bg_mesh, sphere_soup, map_opt);
+    cutfemx::distance::CellTriangleMapOptions map_opt;
+    auto cell_tri_map = cutfemx::distance::build_cell_triangle_map(*bg_mesh, sphere_soup, map_opt);
     
-    // Helper now available in fmm.h or we just use it
-    auto cut_cells = cutfemx::level_set::get_cut_cells(cell_tri_map);
+    // Helper now available in the distance module.
+    auto cut_cells = cutfemx::distance::get_cut_cells(cell_tri_map);
     if (rank == 0)
     {
         std::cout << "Cut cells: " << cut_cells.size() << "\n";
@@ -147,19 +146,20 @@ int main(int argc, char* argv[])
     // ============================================================
     // Create P1 function for distance field
     // ============================================================
-    basix::FiniteElement e = basix::create_element<T>(
-        basix::element::family::P,
-        basix::cell::type::tetrahedron, 1,  // P1
-        basix::element::lagrange_variant::unset,
-        basix::element::dpc_variant::unset, false);
+    auto element = std::make_shared<const fem::FiniteElement<T>>(
+        basix::create_element<T>(
+            basix::element::family::P,
+            basix::cell::type::tetrahedron, 1,  // P1
+            basix::element::lagrange_variant::unset,
+            basix::element::dpc_variant::unset, false));
     
     auto V = std::make_shared<fem::FunctionSpace<T>>(
-        fem::create_functionspace(bg_mesh, e));
+        fem::create_functionspace(bg_mesh, element));
     
     auto dist_func = std::make_shared<fem::Function<T>>(V);
 
     // Definitions for loop
-    cutfemx::level_set::FMMOptions fmm_opt;
+    cutfemx::distance::FMMOptions fmm_opt;
     fmm_opt.band_layers = 2;
     fmm_opt.max_iter = 1000;
     
@@ -181,15 +181,15 @@ int main(int argc, char* argv[])
 
     // Verify ALL sign methods
     struct MethodSpec {
-        cutfemx::level_set::SignMode mode;
+        cutfemx::distance::SignMode mode;
         std::string name;
         std::string vtk_name;
     };
     
     std::vector<MethodSpec> methods = {
-        {cutfemx::level_set::SignMode::LocalNormalBand, "Method 1 (LocalNormalBand)", "sign_method1.xdmf"},
-        {cutfemx::level_set::SignMode::ComponentAnchor, "Method 2 (ComponentAnchor)", "sign_method2.xdmf"},
-        {cutfemx::level_set::SignMode::WindingNumber,   "Method 3 (WindingNumber)",   "sign_method3.xdmf"}
+        {cutfemx::distance::SignMode::LocalNormalBand, "Method 1 (LocalNormalBand)", "sign_method1.xdmf"},
+        {cutfemx::distance::SignMode::ComponentAnchor, "Method 2 (ComponentAnchor)", "sign_method2.xdmf"},
+        {cutfemx::distance::SignMode::WindingNumber,   "Method 3 (WindingNumber)",   "sign_method3.xdmf"}
     };
     
     for (const auto& method : methods) {
@@ -199,11 +199,11 @@ int main(int argc, char* argv[])
         // Re-run FMM (fastest way to ensure clean state)
         // Or store copy. Re-running is fine for demo size.
         if (rank == 0) std::cout << "Re-computing unsigned distance...\n";
-        cutfemx::level_set::compute_unsigned_distance(
+        cutfemx::distance::compute_unsigned_distance(
              *dist_func, sphere_soup, cell_tri_map, fmm_opt, &closest_tri);
         
         // Apply Sign
-        cutfemx::level_set::SignOptions sign_opt;
+        cutfemx::distance::SignOptions sign_opt;
         sign_opt.mode = method.mode;
         // Method 2 options
         sign_opt.use_boundary_as_outside_anchor = true;
@@ -211,7 +211,7 @@ int main(int argc, char* argv[])
         // Method 3 options
         sign_opt.winding_threshold = 0.5;
         
-        cutfemx::level_set::apply_sign(
+        cutfemx::distance::apply_sign(
             *dist_func, sphere_soup, cell_tri_map, closest_tri, sign_opt);
 
         // Error Analysis

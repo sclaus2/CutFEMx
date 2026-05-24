@@ -15,13 +15,13 @@
 #include <dolfinx/common/Timer.h>
 
 #include "eikonal_update.h"
-#include "parallel_min_exchange.h"
-#include "pt_tri_distance.h"
-#include "geom_map.h"
-#include "../mesh/stl/cell_triangle_map.h"
-#include "../mesh/stl/distribute_stl.h" 
+#include "parallel_exchange.h"
+#include "point_triangle_distance.h"
+#include "vertex_map.h"
+#include "stl/cell_triangle_map.h"
+#include "stl/distribute.h"
 
-namespace cutfemx::level_set {
+namespace cutfemx::distance {
 
 enum class NearFieldMode { TRIANGLES, IMPLICIT };
 
@@ -290,7 +290,7 @@ void compute_distance_fim(
 }
 
 // Helper to get keys from map
-inline std::vector<std::int32_t> get_cut_cells(const cutfemx::mesh::CellTriangleMap& map) {
+inline std::vector<std::int32_t> get_cut_cells(const cutfemx::distance::CellTriangleMap& map) {
     std::vector<std::int32_t> cells;
     std::size_t n = map.num_cells();
     for(std::size_t i=0; i<n; ++i) {
@@ -308,8 +308,8 @@ inline std::vector<std::int32_t> get_cut_cells(const cutfemx::mesh::CellTriangle
 template <typename Real>
 void compute_unsigned_distance(
     dolfinx::fem::Function<Real>& dist_func, // Output function
-    const ::cutfemx::mesh::TriSoup<Real>& soup, // Changed from DistributedSTL to TriSoup
-    const ::cutfemx::mesh::CellTriangleMap& map,
+    const ::cutfemx::distance::TriSoup<Real>& soup, // Changed from DistributedSTL to TriSoup
+    const ::cutfemx::distance::CellTriangleMap& map,
     const FMMOptions& opt,
     std::vector<std::int32_t>* closest_tri_out = nullptr)  // Optional: output closest triangle per vertex
 {
@@ -386,7 +386,7 @@ void compute_unsigned_distance(
     // 1. Use cached vertex -> DOF mapping
     
     // 2. Copy values
-    std::span<Real> func_vals = dist_func.x()->mutable_array();
+    std::span<Real> func_vals = dist_func.x()->array();
     for(std::int32_t v=0; v<num_vertices; ++v) {
         std::int32_t dof = vmap.vert_to_dof[v];
         if (dof >= 0 && dof < (std::int32_t)func_vals.size()) {
@@ -398,4 +398,4 @@ void compute_unsigned_distance(
     dist_func.x()->scatter_fwd();
 }
 
-} // namespace cutfemx::level_set
+} // namespace cutfemx::distance

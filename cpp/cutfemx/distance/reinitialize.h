@@ -6,25 +6,24 @@
 #include <dolfinx/fem/Function.h>
 #include <dolfinx/mesh/Mesh.h>
 
-#include <cutcells/cut_mesh.h>
-#include <cutcells/cell_flags.h>
+#include "fast_iterative.h"
+#include "point_triangle_distance.h"
+#include "vertex_map.h"
+#include "parallel_exchange.h"
 
-#include "cut_entities.h"
-#include "locate_entities.h"
-#include "fmm.h"
-#include "pt_tri_distance.h"
-#include "geom_map.h"
-#include "parallel_min_exchange.h"
+#include <cutfemx/cut/cut.h>
+#include <cutfemx/distance/stl/cell_triangle_map.h>
+#include <cutfemx/mesh/cut_mesh.h>
 
-#include <cutfemx/mesh/stl/cell_triangle_map.h>
-
-#include <vector>
-#include <span>
 #include <cmath>
 #include <iostream>
+#include <memory>
 #include <numeric>
+#include <span>
+#include <stdexcept>
+#include <vector>
 
-namespace cutfemx::level_set {
+namespace cutfemx::distance {
 
 /// Surface mesh structure for reinitialization
 /// Supports both edges (2D) and triangles (3D)
@@ -54,90 +53,106 @@ struct SurfaceMesh
 /// @return SurfaceMesh containing the interface elements
 template <typename Real>
 SurfaceMesh<Real> extract_surface_from_levelset(
-    std::shared_ptr<dolfinx::fem::Function<Real>> phi_ptr)
+    const dolfinx::fem::Function<Real>& phi)
 {
     SurfaceMesh<Real> surface;
     
-    auto mesh = phi_ptr->function_space()->mesh();
+    auto mesh = phi.function_space()->mesh();
     const int tdim = mesh->topology()->dim();
     const int gdim = mesh->geometry().dim();
+    
+    if (tdim != 2 && tdim != 3) {
+        throw std::invalid_argument(
+            "distance::reinitialize currently supports 2D and 3D meshes");
+    }
     
     // Set vertices per element based on dimension
     surface.verts_per_elem = (tdim == 3) ? 3 : 2;  // triangles for 3D, edges for 2D
     
-    // Find cut cells using locate_entities
+    // Build cut data through the public CutFEMx cut facade and use the new
+    // cut-layer locator for the zero-contour cells.
     // "phi=0" marks cells where the level set changes sign
-    auto phi_const = std::const_pointer_cast<const dolfinx::fem::Function<Real>>(phi_ptr);
-    std::vector<std::int32_t> cut_cells = locate_entities<Real>(
-        phi_const, tdim, "phi=0");
+    auto phi_handle = std::shared_ptr<const dolfinx::fem::Function<Real>>(
+        &phi, [](const dolfinx::fem::Function<Real>*) {});
+    auto cut_data = cutfemx::cut<Real>(phi_handle);
+    std::vector<std::int32_t> cut_cells =
+        cutfemx::locate_entities<Real>(cut_data, "phi=0");
     
     if (cut_cells.empty()) {
         std::cout << "Warning: No cut cells found for reinitialization\n";
         return surface;
     }
     
-    // Call CutCells to extract interface
-    auto cut_result = cut_entities<Real>(phi_const, cut_cells, tdim, "phi=0");
+    // The cut layer currently builds CutData with triangulate_cut_parts=true,
+    // so the zero-contour mesh is intervals in 2D and triangles in 3D.
+    cutfemx::mesh::CutMesh<Real> cut_mesh =
+        cutfemx::create_cut_mesh<Real>(cut_data, "phi=0", "cut_only");
     
-    // Build surface mesh from CutCells output
-    // Each cut cell produces interface elements (edges or triangles)
-    std::vector<Real> vertices;
-    std::vector<std::int32_t> connectivity;
-    std::vector<std::int32_t> parent_cells;
-    
-    int vertex_offset = 0;
-    
-    for (std::size_t i = 0; i < cut_result._cut_cells.size(); ++i) {
-        const auto& cut_cell = cut_result._cut_cells[i];
-        std::int32_t parent = cut_result._parent_map[i];
-        
-        // Skip empty cut cells
-        if (cut_cell._vertex_coords.empty()) continue;
-        
-        // Get interface elements from cut cell
-        // The CutCell stores sub-elements with types and connectivity
-        int num_verts_in_cell = cut_cell._vertex_coords.size() / gdim;
-        
-        // Copy vertex coordinates (pad to 3D if needed)
-        for (int v = 0; v < num_verts_in_cell; ++v) {
-            for (int d = 0; d < gdim; ++d) {
-                vertices.push_back(cut_cell._vertex_coords[v * gdim + d]);
-            }
-            // Pad with zeros if 2D
-            for (int d = gdim; d < 3; ++d) {
-                vertices.push_back(Real(0));
-            }
-        }
-        
-        // Process sub-elements
-        // _connectivity is std::vector<std::vector<int>>
-        // _types[t] corresponds to _connectivity[t]
-        for (std::size_t t = 0; t < cut_cell._connectivity.size(); ++t) {
-            auto type = cut_cell._types[t];
-            
-            // Only process interface elements (edges in 2D, triangles in 3D)
-            bool is_interface = false;
-            if (tdim == 3 && type == cutcells::cell::type::triangle) {
-                is_interface = true;
-            } else if (tdim == 2 && type == cutcells::cell::type::interval) {
-                is_interface = true;
-            }
-            
-            if (is_interface) {
-                // Add connectivity with offset
-                for (auto local_v : cut_cell._connectivity[t]) {
-                    connectivity.push_back(vertex_offset + local_v);
-                }
-                parent_cells.push_back(parent);
-            }
-        }
-        
-        vertex_offset += num_verts_in_cell;
+    if (!cut_mesh._cut_mesh || cut_mesh._parent_index.empty()) {
+        return surface;
     }
-    
-    surface.X = std::move(vertices);
-    surface.conn = std::move(connectivity);
-    surface.parent_cell = std::move(parent_cells);
+
+    auto interface_mesh = cut_mesh._cut_mesh;
+    const int interface_tdim = interface_mesh->topology()->dim();
+    const int interface_gdim = interface_mesh->geometry().dim();
+    if (interface_tdim != tdim - 1) {
+        throw std::runtime_error(
+            "cutfemx::create_cut_mesh returned a mesh with unexpected dimension");
+    }
+    if (interface_gdim != gdim) {
+        throw std::runtime_error(
+            "cutfemx::create_cut_mesh returned a mesh with unexpected geometry dimension");
+    }
+
+    auto cut_topology = interface_mesh->topology();
+    interface_mesh->topology_mutable()->create_connectivity(interface_tdim, 0);
+    auto cell_to_vertex = cut_topology->connectivity(interface_tdim, 0);
+    auto cell_map = cut_topology->index_map(interface_tdim);
+    auto vertex_map = cut_topology->index_map(0);
+    if (!cell_to_vertex || !cell_map || !vertex_map) {
+        throw std::runtime_error("Cut mesh topology is incomplete");
+    }
+
+    const std::int32_t num_interface_cells =
+        static_cast<std::int32_t>(cell_map->size_local() + cell_map->num_ghosts());
+    const std::int32_t num_interface_vertices =
+        static_cast<std::int32_t>(vertex_map->size_local()
+                                  + vertex_map->num_ghosts());
+    if (cut_mesh._parent_index.size()
+        != static_cast<std::size_t>(num_interface_cells)) {
+        throw std::runtime_error(
+            "Cut mesh parent-cell map does not match the cut-mesh cells");
+    }
+
+    surface.X.assign(static_cast<std::size_t>(3 * num_interface_vertices),
+                     Real(0));
+    const std::span<const Real> x = interface_mesh->geometry().x();
+    auto x_dofmap = interface_mesh->geometry().dofmap();
+    for (std::int32_t c = 0; c < num_interface_cells; ++c) {
+        auto cell_vertices = cell_to_vertex->links(c);
+        if (cell_vertices.size()
+            != static_cast<std::size_t>(surface.verts_per_elem)) {
+            throw std::runtime_error(
+                "Cut mesh cell arity does not match the zero-contour dimension");
+        }
+
+        for (std::size_t i = 0; i < cell_vertices.size(); ++i) {
+            const std::int32_t vertex = cell_vertices[i];
+            if (vertex < 0 || vertex >= num_interface_vertices) {
+                throw std::runtime_error("Cut mesh cell has invalid vertex index");
+            }
+
+            const std::int32_t geom_dof = x_dofmap(c, i);
+            for (int d = 0; d < gdim; ++d) {
+                surface.X[static_cast<std::size_t>(3 * vertex + d)] =
+                    x[static_cast<std::size_t>(3 * geom_dof + d)];
+            }
+
+            surface.conn.push_back(vertex);
+        }
+        surface.parent_cell.push_back(
+            cut_mesh._parent_index[static_cast<std::size_t>(c)]);
+    }
     
     return surface;
 }
@@ -145,11 +160,11 @@ SurfaceMesh<Real> extract_surface_from_levelset(
 /// Build CellTriangleMap from SurfaceMesh (uses parent_cell info)
 /// This is more efficient than BVH since we already know parent cells
 template <typename Real>
-mesh::CellTriangleMap build_map_from_surface(
+CellTriangleMap build_map_from_surface(
     const dolfinx::mesh::Mesh<Real>& mesh,
     const SurfaceMesh<Real>& surface)
 {
-    mesh::CellTriangleMap map;
+    CellTriangleMap map;
     
     const std::int32_t num_cells = mesh.topology()->index_map(mesh.topology()->dim())->size_local()
                                  + mesh.topology()->index_map(mesh.topology()->dim())->num_ghosts();
@@ -226,7 +241,7 @@ template <typename Real>
 void init_nearfield_from_surface(
     const dolfinx::mesh::Mesh<Real>& mesh,
     const SurfaceMesh<Real>& surface,
-    const mesh::CellTriangleMap& cell_map,
+    const CellTriangleMap& cell_map,
     std::span<Real> dist,
     const FMMOptions& opt)
 {
@@ -292,13 +307,7 @@ void reinitialize(
     }
     
     // 2. Extract surface mesh from zero-contour
-    // Need non-const shared_ptr for the function
-    auto phi_ptr = std::const_pointer_cast<dolfinx::fem::Function<Real>>(
-        std::shared_ptr<dolfinx::fem::Function<Real>>(&phi, [](auto*){}) // non-owning
-    );
-    // Actually, just pass the address directly - require caller to manage lifetime
-    auto surface = extract_surface_from_levelset(
-        std::shared_ptr<dolfinx::fem::Function<Real>>(&phi, [](auto*){}));
+    auto surface = extract_surface_from_levelset(phi);
     
     if (surface.nE() == 0) {
         if (mpi_rank == 0) {
@@ -344,7 +353,7 @@ void reinitialize(
     VertexMapCache<Real> vmap;
     vmap.build(*mesh, phi.function_space().get());
     
-    auto func_vals = phi.x()->mutable_array();
+    auto func_vals = phi.x()->array();
     for (std::int32_t v = 0; v < num_vertices; ++v) {
         std::int32_t dof = vmap.vert_to_dof[v];
         if (dof >= 0 && dof < (std::int32_t)func_vals.size()) {
@@ -362,4 +371,4 @@ void reinitialize(
     }
 }
 
-} // namespace cutfemx::level_set
+} // namespace cutfemx::distance

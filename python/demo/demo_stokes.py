@@ -2,10 +2,9 @@ import numpy as np
 from mpi4py import MPI
 import os
 
-from cutfemx.level_set import locate_entities, cut_entities, ghost_penalty_facets, facet_topology, interior_facets
+import cutfemx
+from cutfemx.level_set import ghost_penalty_facets, facet_topology, interior_facets
 from cutfemx.level_set import compute_normal
-from cutfemx.mesh import create_cut_mesh
-from cutfemx.quadrature import runtime_quadrature, physical_points
 from cutfemx.fem import assemble_vector, cut_form, assemble_matrix, cut_function
 
 from dolfinx import fem, mesh, plot, default_scalar_type, la, io
@@ -62,11 +61,12 @@ def circle(x):
 
 level_set = fem.Function(Q) # Level set usually scalar
 level_set.interpolate(circle)
+cut_data = cutfemx.cut(level_set)
 
 # Entity location
 dim = msh.topology.dim
-intersected_entities = locate_entities(level_set, dim, "phi=0")
-inside_entities = locate_entities(level_set, dim, "phi<0") # Fluid is OUTSIDE the circle?
+intersected_entities = cutfemx.locate_entities(cut_data, "phi=0")
+inside_entities = cutfemx.locate_entities(cut_data, "phi<0") # Fluid is OUTSIDE the circle?
 # Wait, "flow around a cylinder". Fluid is in domain AND r > R.
 # So "phi > 0" is fluid. Circle is obstacle (phi < 0).
 # Let's conform to standard: fluid is active domain.
@@ -75,8 +75,8 @@ inside_entities = locate_entities(level_set, dim, "phi<0") # Fluid is OUTSIDE th
 # Outside circle (fluid): phi > 0.
 # So we locate "phi>0".
 
-active_entities = locate_entities(level_set, dim, "phi>0")
-intersected_entities = locate_entities(level_set, dim, "phi=0") # Interface
+active_entities = cutfemx.locate_entities(cut_data, "phi>0")
+intersected_entities = cutfemx.locate_entities(cut_data, "phi=0") # Interface
 
 # 4. Cut Mesh and Quadrature
 # Compute normal on intersected cells for Nitsche
@@ -84,19 +84,12 @@ V_DG = fem.functionspace(msh, ("DG", 0, (msh.geometry.dim,)))
 n_K = fem.Function(V_DG)
 compute_normal(n_K, level_set, intersected_entities)
 
-# cut_entities needs dof coords to determine which cells are cut for specific basis?
-# Actually for mesh cutting, usually geometric checks.
-# But `cut_entities` checks dof placement relative to isosurface.
-# Using Q (P1) coords for level set is consistent with level_set function.
-Q_coords = Q.tabulate_dof_coordinates()
-cut_cells = cut_entities(level_set, Q_coords, intersected_entities, dim, "phi>0")
-
-cut_mesh = create_cut_mesh(msh.comm, cut_cells, msh, active_entities)
+cut_mesh = cutfemx.create_cut_mesh(cut_data, "phi>0", mode="full")
 
 # Quadrature
 order = 2 # P2 elements -> order 4 needed? 2*deg.
-fluid_quad = runtime_quadrature(level_set, "phi>0", order)
-interface_quad = runtime_quadrature(level_set, "phi=0", order)
+fluid_quad = cutfemx.runtime_quadrature(cut_data, "phi>0", order)
+interface_quad = cutfemx.runtime_quadrature(cut_data, "phi=0", order)
 
 quad_domains = [(0, fluid_quad), (1, interface_quad)]
 
@@ -105,7 +98,7 @@ gp_ids = ghost_penalty_facets(level_set, "phi>0")
 gp_topo = facet_topology(msh, gp_ids)
 
 # Exclude cut cells from active_entities to avoid double integration
-uncut_cells = np.setdiff1d(active_entities, cut_cells)
+uncut_cells = np.setdiff1d(active_entities, intersected_entities)
 
 
 # Interior Facets (Fluid + Ghost Penalty)

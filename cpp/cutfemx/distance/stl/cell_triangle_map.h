@@ -3,7 +3,7 @@
 // Cell-Triangle Map: for each local mesh cell, find all surface triangles that intersect it
 // Uses dolfinx bounding box trees for candidate generation and robust predicates for filtering
 
-#include "stl_surface.h"
+#include "surface.h"
 #include "tri_intersection.h"
 
 #include <dolfinx/mesh/Mesh.h>
@@ -18,7 +18,7 @@
 #include <algorithm>
 #include <cstdint>
 
-namespace cutfemx::mesh {
+namespace cutfemx::distance {
 
 /// Options for cell-triangle map computation
 struct CellTriangleMapOptions {
@@ -316,5 +316,5 @@ CellTriangleMap build_cell_triangle_map(
     return result;
 }
 
-} // namespace cutfemx::mesh
+} // namespace cutfemx::distance
 

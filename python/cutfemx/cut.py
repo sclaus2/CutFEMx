@@ -212,7 +212,7 @@ def runtime_quadrature(
     entities: npt.ArrayLike | None = None,
     entity_dim: int | None = None,
 ):
-    """Create runintgen-compatible runtime quadrature for selected cut entities."""
+    """Create runintgen-compatible runtime quadrature for selected entities."""
     candidate_entities, dim = _candidate_entities(entities, entity_dim)
     if candidate_entities is None:
         cpp_rules = _cpp.runtime_quadrature(cut_data._cpp_object, ls_part, order)

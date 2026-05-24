@@ -11,7 +11,7 @@ from dolfinx.io import XDMFFile
 from dolfinx import fem, log
 import ufl
 
-from cutfemx.level_set import reinitialize
+from cutfemx.distance import reinitialize
 
 def parabolic_circle(x, R=0.3):
     # f = x^2 + y^2 - R^2

@@ -6,8 +6,122 @@
 #include "mp_predicates.h"
 #include <array>
 #include <algorithm>
+#include <cmath>
 
-namespace cutfemx::mesh {
+namespace cutfemx::distance {
+
+namespace detail {
+
+inline double orient2d(const std::array<double, 2>& a,
+                       const std::array<double, 2>& b,
+                       const std::array<double, 2>& c)
+{
+    return (b[0] - a[0]) * (c[1] - a[1])
+           - (b[1] - a[1]) * (c[0] - a[0]);
+}
+
+inline bool point_on_segment2d(const std::array<double, 2>& p,
+                               const std::array<double, 2>& a,
+                               const std::array<double, 2>& b,
+                               double eps)
+{
+    if (std::abs(orient2d(a, b, p)) > eps)
+        return false;
+    return p[0] >= std::min(a[0], b[0]) - eps
+           && p[0] <= std::max(a[0], b[0]) + eps
+           && p[1] >= std::min(a[1], b[1]) - eps
+           && p[1] <= std::max(a[1], b[1]) + eps;
+}
+
+inline bool segments_intersect2d(const std::array<double, 2>& a,
+                                 const std::array<double, 2>& b,
+                                 const std::array<double, 2>& c,
+                                 const std::array<double, 2>& d,
+                                 double eps)
+{
+    const double o1 = orient2d(a, b, c);
+    const double o2 = orient2d(a, b, d);
+    const double o3 = orient2d(c, d, a);
+    const double o4 = orient2d(c, d, b);
+
+    if (((o1 > eps && o2 < -eps) || (o1 < -eps && o2 > eps))
+        && ((o3 > eps && o4 < -eps) || (o3 < -eps && o4 > eps)))
+        return true;
+
+    return point_on_segment2d(c, a, b, eps)
+           || point_on_segment2d(d, a, b, eps)
+           || point_on_segment2d(a, c, d, eps)
+           || point_on_segment2d(b, c, d, eps);
+}
+
+inline bool point_in_triangle2d(const std::array<double, 2>& p,
+                                const std::array<double, 2>& a,
+                                const std::array<double, 2>& b,
+                                const std::array<double, 2>& c,
+                                double eps)
+{
+    const double o0 = orient2d(a, b, p);
+    const double o1 = orient2d(b, c, p);
+    const double o2 = orient2d(c, a, p);
+
+    const bool has_pos = o0 > eps || o1 > eps || o2 > eps;
+    const bool has_neg = o0 < -eps || o1 < -eps || o2 < -eps;
+    return !(has_pos && has_neg);
+}
+
+template <typename Real>
+bool coplanar_segment_triangle_intersect(
+    const Real* p0, const Real* p1,
+    const Real* t0, const Real* t1, const Real* t2)
+{
+    const double u[3] = {
+        static_cast<double>(t1[0] - t0[0]),
+        static_cast<double>(t1[1] - t0[1]),
+        static_cast<double>(t1[2] - t0[2])};
+    const double v[3] = {
+        static_cast<double>(t2[0] - t0[0]),
+        static_cast<double>(t2[1] - t0[1]),
+        static_cast<double>(t2[2] - t0[2])};
+    const double n[3] = {
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0]};
+
+    int drop = 0;
+    if (std::abs(n[1]) > std::abs(n[drop]))
+        drop = 1;
+    if (std::abs(n[2]) > std::abs(n[drop]))
+        drop = 2;
+    if (std::abs(n[drop]) <= 1.0e-14)
+        return false;
+
+    auto project = [drop](const Real* p)
+    {
+        std::array<double, 2> q{};
+        int j = 0;
+        for (int d = 0; d < 3; ++d)
+        {
+            if (d != drop)
+                q[j++] = static_cast<double>(p[d]);
+        }
+        return q;
+    };
+
+    const auto a = project(t0);
+    const auto b = project(t1);
+    const auto c = project(t2);
+    const auto s0 = project(p0);
+    const auto s1 = project(p1);
+    constexpr double eps = 1.0e-12;
+
+    return point_in_triangle2d(s0, a, b, c, eps)
+           || point_in_triangle2d(s1, a, b, c, eps)
+           || segments_intersect2d(s0, s1, a, b, eps)
+           || segments_intersect2d(s0, s1, b, c, eps)
+           || segments_intersect2d(s0, s1, c, a, eps);
+}
+
+} // namespace detail
 
 /// Test if segment (p0, p1) intersects triangle (t0, t1, t2)
 /// Uses orient3d predicates for robustness
@@ -35,12 +149,8 @@ bool segment_triangle_intersect(
     // If both on plane, check 2D intersection (coplanar case)
     if (s0 == PredSign::ZERO && s1 == PredSign::ZERO)
     {
-        // Coplanar case - segment lies in triangle plane
-        // Check if segment intersects triangle edges or is inside
-        // For simplicity, project to 2D and test
-        // TODO: implement proper coplanar segment-triangle test
-        // For now, return true (conservative)
-        return true;
+        return detail::coplanar_segment_triangle_intersect(
+            p0, p1, t0, t1, t2);
     }
     
     // Step 2: Segment crosses plane. Find intersection point orientation.
@@ -288,4 +398,4 @@ bool triangle_hex_intersect(
     return false;
 }
 
-} // namespace cutfemx::mesh
+} // namespace cutfemx::distance

@@ -8,6 +8,7 @@ import numpy.typing as npt
 import typing
 
 from cutfemx import cutfemx_cpp as _cpp
+from cutfemx import distance as _distance
 
 from cutcells import CutCells_float32, CutCells_float64
 
@@ -32,7 +33,7 @@ __all__ = [
   "reinitialize"
 ]
 
-SignMode = _cpp.level_set.SignMode
+SignMode = _distance.SignMode
 
 def compute_stl_bbox(path: str):
     """
@@ -40,7 +41,7 @@ def compute_stl_bbox(path: str):
     Returns:
         (min_corner, max_corner) where each is a numpy array of shape (3,)
     """
-    return _cpp.level_set.compute_stl_bbox(path)
+    return _distance.compute_stl_bbox(path)
 
 # ... (locate_entities etc remain) ...
 
@@ -55,7 +56,7 @@ def compute_signed_distance(
     """
     Compute signed distance field using FMM and specified sign method.
     """
-    _cpp.level_set.compute_signed_distance(dist_func._cpp_object, soup, cell_map, sign_mode, max_iter, tol)
+    _distance.compute_signed_distance(dist_func, soup, cell_map, sign_mode, max_iter, tol)
 
 def compute_distance_from_stl(
     mesh: Mesh,
@@ -175,7 +176,7 @@ def distribute_stl_facets(
     Returns:
         TriSoup object containing the distributed surface mesh
     """
-    return _cpp.level_set.distribute_stl_facets(mesh.comm, mesh._cpp_object, stl_path, aabb_padding)
+    return _distance.distribute_stl(mesh, stl_path, aabb_padding)
 
 def build_cell_triangle_map(
     mesh: Mesh,
@@ -193,7 +194,7 @@ def build_cell_triangle_map(
     Returns:
         CellTriangleMap object
     """
-    return _cpp.level_set.build_cell_triangle_map(mesh._cpp_object, soup, aabb_padding)
+    return _distance.build_cell_triangle_map(mesh, soup, aabb_padding)
 
 def compute_unsigned_distance(
     dist_func: Function,
@@ -212,7 +213,7 @@ def compute_unsigned_distance(
         max_iter: Maximum number of FMM iterations
         tol: Tolerance for convergence
     """
-    _cpp.level_set.compute_unsigned_distance(dist_func._cpp_object, soup, cell_map, max_iter, tol)
+    _distance.compute_unsigned_distance(dist_func, soup, cell_map, max_iter, tol)
 
 
 
@@ -229,4 +230,4 @@ def reinitialize(
         max_iter: Maximum FMM iterations
         tol: Convergence tolerance
     """
-    _cpp.level_set.reinitialize(phi._cpp_object, max_iter, tol)
+    _distance.reinitialize(phi, max_iter, tol)

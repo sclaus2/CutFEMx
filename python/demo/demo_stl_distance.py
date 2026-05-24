@@ -7,8 +7,7 @@ from dolfinx.mesh import create_box, CellType, GhostMode
 from dolfinx.fem import FunctionSpace, Function
 from dolfinx.io import XDMFFile
 
-from cutfemx.level_set import compute_distance_from_stl
-from cutfemx.mesh import adapt_mesh_to_stl
+from cutfemx.distance import adapt_mesh_to_stl, from_stl
 
 def demo_stl_distance():
     comm = MPI.COMM_WORLD
@@ -29,7 +28,7 @@ def demo_stl_distance():
     max_pt_stl = np.zeros(3, dtype=np.float64)
 
     if rank == 0:
-        from cutfemx.level_set import compute_stl_bbox
+        from cutfemx.distance import compute_stl_bbox
         min_c, max_c = compute_stl_bbox(stl_path)
         min_pt_stl[:] = min_c
         max_pt_stl[:] = max_c
@@ -89,11 +88,11 @@ def demo_stl_distance():
     import time
     
     # 2. Compute signed distance
-    if rank == 0: print("Starting compute_distance_from_stl...", flush=True)
+    if rank == 0: print("Starting distance.from_stl...", flush=True)
     t0 = time.time()
     
-    from cutfemx.level_set import SignMode
-    dist = compute_distance_from_stl(refined_mesh, stl_path, sign_mode=SignMode.ComponentAnchor)
+    from cutfemx.distance import SignMode
+    dist = from_stl(refined_mesh, stl_path, sign_mode=SignMode.ComponentAnchor)
     
     t1 = time.time()
     if rank == 0: print(f"Computed distance in {t1-t0:.4f} s", flush=True)

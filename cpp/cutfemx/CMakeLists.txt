@@ -4,6 +4,7 @@ add_library(cutfemx)
 
 set(CUTFEMX_DIRS
   cut
+  distance
   fem
   mesh)
 
@@ -18,6 +19,11 @@ foreach(DIR ${CUTFEMX_DIRS})
   install(FILES ${HEADERS_${DIR}} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/cutfemx/${DIR}
     COMPONENT Development)
 endforeach()
+
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/distance/stl
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/cutfemx/distance
+  COMPONENT Development
+  FILES_MATCHING PATTERN "*.h")
 
 target_include_directories(cutfemx PUBLIC
   $<INSTALL_INTERFACE:include>

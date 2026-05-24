@@ -10,7 +10,7 @@
 #include <array>
 #include <cmath>
 
-namespace cutfemx::mesh {
+namespace cutfemx::distance {
 
 /// Sign type for geometric predicates
 enum class PredSign : int {
@@ -192,4 +192,4 @@ inline bool point_in_convex_polyhedron(
     return true;
 }
 
-} // namespace cutfemx::mesh
+} // namespace cutfemx::distance

@@ -4,7 +4,7 @@ from mpi4py import MPI
 import numpy as np
 import os
 from dolfinx.mesh import create_box, CellType, GhostMode
-from cutfemx.mesh import adapt_mesh_to_stl
+from cutfemx.distance import adapt_mesh_to_stl
 
 @pytest.fixture
 def cube_stl(tmp_path):

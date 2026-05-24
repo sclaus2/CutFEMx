@@ -7,7 +7,7 @@
 #include <cmath>
 #include <algorithm>
 
-namespace cutfemx::level_set {
+namespace cutfemx::distance {
 
 namespace detail {
 
@@ -259,4 +259,4 @@ Real point_segment_distance(
     return std::sqrt(point_segment_distance_sq(P, A, B, closest));
 }
 
-} // namespace cutfemx::level_set
+} // namespace cutfemx::distance

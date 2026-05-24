@@ -347,7 +347,12 @@ def main(show_plot: bool = True, solver: str = "scipy") -> None:
         subdomain_id=0,
         subdomain_data=[inside_cells, cut_quadrature],
     )
-    dsq = ufl.Measure("dx", domain=msh, subdomain_data=interface_quadrature)
+    dsq = ufl.Measure(
+        "dx",
+        domain=msh,
+        subdomain_id=1,
+        subdomain_data=interface_quadrature,
+    )
 
     # The bilinear form contains the Poisson stiffness on the physical volume
     # and a boundary penalty on the embedded interface. The linear form uses a

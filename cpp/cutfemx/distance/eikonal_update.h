@@ -6,7 +6,7 @@
 #include <array>
 #include <span>
 
-namespace cutfemx::level_set {
+namespace cutfemx::distance {
 
 namespace detail {
 
@@ -259,4 +259,4 @@ Real update_3pt(const Real* x_target,
     return val;
 }
 
-} // namespace cutfemx::level_set
+} // namespace cutfemx::distance

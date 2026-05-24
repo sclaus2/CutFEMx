@@ -14,7 +14,7 @@
 #include <iostream>
 #include <cmath>
 
-namespace cutfemx::level_set {
+namespace cutfemx::distance {
 
 /// Get MPI datatype for a given C++ type
 template <typename T>
@@ -48,7 +48,6 @@ void min_exchange_vertices(
 {
     MPI_Comm comm = index_map.comm();
     const int mpi_size = dolfinx::MPI::size(comm);
-    const int mpi_rank = dolfinx::MPI::rank(comm);
     
     if (mpi_size == 1)
         return;  // No communication needed for serial
@@ -344,4 +343,4 @@ inline void or_exchange_bool(
     for(size_t i=0; i<vals.size(); ++i) vals[i] = (dist[i] != 0);
 }
 
-} // namespace cutfemx::level_set
+} // namespace cutfemx::distance

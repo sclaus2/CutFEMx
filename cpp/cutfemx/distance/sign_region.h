@@ -8,11 +8,11 @@
 // 4. Synchronize parallel ghosts to propagate flooding across partitions.
 
 #include "sign_options.h"
-#include <cutfemx/mesh/stl/cell_triangle_map.h>
+#include <cutfemx/distance/stl/cell_triangle_map.h>
 
-#include <cutfemx/mesh/stl/tri_intersection.h>
-#include <cutfemx/level_set/parallel_min_exchange.h>
-#include "geom_map.h"
+#include <cutfemx/distance/stl/tri_intersection.h>
+#include <cutfemx/distance/parallel_exchange.h>
+#include "vertex_map.h"
 #include <dolfinx/common/log.h>
 #include <sstream>
 
@@ -25,7 +25,7 @@
 #include <array>
 #include <queue>
 
-namespace cutfemx::level_set {
+namespace cutfemx::distance {
 
 /// Mark facets crossed by the surface
 /// A facet is marked if the surface explicitly intersects it.
@@ -33,8 +33,8 @@ namespace cutfemx::level_set {
 template <typename Real>
 std::vector<bool> mark_cut_facets(
     const dolfinx::mesh::Mesh<Real>& mesh,
-    const ::cutfemx::mesh::CellTriangleMap& cell_tri_map,
-    const ::cutfemx::mesh::TriSoup<Real>& soup);
+    const ::cutfemx::distance::CellTriangleMap& cell_tri_map,
+    const ::cutfemx::distance::TriSoup<Real>& soup);
 
 /// Apply sign using naive flooding from boundary
 /// @param phi Unsigned distance function (input), Signed distance (output)
@@ -53,8 +53,8 @@ void apply_sign_flood_fill(
 template <typename Real>
 std::vector<bool> mark_cut_facets(
     const dolfinx::mesh::Mesh<Real>& mesh,
-    const ::cutfemx::mesh::CellTriangleMap& cell_tri_map,
-    const ::cutfemx::mesh::TriSoup<Real>& soup)
+    const ::cutfemx::distance::CellTriangleMap& cell_tri_map,
+    const ::cutfemx::distance::TriSoup<Real>& soup)
 {
     const auto topology = mesh.topology(); // shared_ptr<const Topology>
     const int tdim = topology->dim();
@@ -119,7 +119,7 @@ std::vector<bool> mark_cut_facets(
                     const Real* f1 = vmap.coords(v1);
                     const Real* f2 = vmap.coords(v2);
                     
-                    intersect = ::cutfemx::mesh::triangle_triangle_intersect(t0, t1, t2, f0, f1, f2);
+                    intersect = ::cutfemx::distance::triangle_triangle_intersect(t0, t1, t2, f0, f1, f2);
                 }
                 else {
                     // Quad
@@ -135,8 +135,8 @@ std::vector<bool> mark_cut_facets(
                     const Real* f2 = vmap.coords(v2);
                     const Real* f3 = vmap.coords(v3);
                     
-                    intersect = ::cutfemx::mesh::triangle_triangle_intersect(t0, t1, t2, f0, f1, f2) ||
-                                ::cutfemx::mesh::triangle_triangle_intersect(t0, t1, t2, f0, f2, f3);
+                    intersect = ::cutfemx::distance::triangle_triangle_intersect(t0, t1, t2, f0, f1, f2) ||
+                                ::cutfemx::distance::triangle_triangle_intersect(t0, t1, t2, f0, f2, f3);
                 }
 
                 if (intersect) {
@@ -151,7 +151,7 @@ std::vector<bool> mark_cut_facets(
     for(bool b : is_cut) if(b) cut_count++;
     
     // Explicitly Synchronize Cuts (OR rule)
-    cutfemx::level_set::or_exchange_bool(*facet_map, is_cut);
+    cutfemx::distance::or_exchange_bool(*facet_map, is_cut);
 
     // Logging removed or moved to debug level if needed
     return is_cut;
@@ -268,7 +268,7 @@ void apply_sign_flood_fill(
         for(int i=0; i<num_total_cells; ++i) exchange_buf[i] = -static_cast<double>(cell_sign[i]);
         
         // Sync
-        cutfemx::level_set::min_exchange_vertices<double>(*cell_map, std::span<double>(exchange_buf));
+        cutfemx::distance::min_exchange_vertices<double>(*cell_map, std::span<double>(exchange_buf));
         
         // Check for changes and update queue
         bool local_change = false;
@@ -424,7 +424,7 @@ void apply_sign_flood_fill(
     vmap.build(mesh, phi.function_space().get());
     const std::vector<std::int32_t>& vert_to_dof = vmap.vert_to_dof;
     
-    auto data = phi.x()->mutable_array();
+    auto data = phi.x()->array();
     
     for (std::int32_t v = 0; v < num_vertices; ++v) {
         std::int32_t dof = vert_to_dof[v];
@@ -439,4 +439,4 @@ void apply_sign_flood_fill(
     phi.x()->scatter_fwd();
 }
 
-} // namespace cutfemx::level_set
+} // namespace cutfemx::distance

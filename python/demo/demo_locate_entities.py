@@ -1,7 +1,7 @@
 import numpy as np
 from mpi4py import MPI
 
-from cutfemx.level_set import locate_entities
+import cutfemx
 from dolfinx import fem, mesh, plot
 
 try:
@@ -27,9 +27,10 @@ def circle(x):
 level_set = fem.Function(V)
 level_set.interpolate(circle)
 dim = msh.topology.dim
+cut_data = cutfemx.cut(level_set)
 
-intersected_entities = locate_entities(level_set,dim,"phi=0")
-inside_entities = locate_entities(level_set,dim,"phi<0")
+intersected_entities = cutfemx.locate_entities(cut_data, "phi=0")
+inside_entities = cutfemx.locate_entities(cut_data, "phi<0")
 
 # To visualize the function u, we create a VTK-compatible grid to
 # values of u to

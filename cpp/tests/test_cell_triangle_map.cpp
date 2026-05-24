@@ -1,10 +1,10 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
-#include <cutfemx/mesh/mp_predicates.h>
-#include <cutfemx/mesh/tri_intersection.h>
-#include <cutfemx/mesh/cell_triangle_map.h>
-#include <cutfemx/mesh/stl_surface.h>
+#include <cutfemx/distance/stl/cell_triangle_map.h>
+#include <cutfemx/distance/stl/mp_predicates.h>
+#include <cutfemx/distance/stl/surface.h>
+#include <cutfemx/distance/stl/tri_intersection.h>
 
 #include <dolfinx/mesh/Mesh.h>
 #include <dolfinx/mesh/generation.h>
@@ -12,7 +12,7 @@
 #include <mpi.h>
 #include <array>
 
-using namespace cutfemx::mesh;
+using namespace cutfemx::distance;
 
 TEST_CASE("orient3d predicate", "[predicates]")
 {
@@ -228,4 +228,3 @@ TEST_CASE("build_cell_triangle_map", "[map]")
         INFO("Cells intersecting triangle: " << intersect_count << " / " << num_cells);
     }
 }
-

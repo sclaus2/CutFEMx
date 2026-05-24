@@ -6,13 +6,13 @@ import dolfinx.mesh as mesh
 import dolfinx.fem as fem
 import ufl
 import cutfemx.fem as cf_fem
-from cutfemx import cutfemx_cpp as _cpp
-import basix
-from dolfinx.fem import CoordinateElement
-from dolfinx.mesh import Mesh
 
-from cutfemx.quadrature import runtime_quadrature_mesh
+from quadrature_utils import runtime_quadrature_mesh
 
+@pytest.mark.xfail(
+    raises=NotImplementedError,
+    reason="runintgen runtime metadata does not yet support mixed Basix elements",
+)
 def test_stokes_assembly():
     """
     Compares Standard DOLFINx Assembly vs CutFEMx Runtime Assembly for Stokes (Mixed).
@@ -57,10 +57,10 @@ def test_stokes_assembly():
     # Uses order 4 to be safe.
     qr = runtime_quadrature_mesh(msh, order=4)
     
-    dx_cut = ufl.Measure("dC", subdomain_data=[(0, qr)], domain=msh)
+    dx_cut = ufl.Measure("dx", subdomain_data=qr, domain=msh)
     
     # Same form but with dx_cut
-    a_cut = (ufl.inner(ufl.grad(u), ufl.grad(v)) - ufl.div(v)*p - ufl.div(u)*r) * dx_cut(0)
+    a_cut = (ufl.inner(ufl.grad(u), ufl.grad(v)) - ufl.div(v)*p - ufl.div(u)*r) * dx_cut
     
     print("DEBUG: Assembling CutFEMx Stokes matrix...")
     # CutFEMx assembly

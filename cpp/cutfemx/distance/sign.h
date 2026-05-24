@@ -7,11 +7,11 @@
 //   3) WindingNumber   - robust global sign via generalized winding number
 
 #include <dolfinx/mesh/Mesh.h>
-#include <cutfemx/mesh/stl/stl_surface.h>
-#include <cutfemx/mesh/stl/cell_triangle_map.h>
-#include <cutfemx/level_set/pt_tri_distance.h>
-#include <cutfemx/level_set/parallel_min_exchange.h>
-#include "geom_map.h"
+#include <cutfemx/distance/stl/surface.h>
+#include <cutfemx/distance/stl/cell_triangle_map.h>
+#include <cutfemx/distance/point_triangle_distance.h>
+#include <cutfemx/distance/parallel_exchange.h>
+#include "vertex_map.h"
 #include <dolfinx/common/log.h>
 #include <sstream>
 
@@ -26,7 +26,7 @@
 #include <algorithm>
 #include <queue>
 
-namespace cutfemx::level_set {
+namespace cutfemx::distance {
 
 namespace sign_detail {
 
@@ -124,8 +124,8 @@ void propagate_sign_bfs(
 template <typename Real>
 void apply_sign_local_normal(
     dolfinx::fem::Function<Real>& phi,
-    const ::cutfemx::mesh::TriSoup<Real>& soup,
-    const ::cutfemx::mesh::CellTriangleMap& map,
+    const ::cutfemx::distance::TriSoup<Real>& soup,
+    const ::cutfemx::distance::CellTriangleMap& map,
     const std::vector<std::int32_t>& closest_tri,
     const SignOptions& opt = {})
 {
@@ -136,7 +136,7 @@ void apply_sign_local_normal(
     auto cell_to_vertex = topology->connectivity(tdim, 0);
     
     // Get span for read/write access
-    std::span<Real> phi_span = phi.x()->mutable_array();
+    std::span<Real> phi_span = phi.x()->array();
     
     const std::int32_t num_vertices = vertex_map->size_local() + vertex_map->num_ghosts();
     
@@ -203,8 +203,8 @@ void apply_sign_local_normal(
 template <typename Real>
 void apply_sign(
     dolfinx::fem::Function<Real>& phi,
-    const ::cutfemx::mesh::TriSoup<Real>& soup,
-    const ::cutfemx::mesh::CellTriangleMap& map,
+    const ::cutfemx::distance::TriSoup<Real>& soup,
+    const ::cutfemx::distance::CellTriangleMap& map,
     const std::vector<std::int32_t>& closest_tri,
     const SignOptions& opt = {})
 {
@@ -251,4 +251,4 @@ void apply_sign(
     }
 }
 
-} // namespace cutfemx::level_set
+} // namespace cutfemx::distance

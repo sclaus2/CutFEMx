@@ -1,5 +1,5 @@
 #pragma once
-#include "stl_surface.h"
+#include "surface.h"
 #include <vector>
 #include <cstdint>
 #include <algorithm>
@@ -8,7 +8,7 @@
 #include <deque>
 #include <numeric>
 
-namespace cutfemx::mesh {
+namespace cutfemx::distance {
 
 struct OrientOptions
 {
@@ -367,4 +367,4 @@ OrientDiagnostics<Real> orient_surface(TriSoup<Real>& S,
     return diag;
 }
 
-} // namespace cutfemx::mesh
+} // namespace cutfemx::distance
