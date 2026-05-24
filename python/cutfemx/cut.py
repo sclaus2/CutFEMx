@@ -10,14 +10,13 @@ from collections.abc import Sequence
 
 import numpy as np
 import numpy.typing as npt
-import basix.ufl
-import ufl
-
-from dolfinx.fem import Function
-from dolfinx.mesh import Mesh
 from runintgen import QuadratureRules
 
+import basix.ufl
+import ufl
 from cutfemx import cutfemx_cpp as _cpp
+from dolfinx.fem import Function
+from dolfinx.mesh import Mesh
 
 
 class RuntimeQuadratureRules(QuadratureRules):
@@ -52,7 +51,7 @@ class RuntimeQuadratureRules(QuadratureRules):
 
         return super().__getattribute__(name)
 
-    def with_physical_points(self) -> "RuntimeQuadratureRules":
+    def with_physical_points(self) -> RuntimeQuadratureRules:
         """Fill the C++ physical-point cache and return this rule object."""
         _ = self.physical_points
         return self
@@ -95,8 +94,18 @@ class CutMesh:
 class CutData:
     """Python handle for CutFEMx cut data."""
 
-    def __init__(self, cpp_object):
+    def __init__(
+        self,
+        cpp_object,
+        *,
+        level_sets: Sequence[Function] | None = None,
+        entities: npt.NDArray[np.int32] | None = None,
+        entity_dim: int | None = None,
+    ):
         self._cpp_object = cpp_object
+        self._level_sets = tuple(level_sets or ())
+        self._entities = None if entities is None else np.asarray(entities, dtype=np.int32)
+        self._entity_dim = entity_dim
 
     def update(self) -> None:
         """Refresh the current cut state from the held level-set values."""
@@ -117,6 +126,24 @@ class CutData:
     @property
     def level_set_names(self) -> tuple[str, ...]:
         return tuple(self._cpp_object.level_set_names)
+
+    @property
+    def level_sets(self) -> tuple[Function, ...]:
+        return self._level_sets
+
+    @property
+    def mesh(self) -> Mesh:
+        if not self._level_sets:
+            raise RuntimeError("CutData does not retain a Python level-set owner.")
+        return self._level_sets[0].function_space.mesh
+
+    @property
+    def entity_dim(self) -> int | None:
+        return self._entity_dim
+
+    @property
+    def entities(self) -> npt.NDArray[np.int32] | None:
+        return self._entities
 
 
 def _candidate_entities(
@@ -166,16 +193,25 @@ def cut(
     candidate_entities, dim = _candidate_entities(entities, entity_dim)
     if len(level_sets) == 1:
         if candidate_entities is None:
-            return CutData(_cpp.cut(level_sets[0]._cpp_object))
+            return CutData(_cpp.cut(level_sets[0]._cpp_object), level_sets=level_sets)
         return CutData(
-            _cpp.cut_entities(level_sets[0]._cpp_object, candidate_entities, dim)
+            _cpp.cut_entities(level_sets[0]._cpp_object, candidate_entities, dim),
+            level_sets=level_sets,
+            entities=candidate_entities,
+            entity_dim=dim,
         )
     if candidate_entities is None:
-        return CutData(_cpp.cut_multi([phi._cpp_object for phi in level_sets]))
+        return CutData(
+            _cpp.cut_multi([phi._cpp_object for phi in level_sets]),
+            level_sets=level_sets,
+        )
     return CutData(
         _cpp.cut_multi_entities(
             [phi._cpp_object for phi in level_sets], candidate_entities, dim
-        )
+        ),
+        level_sets=level_sets,
+        entities=candidate_entities,
+        entity_dim=dim,
     )
 
 
@@ -220,3 +256,74 @@ def runtime_quadrature(
     )
     rules._cutfemx_owner = cpp_rules
     return rules
+
+
+def interior_facets_for_cells(
+    msh: Mesh,
+    cells: npt.ArrayLike,
+    *,
+    include_ghosts: bool = False,
+) -> npt.NDArray[np.int32]:
+    """Return raw local interior facet ids touched by ``cells``."""
+    tdim = msh.topology.dim
+    fdim = tdim - 1
+    msh.topology.create_entities(fdim)
+    msh.topology.create_connectivity(tdim, fdim)
+    msh.topology.create_connectivity(fdim, tdim)
+    cell_to_facet = msh.topology.connectivity(tdim, fdim)
+    facet_to_cell = msh.topology.connectivity(fdim, tdim)
+    if cell_to_facet is None or facet_to_cell is None:
+        raise RuntimeError("Facet-cell connectivity is unavailable.")
+
+    num_owned_facets = msh.topology.index_map(fdim).size_local
+    facet_ids: set[int] = set()
+    for cell in np.asarray(cells, dtype=np.int32).ravel():
+        for facet in cell_to_facet.links(int(cell)):
+            if not include_ghosts and int(facet) >= num_owned_facets:
+                continue
+            if len(facet_to_cell.links(int(facet))) == 2:
+                facet_ids.add(int(facet))
+    return np.asarray(sorted(facet_ids), dtype=np.int32)
+
+
+def ghost_penalty_facets(
+    cut_data: CutData,
+    selector: str,
+    *,
+    depth: int = 1,
+    include_ghosts: bool = False,
+) -> npt.NDArray[np.int32]:
+    """Return owned raw interior facet ids for the cut-cell stabilization band."""
+    if depth != 1:
+        raise NotImplementedError("ghost_penalty_facets currently supports depth=1.")
+    if cut_data.entity_dim is not None and cut_data.entity_dim != cut_data.mesh.topology.dim:
+        raise ValueError("ghost_penalty_facets expects cell-hosted CutData.")
+
+    msh = cut_data.mesh
+    tdim = msh.topology.dim
+    fdim = tdim - 1
+    msh.topology.create_entities(fdim)
+    msh.topology.create_connectivity(tdim, fdim)
+    msh.topology.create_connectivity(fdim, tdim)
+    cell_to_facet = msh.topology.connectivity(tdim, fdim)
+    facet_to_cell = msh.topology.connectivity(fdim, tdim)
+    if cell_to_facet is None or facet_to_cell is None:
+        raise RuntimeError("Facet-cell connectivity is unavailable.")
+
+    cut_cells = locate_entities(cut_data, "phi=0")
+    selected_cells = locate_entities(cut_data, selector)
+    active_cells = set(np.concatenate([cut_cells, selected_cells]).tolist())
+    num_owned_facets = msh.topology.index_map(fdim).size_local
+
+    facets: set[int] = set()
+    for cell in cut_cells:
+        for facet in cell_to_facet.links(int(cell)):
+            facet = int(facet)
+            if not include_ghosts and facet >= num_owned_facets:
+                continue
+            adjacent = [int(c) for c in facet_to_cell.links(facet)]
+            if len(adjacent) != 2:
+                continue
+            if all(c in active_cells for c in adjacent):
+                facets.add(facet)
+    return np.asarray(sorted(facets), dtype=np.int32)

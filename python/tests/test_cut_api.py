@@ -4,14 +4,15 @@
 #
 # SPDX-License-Identifier:    MIT
 
-import numpy as np
-import pytest
 from mpi4py import MPI
 
 import cutfemx
-from dolfinx import fem, la, mesh
-from runintgen import dsq
+import numpy as np
+import pytest
+from runintgen import dSq, dsq
+
 import ufl
+from dolfinx import fem, la, mesh
 
 
 def _line_level_set():
@@ -29,6 +30,19 @@ def _line_level_set():
     level_set = fem.Function(V)
     level_set.interpolate(line)
     return msh, level_set
+
+
+def _interior_facet_indices(msh):
+    tdim = msh.topology.dim
+    fdim = tdim - 1
+    msh.topology.create_entities(fdim)
+    msh.topology.create_connectivity(fdim, tdim)
+    facet_to_cell = msh.topology.connectivity(fdim, tdim)
+    num_facets = msh.topology.index_map(fdim).size_local
+    return np.asarray(
+        [facet for facet in range(num_facets) if len(facet_to_cell.links(facet)) == 2],
+        dtype=np.int32,
+    )
 
 
 def test_cut_api_locate_entities_default_cells():
@@ -254,6 +268,46 @@ def test_cut_api_runtime_quadrature_accepts_exterior_facets():
     )
 
 
+def test_cut_api_runtime_quadrature_accepts_interior_facets():
+    msh, level_set = _line_level_set()
+
+    facets = _interior_facet_indices(msh)
+    cutter = cutfemx.cut(level_set, facets, 1)
+    cut_facets = cutfemx.locate_entities(cutter, "phi=0")
+    cut_facet_cutter = cutfemx.cut(level_set, cut_facets, 1)
+    rules_from_all_facets = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
+    rules_from_cut_facets = cutfemx.runtime_quadrature(
+        cut_facet_cutter, "phi<0", order=2
+    )
+    physical_points = rules_from_all_facets.with_physical_points().physical_points
+
+    assert cut_facets.size > 0
+    assert set(cut_facets.tolist()).issubset(set(facets.tolist()))
+    assert rules_from_all_facets.kind == "per_entity"
+    assert rules_from_all_facets.tdim == 1
+    assert rules_from_all_facets.points.shape[0] == rules_from_all_facets.weights.size
+    assert physical_points.shape == (
+        msh.geometry.dim,
+        rules_from_all_facets.weights.size,
+    )
+    assert np.all(np.isfinite(physical_points))
+    assert rules_from_all_facets.offsets[0] == 0
+    assert rules_from_all_facets.offsets[-1] == rules_from_all_facets.weights.size
+    assert (
+        rules_from_all_facets.parent_map.size
+        == rules_from_all_facets.offsets.size - 1
+    )
+    assert set(rules_from_all_facets.parent_map.tolist()).issubset(
+        set(cut_facets.tolist())
+    )
+    assert set(rules_from_cut_facets.parent_map.tolist()).issubset(
+        set(cut_facets.tolist())
+    )
+    np.testing.assert_allclose(
+        rules_from_all_facets.weights.sum(), rules_from_cut_facets.weights.sum()
+    )
+
+
 def test_cutfemx_form_assembles_runtime_exterior_facet_scalar():
     msh, level_set = _line_level_set()
 
@@ -274,6 +328,147 @@ def test_cutfemx_form_assembles_runtime_exterior_facet_scalar():
     assert set(cut_facets.tolist()).issubset(set(rules.parent_map.tolist()))
     assert np.isfinite(value)
     assert value > 0.0
+
+
+def test_cutfemx_form_assembles_mixed_exterior_facet_scalar():
+    msh, level_set = _line_level_set()
+
+    fdim = msh.topology.dim - 1
+    msh.topology.create_entities(fdim)
+    msh.topology.create_connectivity(fdim, msh.topology.dim)
+    facets = mesh.exterior_facet_indices(msh.topology)
+    cutter = cutfemx.cut(level_set, facets, fdim)
+    standard_facets = cutfemx.locate_entities(cutter, "phi<0")
+    rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
+    one = fem.Constant(msh, np.float64(1.0))
+
+    tags = mesh.meshtags(
+        msh,
+        fdim,
+        np.ascontiguousarray(standard_facets, dtype=np.int32),
+        np.full(standard_facets.size, 1, dtype=np.int32),
+    )
+    ds_standard = ufl.Measure("ds", domain=msh, subdomain_data=tags)
+    standard_value = fem.assemble_scalar(fem.form(one * ds_standard(1)))
+
+    runtime_form = cutfemx.fem.form(one * dsq(domain=msh, quadrature_provider=rules))
+    runtime_value = cutfemx.fem.assemble_scalar(runtime_form)
+
+    mixed_form = cutfemx.fem.form(
+        one * dsq(0, domain=msh, subdomain_data=[standard_facets, rules])
+    )
+    mixed_value = cutfemx.fem.assemble_scalar(mixed_form)
+
+    assert mixed_form.needs_runtime_data
+    assert ("exterior_facet", 0) in mixed_form.runtime_providers
+    np.testing.assert_allclose(mixed_value, standard_value + runtime_value)
+
+
+def test_cutfemx_form_assembles_runtime_interior_facet_scalar():
+    msh, level_set = _line_level_set()
+
+    facets = _interior_facet_indices(msh)
+    cutter = cutfemx.cut(level_set, facets, 1)
+    cut_facets = cutfemx.locate_entities(cutter, "phi=0")
+    rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
+    one = fem.Constant(msh, np.float64(1.0))
+
+    cut_form = cutfemx.fem.form(one * dSq(domain=msh, quadrature_provider=rules))
+    value = cutfemx.fem.assemble_scalar(cut_form)
+    value = msh.comm.allreduce(value, op=MPI.SUM)
+
+    assert cut_form.needs_runtime_data
+    assert ("interior_facet", -1) in cut_form.runtime_providers
+    assert set(cut_facets.tolist()).issubset(set(rules.parent_map.tolist()))
+    assert np.isfinite(value)
+    assert value > 0.0
+
+
+def test_cutfemx_form_assembles_mixed_interior_facet_scalar():
+    msh, level_set = _line_level_set()
+
+    fdim = msh.topology.dim - 1
+    facets = _interior_facet_indices(msh)
+    cutter = cutfemx.cut(level_set, facets, fdim)
+    standard_facets = cutfemx.locate_entities(cutter, "phi<0")
+    rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
+    one = fem.Constant(msh, np.float64(1.0))
+
+    tags = mesh.meshtags(
+        msh,
+        fdim,
+        np.ascontiguousarray(standard_facets, dtype=np.int32),
+        np.full(standard_facets.size, 1, dtype=np.int32),
+    )
+    dS_standard = ufl.Measure("dS", domain=msh, subdomain_data=tags)
+    standard_value = fem.assemble_scalar(fem.form(one * dS_standard(1)))
+
+    runtime_form = cutfemx.fem.form(one * dSq(domain=msh, quadrature_provider=rules))
+    runtime_value = cutfemx.fem.assemble_scalar(runtime_form)
+
+    mixed_form = cutfemx.fem.form(
+        one * dSq(0, domain=msh, subdomain_data=[standard_facets, rules])
+    )
+    mixed_value = cutfemx.fem.assemble_scalar(mixed_form)
+
+    assert mixed_form.needs_runtime_data
+    assert ("interior_facet", 0) in mixed_form.runtime_providers
+    np.testing.assert_allclose(mixed_value, standard_value + runtime_value)
+
+
+def test_cutfemx_form_assembles_standard_raw_interior_facet_ids():
+    msh, level_set = _line_level_set()
+
+    facets = _interior_facet_indices(msh)
+    cutter = cutfemx.cut(level_set, facets, msh.topology.dim - 1)
+    standard_facets = cutfemx.locate_entities(cutter, "phi<0")
+    one = fem.Constant(msh, np.float64(1.0))
+
+    tags = mesh.meshtags(
+        msh,
+        msh.topology.dim - 1,
+        np.ascontiguousarray(standard_facets, dtype=np.int32),
+        np.full(standard_facets.size, 2, dtype=np.int32),
+    )
+    dS_tags = ufl.Measure("dS", domain=msh, subdomain_data=tags)
+    dS_raw = ufl.Measure(
+        "dS",
+        domain=msh,
+        subdomain_id=2,
+        subdomain_data=standard_facets,
+    )
+
+    expected = fem.assemble_scalar(fem.form(one * dS_tags(2)))
+    form = cutfemx.fem.form(one * dS_raw)
+    value = cutfemx.fem.assemble_scalar(form)
+
+    assert not form.needs_runtime_data
+    np.testing.assert_allclose(value, expected)
+
+
+def test_cutfemx_form_assembles_runtime_interior_facet_jump_matrix():
+    msh, level_set = _line_level_set()
+
+    facets = _interior_facet_indices(msh)
+    cutter = cutfemx.cut(level_set, facets, 1)
+    rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
+    V = fem.functionspace(msh, ("DG", 1))
+    u = ufl.TrialFunction(V)
+    v = ufl.TestFunction(V)
+
+    jump_u = u("+") - u("-")
+    jump_v = v("+") - v("-")
+    cut_form = cutfemx.fem.form(
+        jump_u * jump_v * dSq(domain=msh, quadrature_provider=rules)
+    )
+    A = cutfemx.fem.assemble_matrix(cut_form)
+    A.scatter_reverse()
+    matrix_norm_sq = A.squared_norm()
+
+    assert cut_form.needs_runtime_data
+    assert ("interior_facet", -1) in cut_form.runtime_providers
+    assert np.isfinite(matrix_norm_sq)
+    assert matrix_norm_sq > 0.0
 
 
 def test_cut_api_runtime_quadrature_physical_points_are_lazy_cpp_cache():
@@ -310,7 +505,7 @@ def test_cut_api_runtime_quadrature_rejects_inclusive_selector():
 
 
 def test_cut_api_multiple_level_sets_names_and_or_selector():
-    msh, level_set = _line_level_set()
+    _, level_set = _line_level_set()
     V = level_set.function_space
     second = fem.Function(V, name="cap")
     second.interpolate(lambda x: x[1] - 0.51)
@@ -453,6 +648,40 @@ def test_cutfemx_form_assembles_runtime_vector_and_matrix():
     np.testing.assert_allclose(b.array[domain.inactive_dofs], 0.0)
     assert deactivated_dofs > 0
     assert matrix_nnz > 0
+
+
+def test_cutfemx_quadrature_function_normal_assembles_runtime_cell_scalar():
+    msh, level_set = _line_level_set()
+
+    cutter = cutfemx.cut(level_set)
+    rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
+    n_gamma = cutfemx.normal(level_set)
+
+    dx_rules = ufl.Measure("dx", domain=msh, subdomain_data=rules)
+    form = cutfemx.fem.form(ufl.inner(n_gamma, n_gamma) * dx_rules)
+    value = cutfemx.fem.assemble_scalar(form)
+
+    assert form.needs_runtime_data
+    assert np.isfinite(value)
+    assert value > 0.0
+
+
+def test_cut_api_ghost_penalty_facets_are_owned_unique_interior_facets():
+    msh, level_set = _line_level_set()
+
+    cutter = cutfemx.cut(level_set)
+    facets = cutfemx.ghost_penalty_facets(cutter, "phi<0")
+
+    fdim = msh.topology.dim - 1
+    msh.topology.create_entities(fdim)
+    msh.topology.create_connectivity(fdim, msh.topology.dim)
+    facet_to_cell = msh.topology.connectivity(fdim, msh.topology.dim)
+    num_owned_facets = msh.topology.index_map(fdim).size_local
+
+    assert facets.size > 0
+    assert np.array_equal(facets, np.unique(facets))
+    assert np.all(facets < num_owned_facets)
+    assert all(len(facet_to_cell.links(int(facet))) == 2 for facet in facets)
 
 
 def test_cutfemx_standard_only_form_active_domain_allows_no_inactive_dofs():

@@ -6,19 +6,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import functools
-from typing import Any, Sequence
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
 
 import basix.ufl
-import numpy as np
 import ufl
-
-from dolfinx import default_scalar_type, fem, la
-from dolfinx.fem import Function
-
 from cutfemx import cutfemx_cpp as _cpp
 from cutfemx.cut import CutMesh
+from dolfinx import default_scalar_type, fem, la
+from dolfinx.fem import Function
 
 __all__ = [
     "ActiveDomain",
@@ -136,12 +136,12 @@ def _create_cpp_form(
     if not hasattr(_cpp, "fem") or not hasattr(_cpp.fem, "create_form_float64"):
         raise RuntimeError("CutFEMx was built without runtime Form support")
 
-    from runintgen.dolfinx.utils import (
+    from cutfemx._runintgen_adapter import (
         _active_coefficients,
         _as_cpp_object,
         _build_subdomains,
-        _resolve_custom_data,
         _require_dolfinx,
+        _resolve_custom_data,
         _runtime_domain_and_custom_data,
         _standard_domain,
         _ufl_to_dolfinx_integral_type,
@@ -267,8 +267,10 @@ def _compile_cut_form(
     entity_maps: Sequence[Any] | None = None,
     custom_data: Any | None = None,
 ) -> CutForm:
-    from runintgen.dolfinx import compile_form
-    from runintgen.dolfinx.utils import _reject_standard_quadrature_functions
+    from cutfemx._runintgen_adapter import (
+        _reject_standard_quadrature_functions,
+        compile_form,
+    )
 
     _domains = list(ufl_form.subdomain_data().keys())
     if len(_domains) != 1:

@@ -6,6 +6,7 @@
 
 #include <array.h>
 
+#include <algorithm>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/shared_ptr.h>
@@ -15,6 +16,7 @@
 #include <span>
 
 #include <dolfinx/fem/Function.h>
+#include <dolfinx/mesh/Mesh.h>
 
 #include <cutfemx/mesh/cut_mesh.h>
 #include <cutfemx/cut/cut.h>
@@ -24,6 +26,85 @@ namespace nb = nanobind;
 
 namespace
 {
+template <typename T>
+int local_facet_index(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
+                      std::int32_t cell, std::int32_t facet)
+{
+  const int tdim = mesh->topology()->dim();
+  auto c_to_f = mesh->topology()->connectivity(tdim, tdim - 1);
+  if (!c_to_f)
+    throw std::runtime_error("Cell-to-facet connectivity is unavailable.");
+
+  auto facets = c_to_f->links(cell);
+  auto it = std::find(facets.begin(), facets.end(), facet);
+  if (it == facets.end())
+    throw std::runtime_error("Could not resolve local facet index.");
+  return static_cast<int>(std::distance(facets.begin(), it));
+}
+
+template <typename T>
+std::vector<std::int32_t> facet_integration_rows(
+    std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
+    std::span<const std::int32_t> facet_ids, const std::string& integral_type)
+{
+  if (!mesh)
+    throw std::runtime_error("Cannot build facet rows without a mesh.");
+
+  const int tdim = mesh->topology()->dim();
+  if (tdim < 1)
+    throw std::runtime_error("Facet integration requires mesh tdim >= 1.");
+  const int fdim = tdim - 1;
+
+  mesh->topology_mutable()->create_entities(fdim);
+  mesh->topology_mutable()->create_connectivity(fdim, tdim);
+  mesh->topology_mutable()->create_connectivity(tdim, fdim);
+
+  auto f_to_c = mesh->topology()->connectivity(fdim, tdim);
+  auto c_to_f = mesh->topology()->connectivity(tdim, fdim);
+  if (!f_to_c || !c_to_f)
+    throw std::runtime_error("Facet-cell connectivity is unavailable.");
+
+  const bool exterior = integral_type == "exterior_facet";
+  const bool interior = integral_type == "interior_facet";
+  if (!exterior && !interior)
+  {
+    throw std::runtime_error(
+        "facet_integration_rows expects 'exterior_facet' or 'interior_facet'.");
+  }
+
+  std::vector<std::int32_t> rows;
+  rows.reserve(facet_ids.size() * (exterior ? 2 : 4));
+  for (std::int32_t facet : facet_ids)
+  {
+    auto cells = f_to_c->links(facet);
+    if (exterior)
+    {
+      if (cells.size() != 1)
+      {
+        throw std::runtime_error(
+            "Exterior facet domain contains a non-boundary facet.");
+      }
+      const std::int32_t cell = cells[0];
+      rows.push_back(cell);
+      rows.push_back(local_facet_index(mesh, cell, facet));
+    }
+    else
+    {
+      if (cells.size() != 2)
+      {
+        throw std::runtime_error(
+            "Interior facet domain contains a facet without two adjacent cells.");
+      }
+      for (std::int32_t cell : cells)
+      {
+        rows.push_back(cell);
+        rows.push_back(local_facet_index(mesh, cell, facet));
+      }
+    }
+  }
+  return rows;
+}
+
 template <typename T>
 void declare_cut_api(nb::module_& m, std::string type)
 {
@@ -203,6 +284,20 @@ void declare_cut_api(nb::module_& m, std::string type)
       [](const CutData& cut_data, const std::string& ls_part, int order)
       { return cutfemx::runtime_quadrature(cut_data, ls_part, order); },
       nb::arg("cut"), nb::arg("ls_part"), nb::arg("order"));
+
+  m.def(
+      ("facet_integration_rows_" + type).c_str(),
+      [](std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
+         nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> facets,
+         const std::string& integral_type)
+      {
+        return dolfinx_wrappers::as_nbarray(facet_integration_rows<T>(
+            std::move(mesh),
+            std::span<const std::int32_t>(facets.data(), facets.size()),
+            integral_type));
+      },
+      nb::arg("mesh"), nb::arg("facets"), nb::arg("integral_type"),
+      "Convert raw local facet ids to DOLFINx integration rows.");
 }
 } // namespace
 

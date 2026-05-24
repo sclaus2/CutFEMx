@@ -18,23 +18,28 @@
 # The weak problem solved in this demo is: find ``u`` such that
 #
 #     integral_Omega grad(u) . grad(v) dx
-#   + gamma integral_Gamma u v ds
+#   - integral_Gamma grad(u) . n v ds
+#   - integral_Gamma grad(v) . n u ds
+#   + gamma / h integral_Gamma u v ds
+#   + gamma_g h integral_F jump(grad(u), n_F) jump(grad(v), n_F) ds
 #   = integral_Omega f v dx
+#   - integral_Gamma grad(v) . n g ds
+#   + gamma / h integral_Gamma g v ds
 #
 # for all test functions ``v``. Here ``Gamma`` is the embedded boundary
-# ``phi = 0``.
+# ``phi = 0`` and ``F`` is the ghost-penalty facet band around cut cells.
 
 from __future__ import annotations
 
 import argparse
 
-import numpy as np
-import ufl
 from mpi4py import MPI
 
 import cutfemx
-from dolfinx import fem, la, mesh
+import numpy as np
 
+import ufl
+from dolfinx import fem, la, mesh
 
 # ## Helper functions
 #
@@ -193,6 +198,7 @@ def plot_cut_mesh(
     """Show the cut mesh, the cut level set, quadrature points, and solution."""
     try:
         import pyvista
+
         from dolfinx import plot
     except ImportError:
         if MPI.COMM_WORLD.rank == 0:
@@ -291,15 +297,21 @@ def plot_cut_mesh(
 # define the variational problem, solve it, and optionally visualise the result.
 
 
-def main(show_plot: bool = True, solver: str = "scipy") -> None:
+def main(
+    show_plot: bool = True,
+    solver: str = "scipy",
+    *,
+    n: int = 21,
+    order: int = 4,
+    gamma: float = 40.0,
+    gamma_g: float = 0.1,
+) -> None:
     comm = MPI.COMM_WORLD
 
     # The physical domain is the disk with radius ``r`` centered at the
-    # origin, embedded in the square background mesh. The parameter ``gamma``
-    # penalises the trace of the solution on the embedded boundary.
+    # origin, embedded in the square background mesh. The manufactured
+    # solution gives both the source term and the Nitsche boundary data.
     r = 0.5
-    gamma = 10.0
-    N = 21
 
     def circle_level_set(x: np.ndarray) -> np.ndarray:
         """Negative inside a circle centered at the origin."""
@@ -311,7 +323,7 @@ def main(show_plot: bool = True, solver: str = "scipy") -> None:
     msh = mesh.create_rectangle(
         comm=comm,
         points=((-1.0, -1.0), (1.0, 1.0)),
-        n=(N, N),
+        n=(n, n),
         cell_type=mesh.CellType.triangle,
     )
 
@@ -326,12 +338,14 @@ def main(show_plot: bool = True, solver: str = "scipy") -> None:
 
     inside_cells = cutfemx.locate_entities(cut_data, "phi < 0")
     cut_mesh = cutfemx.create_cut_mesh(cut_data, "phi < 0", mode="full")
+    phi_cut = cutfemx.fem.cut_function(phi, cut_mesh)
 
     # CutFEMx constructs runtime quadrature rules for the physical volume
     # ``phi < 0`` and for the embedded interface ``phi = 0``. These quadrature
     # rules are attached to UFL measures below.
-    cut_quadrature = cutfemx.runtime_quadrature(cut_data, "phi < 0", order=4)
-    interface_quadrature = cutfemx.runtime_quadrature(cut_data, "phi = 0", order=4)
+    cut_quadrature = cutfemx.runtime_quadrature(cut_data, "phi < 0", order=order)
+    interface_quadrature = cutfemx.runtime_quadrature(cut_data, "phi = 0", order=order)
+    ghost_facets = cutfemx.ghost_penalty_facets(cut_data, "phi<0")
 
     # The unknown is represented in a standard background finite element
     # space. The custom measures restrict integration to the cut volume and
@@ -339,7 +353,13 @@ def main(show_plot: bool = True, solver: str = "scipy") -> None:
     V = fem.functionspace(msh, ("Lagrange", 1))
     u = ufl.TrialFunction(V)
     v = ufl.TestFunction(V)
-    f = fem.Constant(msh, np.float64(1.0))
+    x = ufl.SpatialCoordinate(msh)
+    u_exact = ufl.sin(np.pi * x[0]) * ufl.sin(np.pi * x[1])
+    f = 2.0 * np.pi**2 * u_exact
+    n_gamma = cutfemx.normal(phi, name="n_gamma")
+    n_facet = ufl.FacetNormal(msh)
+    h = ufl.CellDiameter(msh)
+    h_avg = ufl.avg(h)
 
     dxq = ufl.Measure(
         "dx",
@@ -353,14 +373,35 @@ def main(show_plot: bool = True, solver: str = "scipy") -> None:
         subdomain_id=1,
         subdomain_data=interface_quadrature,
     )
+    dS_ghost = ufl.Measure(
+        "dS",
+        domain=msh,
+        subdomain_id=2,
+        subdomain_data=ghost_facets,
+    )
 
-    # The bilinear form contains the Poisson stiffness on the physical volume
-    # and a boundary penalty on the embedded interface. The linear form uses a
-    # constant source term on the cut volume.
+    # The bilinear form contains the Poisson stiffness, symmetric Nitsche
+    # enforcement of the manufactured Dirichlet data on the embedded boundary,
+    # and a standard ghost penalty on the cut-cell stabilization band.
     a_cut = ufl.inner(ufl.grad(u), ufl.grad(v)) * dxq
-    a_cut += gamma * u * v * dsq
+    a_cut += (
+        -ufl.dot(ufl.grad(u), n_gamma) * v
+        - ufl.dot(ufl.grad(v), n_gamma) * u
+        + gamma / h * u * v
+    ) * dsq
+    if ghost_facets.size > 0:
+        a_cut += (
+            gamma_g
+            * h_avg
+            * ufl.inner(
+                ufl.jump(ufl.grad(u), n_facet),
+                ufl.jump(ufl.grad(v), n_facet),
+            )
+            * dS_ghost
+        )
 
     L_cut = f * v * dxq
+    L_cut += (-ufl.dot(ufl.grad(v), n_gamma) * u_exact + gamma / h * u_exact * v) * dsq
 
     # The UFL forms are compiled as CutFEMx forms, preserving the runtime
     # quadrature domains introduced above.
@@ -372,6 +413,17 @@ def main(show_plot: bool = True, solver: str = "scipy") -> None:
     # mesh for visualisation.
     uh = solve_runtime_system(a_cut, L_cut, V, solver)
     u_cut = cutfemx.fem.cut_function(uh, cut_mesh)
+
+    error_form = cutfemx.fem.form((uh - u_exact) ** 2 * dxq)
+    error_sq = cutfemx.fem.assemble_scalar(error_form)
+    error = np.sqrt(comm.allreduce(error_sq, op=MPI.SUM))
+    if comm.rank == 0:
+        print("CutFEMx Nitsche cut Poisson demo")
+        print(f"  cells per side: {n}")
+        print(f"  inside cells: {inside_cells.size}")
+        print(f"  cut cells: {cut_quadrature.parent_map.size}")
+        print(f"  ghost facets: {ghost_facets.size}")
+        print(f"  L2 error: {error:.6e}")
 
     # Finally, PyVista can be used to inspect the cut mesh, the level-set
     # function, runtime quadrature points, and the computed solution.
@@ -397,5 +449,16 @@ if __name__ == "__main__":
         default="scipy",
         help="Linear solver backend to use. 'scipy' uses MatrixCSR and is serial-only.",
     )
+    parser.add_argument("--n", type=int, default=21, help="Background cells per side.")
+    parser.add_argument("--order", type=int, default=4, help="Runtime quadrature order.")
+    parser.add_argument("--gamma", type=float, default=40.0, help="Nitsche penalty.")
+    parser.add_argument("--gamma-g", type=float, default=0.1, help="Ghost penalty.")
     args = parser.parse_args()
-    main(show_plot=not args.no_plot, solver=args.solver)
+    main(
+        show_plot=not args.no_plot,
+        solver=args.solver,
+        n=args.n,
+        order=args.order,
+        gamma=args.gamma,
+        gamma_g=args.gamma_g,
+    )
