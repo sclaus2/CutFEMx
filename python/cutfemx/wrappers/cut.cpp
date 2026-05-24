@@ -141,6 +141,19 @@ void declare_cut_api(nb::module_& m, std::string type)
       nb::arg("level_set"));
 
   m.def(
+      "cut_entities",
+      [](std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
+         nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> entities,
+         int entity_dim)
+      {
+        return std::make_shared<CutData>(cutfemx::cut(
+            std::move(level_set),
+            std::span<const std::int32_t>(entities.data(), entities.size()),
+            entity_dim));
+      },
+      nb::arg("level_set"), nb::arg("entities"), nb::arg("entity_dim"));
+
+  m.def(
       "cut_multi",
       [](std::vector<std::shared_ptr<const dolfinx::fem::Function<T>>> level_sets)
       {
@@ -149,6 +162,20 @@ void declare_cut_api(nb::module_& m, std::string type)
                 level_sets.data(), level_sets.size())));
       },
       nb::arg("level_sets"));
+
+  m.def(
+      "cut_multi_entities",
+      [](std::vector<std::shared_ptr<const dolfinx::fem::Function<T>>> level_sets,
+         nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> entities,
+         int entity_dim)
+      {
+        return std::make_shared<CutData>(cutfemx::cut<T>(
+            std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>(
+                level_sets.data(), level_sets.size()),
+            std::span<const std::int32_t>(entities.data(), entities.size()),
+            entity_dim));
+      },
+      nb::arg("level_sets"), nb::arg("entities"), nb::arg("entity_dim"));
 
   m.def(
       "update_cut",
@@ -165,20 +192,6 @@ void declare_cut_api(nb::module_& m, std::string type)
       nb::arg("cut"), nb::arg("ls_part"));
 
   m.def(
-      "locate_entities_subset",
-      [](const CutData& cut_data, const std::string& ls_part,
-         nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> entities,
-         int entity_dim)
-      {
-        return dolfinx_wrappers::as_nbarray(cutfemx::locate_entities(
-            cut_data,
-            std::span<const std::int32_t>(entities.data(), entities.size()),
-            entity_dim, ls_part));
-      },
-      nb::arg("cut"), nb::arg("ls_part"), nb::arg("entities"),
-      nb::arg("entity_dim"));
-
-  m.def(
       "create_cut_mesh",
       [](const CutData& cut_data, const std::string& ls_part,
          const std::string& mode)
@@ -186,38 +199,10 @@ void declare_cut_api(nb::module_& m, std::string type)
       nb::arg("cut"), nb::arg("ls_part"), nb::arg("mode"));
 
   m.def(
-      "create_cut_mesh_subset",
-      [](const CutData& cut_data, const std::string& ls_part,
-         nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> entities,
-         int entity_dim, const std::string& mode)
-      {
-        return cutfemx::create_cut_mesh(
-            cut_data,
-            std::span<const std::int32_t>(entities.data(), entities.size()),
-            entity_dim, ls_part, mode);
-      },
-      nb::arg("cut"), nb::arg("ls_part"), nb::arg("entities"),
-      nb::arg("entity_dim"), nb::arg("mode"));
-
-  m.def(
       "runtime_quadrature",
       [](const CutData& cut_data, const std::string& ls_part, int order)
       { return cutfemx::runtime_quadrature(cut_data, ls_part, order); },
       nb::arg("cut"), nb::arg("ls_part"), nb::arg("order"));
-
-  m.def(
-      "runtime_quadrature_subset",
-      [](const CutData& cut_data, const std::string& ls_part, int order,
-         nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> entities,
-         int entity_dim)
-      {
-        return cutfemx::runtime_quadrature(
-            cut_data,
-            std::span<const std::int32_t>(entities.data(), entities.size()),
-            entity_dim, ls_part, order);
-      },
-      nb::arg("cut"), nb::arg("ls_part"), nb::arg("order"),
-      nb::arg("entities"), nb::arg("entity_dim"));
 }
 } // namespace
 

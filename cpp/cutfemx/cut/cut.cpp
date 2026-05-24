@@ -29,10 +29,18 @@
 #include <string>
 #include <unordered_set>
 
+#include <cutcells/cell_types.h>
 #include <cutcells/ho_mesh_part_output.h>
 
 namespace cutfemx
 {
+
+template <std::floating_point T>
+std::vector<cutcells::LevelSetFunction<T, std::int32_t>>
+build_entity_level_sets(const CutData<T>& cut_data,
+                        std::span<const std::int32_t> entities,
+                        int entity_dim, cutcells::cell::type cell_type);
+
 namespace
 {
 std::string normalize_selector(std::string_view ls_part)
@@ -166,28 +174,6 @@ identity_cell_reordering(const dolfinx::graph::AdjacencyList<std::int32_t>& grap
   return order;
 }
 
-template <std::floating_point T>
-std::int32_t num_local_entities(const CutData<T>& cut_data, int entity_dim)
-{
-  if (entity_dim < 0 || entity_dim > cut_data.tdim)
-  {
-    throw std::invalid_argument(
-        "cutfemx::locate_entities entity_dim is out of range");
-  }
-
-  auto topology = cut_data.mesh_owner->topology();
-  auto entity_map = topology->index_map(entity_dim);
-  if (!entity_map)
-  {
-    cut_data.mesh_owner->topology_mutable()->create_entities(entity_dim);
-    entity_map = topology->index_map(entity_dim);
-  }
-  if (!entity_map)
-    throw std::runtime_error("Mesh topology has no entity index map");
-
-  return static_cast<std::int32_t>(entity_map->size_local());
-}
-
 void validate_local_entities(std::span<const std::int32_t> entities,
                              std::int32_t num_local_entities)
 {
@@ -279,72 +265,88 @@ bool relation_matches_domain(cutcells::cell::domain domain,
   return false;
 }
 
-bool relation_can_match_domain(cutcells::cell::domain domain,
-                               cutcells::Relation relation)
+template <std::floating_point T>
+std::int32_t host_parent_index(const CutData<T>& cut_data,
+                               std::int32_t host_index)
 {
-  switch (relation)
+  if (host_index < 0
+      || static_cast<std::size_t>(host_index)
+             >= static_cast<std::size_t>(cut_data.num_local_cells))
   {
-  case cutcells::Relation::LessThan:
-    return domain == cutcells::cell::domain::inside
-           || domain == cutcells::cell::domain::intersected;
-  case cutcells::Relation::GreaterThan:
-    return domain == cutcells::cell::domain::outside
-           || domain == cutcells::cell::domain::intersected;
-  case cutcells::Relation::EqualTo:
-    return domain == cutcells::cell::domain::intersected;
+    throw std::runtime_error("CutFEMx parent index is out of range");
   }
-  return false;
-}
 
-bool relation_is_definite_match(cutcells::cell::domain domain,
-                                cutcells::Relation relation)
-{
-  switch (relation)
-  {
-  case cutcells::Relation::LessThan:
-    return domain == cutcells::cell::domain::inside;
-  case cutcells::Relation::GreaterThan:
-    return domain == cutcells::cell::domain::outside;
-  case cutcells::Relation::EqualTo:
-    return false;
-  }
-  return false;
-}
+  if (cut_data.parent_entities.empty())
+    return host_index;
 
-struct SelectedRuntimeEntities
-{
-  std::vector<std::int32_t> uncut_entities;
-  std::vector<std::int32_t> cut_entities;
-};
+  return cut_data.parent_entities[static_cast<std::size_t>(host_index)];
+}
 
 template <std::floating_point T>
-void append_quadrature_rules(cutcells::quadrature::QuadratureRules<T>& target,
-                             const cutcells::quadrature::QuadratureRules<T>& source)
+void remap_parent_map_to_background_entities(
+    std::vector<std::int32_t>& parent_map, const CutData<T>& cut_data)
 {
-  if (source._weights.empty())
+  if (cut_data.parent_entities.empty())
     return;
 
-  if (target._offset.empty())
-  {
-    target._tdim = source._tdim;
-    target._offset.push_back(0);
-  }
-  if (target._tdim != source._tdim)
-    throw std::runtime_error("Cannot merge quadrature rules with different tdim");
-  if (source._offset.size() != source._parent_map.size() + std::size_t(1))
-    throw std::runtime_error("Source quadrature offsets are inconsistent");
-
-  const std::int32_t point_offset =
-      static_cast<std::int32_t>(target._weights.size());
-  target._points.insert(target._points.end(), source._points.begin(),
-                        source._points.end());
-  target._weights.insert(target._weights.end(), source._weights.begin(),
-                         source._weights.end());
-  target._parent_map.insert(target._parent_map.end(), source._parent_map.begin(),
-                            source._parent_map.end());
-  for (std::size_t i = 1; i < source._offset.size(); ++i)
-    target._offset.push_back(point_offset + source._offset[i]);
+  for (std::int32_t& parent : parent_map)
+    parent = host_parent_index(cut_data, parent);
 }
+
+template <std::floating_point T>
+std::vector<T> physical_points_for_host_mesh(
+    const cutcells::quadrature::QuadratureRules<T>& rules,
+    const CutData<T>& cut_data)
+{
+  const std::size_t num_points = rules._weights.size();
+  std::vector<T> physical_points(static_cast<std::size_t>(cut_data.gdim)
+                                     * num_points,
+                                 T(0));
+  if (num_points == 0)
+    return physical_points;
+
+  if (!cut_data.mesh_view.has_uniform_cell_type)
+  {
+    throw std::runtime_error(
+        "CutFEMx runtime quadrature requires a uniform host entity type");
+  }
+
+  std::vector<int> connectivity;
+  connectivity.reserve(static_cast<std::size_t>(cut_data.mesh_view.cell_count)
+                       * static_cast<std::size_t>(cut_data.mesh_view.cell_width));
+  std::vector<int> offset;
+  offset.reserve(static_cast<std::size_t>(cut_data.mesh_view.cell_count) + 1);
+  offset.push_back(0);
+  for (std::int32_t cell = 0; cell < cut_data.mesh_view.cell_count; ++cell)
+  {
+    const std::int32_t begin = cell * cut_data.mesh_view.cell_stride;
+    for (std::int32_t j = 0; j < cut_data.mesh_view.cell_width; ++j)
+    {
+      connectivity.push_back(
+          cut_data.mesh_view.connectivity[static_cast<std::size_t>(begin + j)]);
+    }
+    offset.push_back(static_cast<int>(connectivity.size()));
+  }
+
+  const int vtk_type = static_cast<int>(
+      cutcells::cell::map_cell_type_to_vtk(cut_data.mesh_view.uniform_cell_type));
+  std::vector<int> vtk_types(static_cast<std::size_t>(cut_data.mesh_view.cell_count),
+                             vtk_type);
+  std::vector<T> row_major_points = cutcells::quadrature::physical_points(
+      rules, cut_data.mesh_view.coordinates, std::span<const int>(connectivity),
+      std::span<const int>(offset), std::span<const int>(vtk_types));
+
+  for (std::size_t q = 0; q < num_points; ++q)
+  {
+    for (int d = 0; d < cut_data.gdim; ++d)
+    {
+      physical_points[static_cast<std::size_t>(d) * num_points + q]
+          = row_major_points[q * 3 + static_cast<std::size_t>(d)];
+    }
+  }
+  return physical_points;
+}
+
 } // namespace
 
 template <std::floating_point T>
@@ -444,6 +446,59 @@ void build_mesh_view(CutData<T>& cut_data)
 }
 
 template <std::floating_point T>
+void build_entity_mesh_view(CutData<T>& cut_data,
+                            std::span<const std::int32_t> entities,
+                            int entity_dim)
+{
+  const int background_tdim = cut_data.mesh_owner->topology()->dim();
+  if (entity_dim <= 0 || entity_dim > background_tdim)
+  {
+    throw std::invalid_argument(
+        "cutfemx::cut entity_dim must select positive-dimensional mesh entities");
+  }
+
+  auto topology = cut_data.mesh_owner->topology_mutable();
+  if (entity_dim < background_tdim)
+  {
+    topology->create_entities(entity_dim);
+    topology->create_connectivity(entity_dim, background_tdim);
+    topology->create_connectivity(background_tdim, entity_dim);
+  }
+
+  auto entity_map = cut_data.mesh_owner->topology()->index_map(entity_dim);
+  if (!entity_map)
+    throw std::runtime_error("Mesh topology has no entity index map");
+  validate_local_entities(
+      entities, static_cast<std::int32_t>(entity_map->size_local()));
+
+  const auto background_cell_type = cut_data.mesh_owner->topology()->cell_type();
+  const auto cell_type = entity_cell_type(background_cell_type, entity_dim);
+
+  auto [entity_geometry, geometry_shape]
+      = dolfinx::mesh::entities_to_geometry(*cut_data.mesh_owner, entity_dim,
+                                            entities, false);
+
+  cut_data.tdim = entity_dim;
+  cut_data.num_local_cells = static_cast<std::int32_t>(entities.size());
+  cut_data.parent_entities.assign(entities.begin(), entities.end());
+  cut_data.owned_connectivity = std::move(entity_geometry);
+
+  cut_data.mesh_view = {};
+  cut_data.mesh_view.gdim = cut_data.gdim;
+  cut_data.mesh_view.tdim = cut_data.tdim;
+  cut_data.mesh_view.coordinates = cut_data.mesh_owner->geometry().x();
+  cut_data.mesh_view.coordinate_stride = 3;
+  cut_data.mesh_view.connectivity = std::span<const std::int32_t>(
+      cut_data.owned_connectivity.data(), cut_data.owned_connectivity.size());
+  cut_data.mesh_view.cell_count = cut_data.num_local_cells;
+  cut_data.mesh_view.cell_width = static_cast<std::int32_t>(geometry_shape[1]);
+  cut_data.mesh_view.cell_stride = static_cast<std::int32_t>(geometry_shape[1]);
+  cut_data.mesh_view.uniform_cell_type = cell_type;
+  cut_data.mesh_view.has_uniform_cell_type = true;
+  cut_data.mesh_view.vtk_vertex_order = false;
+}
+
+template <std::floating_point T>
 cutcells::LevelSetFunction<T, std::int32_t>
 build_level_set_function(const CutData<T>& cut_data,
                          const std::shared_ptr<const dolfinx::fem::Function<T>>&
@@ -507,6 +562,28 @@ CutData<T> cut(std::shared_ptr<const dolfinx::fem::Function<T>> level_set)
 }
 
 template <std::floating_point T>
+CutData<T> cut(std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
+               std::span<const std::int32_t> entities, int entity_dim)
+{
+  if (!level_set)
+    throw std::invalid_argument("cutfemx::cut requires a level-set function");
+
+  auto mesh = level_set->function_space()->mesh();
+  if (!mesh)
+  {
+    throw std::invalid_argument(
+        "cutfemx::cut could not infer a mesh from the level-set function");
+  }
+
+  std::array<std::shared_ptr<const dolfinx::fem::Function<T>>, 1> level_sets{
+      std::move(level_set)};
+  return cut<T>(std::move(mesh),
+                std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>(
+                    level_sets.data(), level_sets.size()),
+                entities, entity_dim);
+}
+
+template <std::floating_point T>
 CutData<T> cut(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
                std::shared_ptr<const dolfinx::fem::Function<T>> level_set)
 {
@@ -537,6 +614,26 @@ CutData<T> cut(
   }
 
   return cut<T>(std::move(mesh), level_sets);
+}
+
+template <std::floating_point T>
+CutData<T> cut(
+    std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>> level_sets,
+    std::span<const std::int32_t> entities, int entity_dim)
+{
+  if (level_sets.empty())
+    throw std::invalid_argument("cutfemx::cut requires at least one level-set function");
+  if (!level_sets.front())
+    throw std::invalid_argument("cutfemx::cut requires non-null level-set functions");
+
+  auto mesh = level_sets.front()->function_space()->mesh();
+  if (!mesh)
+  {
+    throw std::invalid_argument(
+        "cutfemx::cut could not infer a mesh from the level-set functions");
+  }
+
+  return cut<T>(std::move(mesh), level_sets, entities, entity_dim);
 }
 
 template <std::floating_point T>
@@ -579,6 +676,48 @@ CutData<T> cut(
     cut_data.level_sets.push_back(build_level_set_function(
         cut_data, cut_data.level_set_owners[i], cut_data.level_set_names[i]));
   }
+  update(cut_data);
+  return cut_data;
+}
+
+template <std::floating_point T>
+CutData<T> cut(
+    std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
+    std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>> level_sets,
+    std::span<const std::int32_t> entities, int entity_dim)
+{
+  if (!mesh)
+    throw std::invalid_argument("cutfemx::cut requires a mesh");
+  if (level_sets.empty())
+    throw std::invalid_argument("cutfemx::cut requires at least one level-set function");
+
+  for (const auto& level_set : level_sets)
+  {
+    if (!level_set)
+      throw std::invalid_argument("cutfemx::cut requires non-null level-set functions");
+    auto level_set_mesh = level_set->function_space()->mesh();
+    if (level_set_mesh && level_set_mesh.get() != mesh.get())
+    {
+      throw std::invalid_argument(
+          "cutfemx::cut mesh must match the level-set function space mesh");
+    }
+    validate_level_set(*level_set);
+  }
+
+  for (std::size_t i = 1; i < level_sets.size(); ++i)
+    validate_equivalent_level_set_space(*level_sets.front(), *level_sets[i]);
+
+  CutData<T> cut_data;
+  cut_data.mesh_owner = std::move(mesh);
+  cut_data.level_set_owners.assign(level_sets.begin(), level_sets.end());
+  cut_data.level_set_names = frozen_level_set_names<T>(level_sets);
+  cut_data.gdim = cut_data.mesh_owner->geometry().dim();
+
+  build_entity_mesh_view(cut_data, entities, entity_dim);
+
+  const auto cell_type = cut_data.mesh_view.uniform_cell_type;
+  cut_data.level_sets = build_entity_level_sets(
+      cut_data, cut_data.parent_entities, cut_data.tdim, cell_type);
   update(cut_data);
   return cut_data;
 }
@@ -631,84 +770,32 @@ template <std::floating_point T>
 std::vector<std::int32_t>
 locate_entities(const CutData<T>& cut_data, std::string_view ls_part)
 {
-  const std::int32_t num_cells = num_local_entities(cut_data, cut_data.tdim);
-  std::vector<std::int32_t> entities(static_cast<std::size_t>(num_cells));
-  std::iota(entities.begin(), entities.end(), 0);
-  return locate_entities(cut_data, entities, cut_data.tdim, ls_part);
-}
-
-template <std::floating_point T>
-std::vector<std::int32_t>
-locate_entities(const CutData<T>& cut_data,
-                std::span<const std::int32_t> entities, int entity_dim,
-                std::string_view ls_part)
-{
-  if (cut_data.level_set_owners.empty())
-    throw std::runtime_error("CutData has no level-set functions");
-  if (cut_data.level_set_owners.size() != cut_data.level_set_names.size())
-  {
-    throw std::runtime_error(
-        "CutData level-set storage is inconsistent with its names");
-  }
-
-  const std::int32_t num_entities = num_local_entities(cut_data, entity_dim);
-  validate_local_entities(entities, num_entities);
-
-  if (entities.empty())
-    return {};
-
   cutcells::SelectionExpr expr = cutcells::parse_selection_expr(ls_part);
   cutcells::compile_selection_expr(expr, cut_data.level_set_names);
 
-  const auto function_space = cut_data.level_set_owners.front()->function_space();
-  if (!function_space || !function_space->dofmap())
-    throw std::runtime_error("Level-set function has no dofmap");
-
-  std::vector<std::vector<std::int32_t>> entity_dofs(entities.size());
-  fem::create_entity_dofmap(entities, entity_dim, cut_data.mesh_owner,
-                            function_space->dofmap(), entity_dofs);
-
-  std::vector<std::span<const T>> level_set_values;
-  level_set_values.reserve(cut_data.level_set_owners.size());
-  for (const auto& level_set : cut_data.level_set_owners)
-    level_set_values.push_back(level_set->x()->array());
-
   std::vector<std::int32_t> marked_entities;
-  marked_entities.reserve(entities.size());
+  marked_entities.reserve(static_cast<std::size_t>(cut_data.num_local_cells));
 
-  for (std::size_t entity_pos = 0; entity_pos < entities.size(); ++entity_pos)
+  for (std::int32_t host_cell = 0; host_cell < cut_data.num_local_cells;
+       ++host_cell)
   {
-    std::vector<cutcells::cell::domain> domains(level_set_values.size(),
-                                                cutcells::cell::domain::unset);
-    std::vector<std::uint8_t> computed(level_set_values.size(), 0);
-
-    auto domain_for = [&](int level_set_index)
-    {
-      if (level_set_index < 0
-          || static_cast<std::size_t>(level_set_index) >= level_set_values.size())
-      {
-        throw std::runtime_error(
-            "Compiled selector contains an invalid level-set index");
-      }
-
-      const std::size_t ls = static_cast<std::size_t>(level_set_index);
-      if (computed[ls] == 0)
-      {
-        domains[ls] = classify_entity_dofs<T>(entity_dofs[entity_pos],
-                                              level_set_values[ls]);
-        computed[ls] = 1;
-      }
-      return domains[ls];
-    };
-
     bool entity_matches = false;
     for (const auto& term : expr.terms)
     {
       bool term_matches = true;
       for (const auto& clause : term.clauses)
       {
-        if (!relation_matches_domain(domain_for(clause.level_set_index),
-                                     clause.relation))
+        if (clause.level_set_index < 0
+            || static_cast<std::size_t>(clause.level_set_index)
+                   >= cut_data.level_set_names.size())
+        {
+          throw std::runtime_error(
+              "Compiled selector contains an invalid level-set index");
+        }
+
+        const cutcells::cell::domain domain =
+            cut_data.parent_cells.domain(clause.level_set_index, host_cell);
+        if (!relation_matches_domain(domain, clause.relation))
         {
           term_matches = false;
           break;
@@ -722,7 +809,7 @@ locate_entities(const CutData<T>& cut_data,
     }
 
     if (entity_matches)
-      marked_entities.push_back(entities[entity_pos]);
+      marked_entities.push_back(host_parent_index(cut_data, host_cell));
   }
 
   return marked_entities;
@@ -737,39 +824,6 @@ cutcells::HOMeshPart<T, std::int32_t> select_mesh_part(
 {
   return cutcells::select_part<T, std::int32_t>(mesh_view, cut_cells, parent_cells,
                                                 ls_part);
-}
-
-template <std::floating_point T>
-void filter_mesh_part_to_cells(cutcells::HOMeshPart<T, std::int32_t>& part,
-                               std::span<const std::int32_t> entities,
-                               std::int32_t num_local_cells)
-{
-  std::vector<std::uint8_t> candidate_mask(
-      static_cast<std::size_t>(num_local_cells), 0);
-  for (const std::int32_t entity : entities)
-  {
-    if (entity < 0 || entity >= num_local_cells)
-      throw std::out_of_range("cutfemx entity index is out of range");
-    candidate_mask[static_cast<std::size_t>(entity)] = 1;
-  }
-
-  auto keep_parent_cell = [&candidate_mask](std::int32_t parent_cell)
-  {
-    return candidate_mask[static_cast<std::size_t>(parent_cell)] != 0;
-  };
-
-  std::erase_if(part.cut_cell_ids,
-                [&part, &keep_parent_cell](std::int32_t cut_cell_id)
-                {
-                  const std::int32_t parent_cell
-                      = part.cut_cells->parent_cell_ids[static_cast<std::size_t>(
-                          cut_cell_id)];
-                  return !keep_parent_cell(parent_cell);
-                });
-
-  std::erase_if(part.uncut_cell_ids,
-                [&keep_parent_cell](std::int32_t parent_cell)
-                { return !keep_parent_cell(parent_cell); });
 }
 
 std::pair<std::vector<std::int32_t>, std::vector<std::int32_t>>
@@ -823,229 +877,6 @@ build_entity_level_sets(const CutData<T>& cut_data,
 }
 
 template <std::floating_point T>
-SelectedRuntimeEntities runtime_selected_entities(
-    const CutData<T>& cut_data, std::span<const std::int32_t> entities,
-    int entity_dim, std::string_view ls_part)
-{
-  cutcells::SelectionExpr expr = cutcells::parse_selection_expr(ls_part);
-  cutcells::compile_selection_expr(expr, cut_data.level_set_names);
-
-  std::vector<std::vector<std::int32_t>> entity_dofs(entities.size());
-  const auto function_space = cut_data.level_set_owners.front()->function_space();
-  fem::create_entity_dofmap(entities, entity_dim, cut_data.mesh_owner,
-                            function_space->dofmap(), entity_dofs);
-
-  std::vector<std::span<const T>> level_set_values;
-  level_set_values.reserve(cut_data.level_set_owners.size());
-  for (const auto& level_set : cut_data.level_set_owners)
-    level_set_values.push_back(level_set->x()->array());
-
-  SelectedRuntimeEntities selected;
-  selected.uncut_entities.reserve(entities.size());
-  selected.cut_entities.reserve(entities.size());
-
-  for (std::size_t entity_pos = 0; entity_pos < entities.size(); ++entity_pos)
-  {
-    std::vector<cutcells::cell::domain> domains(level_set_values.size(),
-                                                cutcells::cell::domain::unset);
-    std::vector<std::uint8_t> computed(level_set_values.size(), 0);
-
-    auto domain_for = [&](int level_set_index)
-    {
-      if (level_set_index < 0
-          || static_cast<std::size_t>(level_set_index) >= level_set_values.size())
-      {
-        throw std::runtime_error(
-            "Compiled selector contains an invalid level-set index");
-      }
-
-      const std::size_t ls = static_cast<std::size_t>(level_set_index);
-      if (computed[ls] == 0)
-      {
-        domains[ls] = classify_entity_dofs<T>(entity_dofs[entity_pos],
-                                              level_set_values[ls]);
-        computed[ls] = 1;
-      }
-      return domains[ls];
-    };
-
-    bool needs_runtime_cut = false;
-    bool selected_uncut = false;
-    for (const auto& term : expr.terms)
-    {
-      bool term_can_match = true;
-      bool term_is_standard = true;
-      for (const auto& clause : term.clauses)
-      {
-        const cutcells::cell::domain domain =
-            domain_for(clause.level_set_index);
-        if (!relation_can_match_domain(domain, clause.relation))
-        {
-          term_can_match = false;
-          break;
-        }
-        term_is_standard =
-            term_is_standard
-            && relation_is_definite_match(domain, clause.relation);
-      }
-
-      if (term_can_match && term_is_standard)
-      {
-        selected_uncut = true;
-        break;
-      }
-      if (term_can_match)
-      {
-        needs_runtime_cut = true;
-      }
-    }
-
-    if (selected_uncut)
-      selected.uncut_entities.push_back(entities[entity_pos]);
-    else if (needs_runtime_cut)
-      selected.cut_entities.push_back(entities[entity_pos]);
-  }
-
-  return selected;
-}
-
-template <std::floating_point T>
-RuntimeQuadrature<T>
-runtime_quadrature_on_entity_mesh(const CutData<T>& cut_data,
-                                  std::span<const std::int32_t> entities,
-                                  int entity_dim, std::string_view ls_part,
-                                  int order)
-{
-  if (entity_dim <= 0)
-  {
-    throw std::invalid_argument(
-        "cutfemx::runtime_quadrature does not yet support zero-dimensional "
-        "entities");
-  }
-  if (entity_dim != cut_data.tdim - 1)
-  {
-    throw std::invalid_argument(
-        "cutfemx::runtime_quadrature currently supports cells and facets");
-  }
-
-  const std::int32_t num_entities = num_local_entities(cut_data, entity_dim);
-  validate_local_entities(entities, num_entities);
-
-  const SelectedRuntimeEntities selected =
-      runtime_selected_entities(cut_data, entities, entity_dim, ls_part);
-  if (selected.uncut_entities.empty() && selected.cut_entities.empty())
-  {
-    cutcells::quadrature::QuadratureRules<T> rules;
-    rules._tdim = entity_dim;
-    rules._offset.push_back(0);
-    return RuntimeQuadrature<T>(std::move(rules), cut_data.mesh_owner);
-  }
-
-  auto topology = cut_data.mesh_owner->topology_mutable();
-  topology->create_entities(entity_dim);
-  topology->create_connectivity(entity_dim, cut_data.tdim);
-  topology->create_connectivity(cut_data.tdim, entity_dim);
-
-  const auto cell_type = entity_cell_type(
-      cut_data.mesh_owner->topology()->cell_type(), entity_dim);
-
-  cutcells::quadrature::QuadratureRules<T> rules;
-  rules._tdim = entity_dim;
-  rules._offset.push_back(0);
-
-  if (!selected.uncut_entities.empty())
-  {
-    auto [entity_geometry, geometry_shape]
-        = dolfinx::mesh::entities_to_geometry(*cut_data.mesh_owner, entity_dim,
-                                              selected.uncut_entities, false);
-
-    cutcells::MeshView<T, std::int32_t> uncut_mesh;
-    uncut_mesh.gdim = cut_data.gdim;
-    uncut_mesh.tdim = entity_dim;
-    uncut_mesh.coordinates = cut_data.mesh_owner->geometry().x();
-    uncut_mesh.coordinate_stride = 3;
-    uncut_mesh.connectivity = std::span<const std::int32_t>(
-        entity_geometry.data(), entity_geometry.size());
-    uncut_mesh.cell_count =
-        static_cast<std::int32_t>(selected.uncut_entities.size());
-    uncut_mesh.cell_width = static_cast<std::int32_t>(geometry_shape[1]);
-    uncut_mesh.cell_stride = static_cast<std::int32_t>(geometry_shape[1]);
-    uncut_mesh.uniform_cell_type = cell_type;
-    uncut_mesh.has_uniform_cell_type = true;
-    uncut_mesh.vtk_vertex_order = false;
-
-    cutcells::HOMeshPart<T, std::int32_t> uncut_part;
-    uncut_part.mesh = &uncut_mesh;
-    uncut_part.dim = entity_dim;
-    uncut_part.uncut_cell_ids.resize(selected.uncut_entities.size());
-    std::iota(uncut_part.uncut_cell_ids.begin(),
-              uncut_part.uncut_cell_ids.end(), std::int32_t(0));
-
-    cutcells::quadrature::QuadratureRules<T> uncut_rules
-        = cutcells::output::quadrature_rules<T, std::int32_t>(
-            uncut_part, order, /*include_uncut_cells=*/true);
-
-    for (std::int32_t& parent : uncut_rules._parent_map)
-    {
-      if (parent < 0
-          || static_cast<std::size_t>(parent)
-                 >= selected.uncut_entities.size())
-      {
-        throw std::runtime_error("CutCells uncut facet parent map is out of range");
-      }
-      parent = selected.uncut_entities[static_cast<std::size_t>(parent)];
-    }
-    append_quadrature_rules(rules, uncut_rules);
-  }
-
-  if (!selected.cut_entities.empty())
-  {
-    auto [entity_geometry, geometry_shape]
-        = dolfinx::mesh::entities_to_geometry(*cut_data.mesh_owner, entity_dim,
-                                              selected.cut_entities, false);
-
-    cutcells::MeshView<T, std::int32_t> cut_mesh;
-    cut_mesh.gdim = cut_data.gdim;
-    cut_mesh.tdim = entity_dim;
-    cut_mesh.coordinates = cut_data.mesh_owner->geometry().x();
-    cut_mesh.coordinate_stride = 3;
-    cut_mesh.connectivity = std::span<const std::int32_t>(
-        entity_geometry.data(), entity_geometry.size());
-    cut_mesh.cell_count =
-        static_cast<std::int32_t>(selected.cut_entities.size());
-    cut_mesh.cell_width = static_cast<std::int32_t>(geometry_shape[1]);
-    cut_mesh.cell_stride = static_cast<std::int32_t>(geometry_shape[1]);
-    cut_mesh.uniform_cell_type = cell_type;
-    cut_mesh.has_uniform_cell_type = true;
-    cut_mesh.vtk_vertex_order = false;
-
-    std::vector<cutcells::LevelSetFunction<T, std::int32_t>> level_sets
-        = build_entity_level_sets(cut_data, selected.cut_entities, entity_dim,
-                                  cell_type);
-
-    auto [cut_cells, parent_cells]
-        = cutcells::cut<T, std::int32_t>(cut_mesh, level_sets, true);
-    auto part = select_mesh_part(cut_mesh, cut_cells, parent_cells, ls_part);
-    cutcells::quadrature::QuadratureRules<T> cut_rules
-        = cutcells::output::quadrature_rules<T, std::int32_t>(
-            part, order, /*include_uncut_cells=*/false);
-
-    for (std::int32_t& parent : cut_rules._parent_map)
-    {
-      if (parent < 0
-          || static_cast<std::size_t>(parent) >= selected.cut_entities.size())
-      {
-        throw std::runtime_error("CutCells facet parent map is out of range");
-      }
-      parent = selected.cut_entities[static_cast<std::size_t>(parent)];
-    }
-    append_quadrature_rules(rules, cut_rules);
-  }
-
-  return RuntimeQuadrature<T>(std::move(rules), cut_data.mesh_owner);
-}
-
-template <std::floating_point T>
 mesh::CutMesh<T> dolfinx_cut_mesh_from_cutcells_mesh(
     std::shared_ptr<const dolfinx::mesh::Mesh<T>> background_mesh,
     cutcells::mesh::CutMesh<T>&& cutcells_mesh,
@@ -1061,23 +892,37 @@ mesh::CutMesh<T> dolfinx_cut_mesh_from_cutcells_mesh(
     throw std::runtime_error("CutCells visualisation mesh has no cell types");
 
   const cutcells::cell::type first_type = cutcells_mesh._types.front();
-  if (!std::ranges::all_of(cutcells_mesh._types,
-                           [first_type](cutcells::cell::type type)
-                           { return type == first_type; }))
-  {
-    throw std::runtime_error(
-        "CutFEMx currently supports single-cell-type cut meshes only");
-  }
-
-  const dolfinx::mesh::CellType cell_type
-      = mesh::cutcells_to_dolfinx_cell_type(first_type);
-  const int vertices_per_cell = dolfinx::mesh::num_cell_vertices(cell_type);
-
   if (cutcells_mesh._offset.size()
       != static_cast<std::size_t>(cutcells_mesh._num_cells + 1))
   {
     throw std::runtime_error("CutCells visualisation mesh has invalid offsets");
   }
+
+  const bool single_cell_type = std::ranges::all_of(
+      cutcells_mesh._types, [first_type](cutcells::cell::type type)
+      { return type == first_type; });
+
+  const bool split_mixed_surface_to_triangles =
+      !single_cell_type
+      && std::ranges::all_of(
+             cutcells_mesh._types,
+             [](cutcells::cell::type type)
+             {
+               return type == cutcells::cell::type::triangle
+                      || type == cutcells::cell::type::quadrilateral;
+             });
+
+  if (!single_cell_type && !split_mixed_surface_to_triangles)
+  {
+    throw std::runtime_error(
+        "CutFEMx currently supports single-cell-type cut meshes only");
+  }
+
+  const dolfinx::mesh::CellType cell_type =
+      split_mixed_surface_to_triangles
+          ? dolfinx::mesh::CellType::triangle
+          : mesh::cutcells_to_dolfinx_cell_type(first_type);
+  const int vertices_per_cell = dolfinx::mesh::num_cell_vertices(cell_type);
 
   const std::int64_t num_vertices_local = cutcells_mesh._num_vertices;
   std::int64_t vertex_offset = 0;
@@ -1085,13 +930,72 @@ mesh::CutMesh<T> dolfinx_cut_mesh_from_cutcells_mesh(
              out._bg_mesh->comm());
 
   std::vector<std::int64_t> cells;
-  cells.reserve(static_cast<std::size_t>(cutcells_mesh._num_cells
-                                         * vertices_per_cell));
+  std::vector<std::int32_t> parent_index;
+  if (split_mixed_surface_to_triangles)
+  {
+    int num_output_cells = 0;
+    for (const cutcells::cell::type type : cutcells_mesh._types)
+      num_output_cells += type == cutcells::cell::type::quadrilateral ? 2 : 1;
+    cells.reserve(static_cast<std::size_t>(num_output_cells
+                                           * vertices_per_cell));
+    parent_index.reserve(static_cast<std::size_t>(num_output_cells));
+  }
+  else
+  {
+    cells.reserve(static_cast<std::size_t>(cutcells_mesh._num_cells
+                                           * vertices_per_cell));
+  }
+
   for (int c = 0; c < cutcells_mesh._num_cells; ++c)
   {
     const int begin = cutcells_mesh._offset[static_cast<std::size_t>(c)];
     const int end = cutcells_mesh._offset[static_cast<std::size_t>(c) + 1];
-    if (end - begin != vertices_per_cell)
+    const int arity = end - begin;
+
+    if (split_mixed_surface_to_triangles)
+    {
+      const cutcells::cell::type type =
+          cutcells_mesh._types[static_cast<std::size_t>(c)];
+      const std::int32_t parent =
+          cutcells_mesh._parent_map[static_cast<std::size_t>(c)];
+      if (type == cutcells::cell::type::triangle)
+      {
+        if (arity != 3)
+        {
+          throw std::runtime_error(
+              "CutCells triangle visualisation cell has invalid arity");
+        }
+        for (int j = begin; j < end; ++j)
+        {
+          cells.push_back(static_cast<std::int64_t>(
+                              cutcells_mesh._connectivity[static_cast<std::size_t>(
+                                  j)])
+                          + vertex_offset);
+        }
+        parent_index.push_back(parent);
+      }
+      else
+      {
+        if (arity != 4)
+        {
+          throw std::runtime_error(
+              "CutCells quadrilateral visualisation cell has invalid arity");
+        }
+        const std::array<int, 6> triangle_vertices{0, 1, 2, 0, 2, 3};
+        for (const int local : triangle_vertices)
+        {
+          cells.push_back(static_cast<std::int64_t>(
+                              cutcells_mesh._connectivity[static_cast<std::size_t>(
+                                  begin + local)])
+                          + vertex_offset);
+        }
+        parent_index.push_back(parent);
+        parent_index.push_back(parent);
+      }
+      continue;
+    }
+
+    if (arity != vertices_per_cell)
     {
       throw std::runtime_error(
           "CutCells visualisation mesh cell arity is inconsistent");
@@ -1118,9 +1022,13 @@ mesh::CutMesh<T> dolfinx_cut_mesh_from_cutcells_mesh(
           out._bg_mesh->comm(), cutcells_mesh._vertex_coords, xshape, nullptr,
           std::int32_t(2), identity_reorder));
 
-  out._parent_index = std::move(cutcells_mesh._parent_map);
+  out._parent_index = split_mixed_surface_to_triangles
+                          ? std::move(parent_index)
+                          : std::move(cutcells_mesh._parent_map);
   out._is_cut_cell.assign(static_cast<std::size_t>(cutcells_mesh._num_cells),
                           std::int8_t(1));
+  if (split_mixed_surface_to_triangles)
+    out._is_cut_cell.assign(out._parent_index.size(), std::int8_t(1));
   if (num_uncut_cells > out._is_cut_cell.size())
   {
     throw std::runtime_error(
@@ -1147,32 +1055,7 @@ mesh::CutMesh<T> create_cut_mesh(const CutData<T>& cut_data,
   const std::size_t num_uncut_cells
       = include_uncut && part.dim == cut_data.tdim ? part.uncut_cell_ids.size()
                                                    : 0;
-  return dolfinx_cut_mesh_from_cutcells_mesh(
-      cut_data.mesh_owner, std::move(cutcells_mesh), num_uncut_cells);
-}
-
-template <std::floating_point T>
-mesh::CutMesh<T> create_cut_mesh(const CutData<T>& cut_data,
-                                 std::span<const std::int32_t> entities,
-                                 int entity_dim, std::string_view ls_part,
-                                 std::string_view mode)
-{
-  if (entity_dim != cut_data.tdim)
-  {
-    throw std::invalid_argument(
-        "cutfemx::create_cut_mesh currently supports cell entities only");
-  }
-
-  auto part = select_mesh_part(cut_data.mesh_view, cut_data.cut_cells,
-                               cut_data.parent_cells, ls_part);
-  const bool include_uncut = include_uncut_cells(part.dim, cut_data.tdim, mode);
-  filter_mesh_part_to_cells(part, entities, cut_data.num_local_cells);
-  cutcells::mesh::CutMesh<T> cutcells_mesh
-      = cutcells::output::visualization_mesh<T, std::int32_t>(part,
-                                                              include_uncut);
-  const std::size_t num_uncut_cells
-      = include_uncut && part.dim == cut_data.tdim ? part.uncut_cell_ids.size()
-                                                   : 0;
+  remap_parent_map_to_background_entities(cutcells_mesh._parent_map, cut_data);
   return dolfinx_cut_mesh_from_cutcells_mesh(
       cut_data.mesh_owner, std::move(cutcells_mesh), num_uncut_cells);
 }
@@ -1188,29 +1071,15 @@ RuntimeQuadrature<T> runtime_quadrature(const CutData<T>& cut_data,
   cutcells::quadrature::QuadratureRules<T> rules
       = cutcells::output::quadrature_rules<T, std::int32_t>(
           part, order, /*include_uncut_cells=*/false);
-  return RuntimeQuadrature<T>(std::move(rules), cut_data.mesh_owner);
-}
-
-template <std::floating_point T>
-RuntimeQuadrature<T> runtime_quadrature(const CutData<T>& cut_data,
-                                        std::span<const std::int32_t> entities,
-                                        int entity_dim,
-                                        std::string_view ls_part, int order)
-{
-  validate_quadrature_order(order);
-
-  if (entity_dim != cut_data.tdim)
+  std::optional<std::vector<T>> physical_points;
+  if (!cut_data.parent_entities.empty())
+    physical_points = physical_points_for_host_mesh(rules, cut_data);
+  remap_parent_map_to_background_entities(rules._parent_map, cut_data);
+  if (physical_points)
   {
-    return runtime_quadrature_on_entity_mesh(cut_data, entities, entity_dim,
-                                             ls_part, order);
+    return RuntimeQuadrature<T>(std::move(rules), cut_data.mesh_owner,
+                                std::move(*physical_points), cut_data.gdim);
   }
-
-  auto part = select_mesh_part(cut_data.mesh_view, cut_data.cut_cells,
-                               cut_data.parent_cells, ls_part);
-  filter_mesh_part_to_cells(part, entities, cut_data.num_local_cells);
-  cutcells::quadrature::QuadratureRules<T> rules
-      = cutcells::output::quadrature_rules<T, std::int32_t>(
-          part, order, /*include_uncut_cells=*/false);
   return RuntimeQuadrature<T>(std::move(rules), cut_data.mesh_owner);
 }
 
@@ -1219,6 +1088,12 @@ template CutData<double> cut(
 template CutData<float> cut(
     std::shared_ptr<const dolfinx::fem::Function<float>>);
 template CutData<double> cut(
+    std::shared_ptr<const dolfinx::fem::Function<double>>,
+    std::span<const std::int32_t>, int);
+template CutData<float> cut(
+    std::shared_ptr<const dolfinx::fem::Function<float>>,
+    std::span<const std::int32_t>, int);
+template CutData<double> cut(
     std::shared_ptr<const dolfinx::mesh::Mesh<double>>,
     std::shared_ptr<const dolfinx::fem::Function<double>>);
 template CutData<float> cut(
@@ -1229,11 +1104,25 @@ template CutData<double> cut(
 template CutData<float> cut(
     std::span<const std::shared_ptr<const dolfinx::fem::Function<float>>>);
 template CutData<double> cut(
+    std::span<const std::shared_ptr<const dolfinx::fem::Function<double>>>,
+    std::span<const std::int32_t>, int);
+template CutData<float> cut(
+    std::span<const std::shared_ptr<const dolfinx::fem::Function<float>>>,
+    std::span<const std::int32_t>, int);
+template CutData<double> cut(
     std::shared_ptr<const dolfinx::mesh::Mesh<double>>,
     std::span<const std::shared_ptr<const dolfinx::fem::Function<double>>>);
 template CutData<float> cut(
     std::shared_ptr<const dolfinx::mesh::Mesh<float>>,
     std::span<const std::shared_ptr<const dolfinx::fem::Function<float>>>);
+template CutData<double> cut(
+    std::shared_ptr<const dolfinx::mesh::Mesh<double>>,
+    std::span<const std::shared_ptr<const dolfinx::fem::Function<double>>>,
+    std::span<const std::int32_t>, int);
+template CutData<float> cut(
+    std::shared_ptr<const dolfinx::mesh::Mesh<float>>,
+    std::span<const std::shared_ptr<const dolfinx::fem::Function<float>>>,
+    std::span<const std::int32_t>, int);
 template CutData<double> cut(
     std::shared_ptr<const dolfinx::mesh::Mesh<double>>,
     std::initializer_list<std::shared_ptr<const dolfinx::fem::Function<double>>>);
@@ -1248,33 +1137,15 @@ template std::vector<std::int32_t> locate_entities(
     const CutData<double>&, std::string_view);
 template std::vector<std::int32_t> locate_entities(
     const CutData<float>&, std::string_view);
-template std::vector<std::int32_t> locate_entities(
-    const CutData<double>&, std::span<const std::int32_t>, int,
-    std::string_view);
-template std::vector<std::int32_t> locate_entities(
-    const CutData<float>&, std::span<const std::int32_t>, int,
-    std::string_view);
 
 template mesh::CutMesh<double> create_cut_mesh(
     const CutData<double>&, std::string_view, std::string_view);
 template mesh::CutMesh<float> create_cut_mesh(
     const CutData<float>&, std::string_view, std::string_view);
-template mesh::CutMesh<double> create_cut_mesh(
-    const CutData<double>&, std::span<const std::int32_t>, int,
-    std::string_view, std::string_view);
-template mesh::CutMesh<float> create_cut_mesh(
-    const CutData<float>&, std::span<const std::int32_t>, int,
-    std::string_view, std::string_view);
 
 template RuntimeQuadrature<double> runtime_quadrature(
     const CutData<double>&, std::string_view, int);
 template RuntimeQuadrature<float> runtime_quadrature(
     const CutData<float>&, std::string_view, int);
-template RuntimeQuadrature<double> runtime_quadrature(
-    const CutData<double>&, std::span<const std::int32_t>, int,
-    std::string_view, int);
-template RuntimeQuadrature<float> runtime_quadrature(
-    const CutData<float>&, std::span<const std::int32_t>, int,
-    std::string_view, int);
 
 } // namespace cutfemx

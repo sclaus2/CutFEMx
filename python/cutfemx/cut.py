@@ -156,12 +156,27 @@ def _normalise_level_sets(level_set: Function | Sequence[Function]) -> list[Func
     return level_sets
 
 
-def cut(level_set: Function | Sequence[Function]) -> CutData:
-    """Cut one or more scalar level-set functions on their background mesh."""
+def cut(
+    level_set: Function | Sequence[Function],
+    entities: npt.ArrayLike | None = None,
+    entity_dim: int | None = None,
+) -> CutData:
+    """Cut one or more scalar level-set functions on cells or selected entities."""
     level_sets = _normalise_level_sets(level_set)
+    candidate_entities, dim = _candidate_entities(entities, entity_dim)
     if len(level_sets) == 1:
-        return CutData(_cpp.cut(level_sets[0]._cpp_object))
-    return CutData(_cpp.cut_multi([phi._cpp_object for phi in level_sets]))
+        if candidate_entities is None:
+            return CutData(_cpp.cut(level_sets[0]._cpp_object))
+        return CutData(
+            _cpp.cut_entities(level_sets[0]._cpp_object, candidate_entities, dim)
+        )
+    if candidate_entities is None:
+        return CutData(_cpp.cut_multi([phi._cpp_object for phi in level_sets]))
+    return CutData(
+        _cpp.cut_multi_entities(
+            [phi._cpp_object for phi in level_sets], candidate_entities, dim
+        )
+    )
 
 
 def update(cut_data: CutData) -> None:
@@ -172,54 +187,28 @@ def update(cut_data: CutData) -> None:
 def locate_entities(
     cut_data: CutData,
     ls_part: str,
-    entities: npt.ArrayLike | None = None,
-    entity_dim: int | None = None,
 ) -> npt.NDArray[np.int32]:
     """Locate background entities classified by a level-set selector."""
-    candidate_entities, dim = _candidate_entities(entities, entity_dim)
-    if candidate_entities is None:
-        return _cpp.locate_entities(cut_data._cpp_object, ls_part)
-
-    return _cpp.locate_entities_subset(
-        cut_data._cpp_object, ls_part, candidate_entities, dim
-    )
+    return _cpp.locate_entities(cut_data._cpp_object, ls_part)
 
 
 def create_cut_mesh(
     cut_data: CutData,
     ls_part: str,
-    entities: npt.ArrayLike | None = None,
-    entity_dim: int | None = None,
     mode: str | None = None,
 ) -> CutMesh:
     """Create a cut visualisation mesh for the selected level-set part."""
     mode_arg = "auto" if mode is None else mode
-    candidate_entities, dim = _candidate_entities(entities, entity_dim)
-    if candidate_entities is None:
-        return CutMesh(_cpp.create_cut_mesh(cut_data._cpp_object, ls_part, mode_arg))
-
-    return CutMesh(
-        _cpp.create_cut_mesh_subset(
-            cut_data._cpp_object, ls_part, candidate_entities, dim, mode_arg
-        )
-    )
+    return CutMesh(_cpp.create_cut_mesh(cut_data._cpp_object, ls_part, mode_arg))
 
 
 def runtime_quadrature(
     cut_data: CutData,
     ls_part: str,
     order: int,
-    entities: npt.ArrayLike | None = None,
-    entity_dim: int | None = None,
 ):
     """Create runintgen-compatible runtime quadrature for selected entities."""
-    candidate_entities, dim = _candidate_entities(entities, entity_dim)
-    if candidate_entities is None:
-        cpp_rules = _cpp.runtime_quadrature(cut_data._cpp_object, ls_part, order)
-    else:
-        cpp_rules = _cpp.runtime_quadrature_subset(
-            cut_data._cpp_object, ls_part, order, candidate_entities, dim
-        )
+    cpp_rules = _cpp.runtime_quadrature(cut_data._cpp_object, ls_part, order)
 
     rules = RuntimeQuadratureRules(
         kind=cpp_rules.kind,

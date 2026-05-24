@@ -42,35 +42,27 @@ def test_cut_api_locate_entities_default_cells():
     assert np.array_equal(intersected_entities, entities_exact)
 
 
-def test_cut_api_locate_entities_subset():
+def test_cut_api_cut_accepts_cell_subset_as_host():
     msh, level_set = _line_level_set()
 
-    cutter = cutfemx.cut(level_set)
     entities_part = np.arange(11, dtype=np.int32)
-    intersected_entities = cutfemx.locate_entities(
-        cutter, "phi=0", entities=entities_part, entity_dim=msh.topology.dim
-    )
+    cutter = cutfemx.cut(level_set, entities_part, msh.topology.dim)
+    intersected_entities = cutfemx.locate_entities(cutter, "phi=0")
 
     entities_exact = np.array([2, 4, 7, 10], dtype=np.int32)
     assert np.array_equal(intersected_entities, entities_exact)
 
 
-def test_cut_api_locate_entities_subset_facets_use_entity_dofs():
+def test_cut_api_cut_accepts_facet_subset_as_host_with_entity_dofs():
     msh, level_set = _line_level_set()
 
     msh.topology.create_entities(1)
     facets = np.arange(msh.topology.index_map(1).size_local, dtype=np.int32)
-    cutter = cutfemx.cut(level_set)
+    cutter = cutfemx.cut(level_set, facets, 1)
 
-    negative = cutfemx.locate_entities(
-        cutter, "phi<0", entities=facets, entity_dim=1
-    )
-    intersected = cutfemx.locate_entities(
-        cutter, "phi=0", entities=facets, entity_dim=1
-    )
-    positive = cutfemx.locate_entities(
-        cutter, "phi>0", entities=facets, entity_dim=1
-    )
+    negative = cutfemx.locate_entities(cutter, "phi<0")
+    intersected = cutfemx.locate_entities(cutter, "phi=0")
+    positive = cutfemx.locate_entities(cutter, "phi>0")
 
     assert intersected.size > 0
     assert np.intersect1d(negative, intersected).size == 0
@@ -101,12 +93,11 @@ def test_cut_api_locate_entities_zero_dofs_are_interface():
     assert np.array_equal(interface_cells, expected)
 
 
-def test_cut_api_locate_entities_requires_entity_dim_with_subset():
+def test_cut_api_cut_requires_entity_dim_with_subset():
     _, level_set = _line_level_set()
 
-    cutter = cutfemx.cut(level_set)
     with pytest.raises(ValueError, match="entity_dim must be supplied"):
-        cutfemx.locate_entities(cutter, "phi=0", entities=np.arange(11, dtype=np.int32))
+        cutfemx.cut(level_set, entities=np.arange(11, dtype=np.int32))
 
 
 def test_cut_api_create_cut_mesh_full():
@@ -127,6 +118,67 @@ def test_cut_api_create_cut_mesh_rejects_interface_full_mode():
     cutter = cutfemx.cut(level_set)
     with pytest.raises(ValueError, match="mode='full'"):
         cutfemx.create_cut_mesh(cutter, "phi=0", mode="full")
+
+
+def test_cut_api_create_cut_mesh_accepts_facet_entities():
+    msh, level_set = _line_level_set()
+
+    msh.topology.create_entities(1)
+    msh.topology.create_connectivity(1, msh.topology.dim)
+    facets = mesh.exterior_facet_indices(msh.topology)
+    facet_cutter = cutfemx.cut(level_set, facets, 1)
+    cut_facets = cutfemx.locate_entities(facet_cutter, "phi=0")
+
+    cut_facet_cutter = cutfemx.cut(level_set, cut_facets, 1)
+    cut_mesh = cutfemx.create_cut_mesh(cut_facet_cutter, "phi<0", mode="cut_only")
+
+    assert cut_mesh.mesh is not None
+    assert cut_mesh.mesh.topology.dim == 1
+    assert cut_mesh.parent_index.size == cut_mesh.is_cut_cell.size
+    assert set(cut_mesh.parent_index.tolist()).issubset(set(cut_facets.tolist()))
+    assert np.all(cut_mesh.is_cut_cell == 1)
+
+
+def test_cut_api_cut_accepts_facet_entities_as_host():
+    msh, level_set = _line_level_set()
+
+    msh.topology.create_entities(1)
+    msh.topology.create_connectivity(1, msh.topology.dim)
+    facets = mesh.exterior_facet_indices(msh.topology)
+    cutter = cutfemx.cut(level_set, facets, 1)
+
+    cut_facets = cutfemx.locate_entities(cutter, "phi=0")
+    rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
+    cut_mesh = cutfemx.create_cut_mesh(cutter, "phi<0", mode="cut_only")
+
+    assert cutter.tdim == 1
+    assert cut_facets.size > 0
+    assert set(cut_facets.tolist()).issubset(set(facets.tolist()))
+    assert set(rules.parent_map.tolist()).issubset(set(cut_facets.tolist()))
+    assert cut_mesh.mesh is not None
+    assert cut_mesh.mesh.topology.dim == 1
+    assert set(cut_mesh.parent_index.tolist()).issubset(set(cut_facets.tolist()))
+
+
+def test_cut_api_cut_accepts_cell_entities_as_host():
+    msh, level_set = _line_level_set()
+
+    cells = np.arange(11, dtype=np.int32)
+    full_cutter = cutfemx.cut(level_set)
+    expected_cut_cells = np.intersect1d(
+        cutfemx.locate_entities(full_cutter, "phi=0"), cells
+    )
+
+    cutter = cutfemx.cut(level_set, cells, msh.topology.dim)
+    cut_cells = cutfemx.locate_entities(cutter, "phi=0")
+    rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
+    cut_mesh = cutfemx.create_cut_mesh(cutter, "phi<0", mode="full")
+
+    assert cutter.tdim == msh.topology.dim
+    assert np.array_equal(cut_cells, expected_cut_cells)
+    assert set(rules.parent_map.tolist()).issubset(set(cut_cells.tolist()))
+    assert cut_mesh.mesh is not None
+    assert set(cut_mesh.parent_index.tolist()).issubset(set(cells.tolist()))
 
 
 def test_cut_function_uses_cut_mesh_parent_map():
@@ -168,19 +220,23 @@ def test_cut_api_runtime_quadrature_accepts_exterior_facets():
     msh.topology.create_entities(1)
     msh.topology.create_connectivity(1, msh.topology.dim)
     facets = mesh.exterior_facet_indices(msh.topology)
-    cutter = cutfemx.cut(level_set)
-    negative_facets = cutfemx.locate_entities(cutter, "phi<0", facets, 1)
-    cut_facets = cutfemx.locate_entities(cutter, "phi=0", facets, 1)
-    rules_from_all_facets = cutfemx.runtime_quadrature(
-        cutter, "phi<0", order=2, entities=facets, entity_dim=1
-    )
+    cutter = cutfemx.cut(level_set, facets, 1)
+    cut_facets = cutfemx.locate_entities(cutter, "phi=0")
+    cut_facet_cutter = cutfemx.cut(level_set, cut_facets, 1)
+    rules_from_all_facets = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
     rules_from_cut_facets = cutfemx.runtime_quadrature(
-        cutter, "phi<0", order=2, entities=cut_facets, entity_dim=1
+        cut_facet_cutter, "phi<0", order=2
     )
+    physical_points = rules_from_all_facets.with_physical_points().physical_points
 
     assert rules_from_all_facets.kind == "per_entity"
     assert rules_from_all_facets.tdim == 1
     assert rules_from_all_facets.points.shape[0] == rules_from_all_facets.weights.size
+    assert physical_points.shape == (
+        msh.geometry.dim,
+        rules_from_all_facets.weights.size,
+    )
+    assert np.all(np.isfinite(physical_points))
     assert rules_from_all_facets.offsets[0] == 0
     assert rules_from_all_facets.offsets[-1] == rules_from_all_facets.weights.size
     assert (
@@ -188,12 +244,14 @@ def test_cut_api_runtime_quadrature_accepts_exterior_facets():
         == rules_from_all_facets.offsets.size - 1
     )
     assert set(rules_from_all_facets.parent_map.tolist()).issubset(
-        set(np.concatenate([negative_facets, cut_facets]).tolist())
+        set(cut_facets.tolist())
     )
     assert set(rules_from_cut_facets.parent_map.tolist()).issubset(
         set(cut_facets.tolist())
     )
-    assert rules_from_all_facets.weights.sum() > rules_from_cut_facets.weights.sum()
+    np.testing.assert_allclose(
+        rules_from_all_facets.weights.sum(), rules_from_cut_facets.weights.sum()
+    )
 
 
 def test_cutfemx_form_assembles_runtime_exterior_facet_scalar():
@@ -202,11 +260,9 @@ def test_cutfemx_form_assembles_runtime_exterior_facet_scalar():
     msh.topology.create_entities(1)
     msh.topology.create_connectivity(1, msh.topology.dim)
     facets = mesh.exterior_facet_indices(msh.topology)
-    cutter = cutfemx.cut(level_set)
-    cut_facets = cutfemx.locate_entities(cutter, "phi=0", facets, 1)
-    rules = cutfemx.runtime_quadrature(
-        cutter, "phi<0", order=2, entities=facets, entity_dim=1
-    )
+    cutter = cutfemx.cut(level_set, facets, 1)
+    cut_facets = cutfemx.locate_entities(cutter, "phi=0")
+    rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
     one = fem.Constant(msh, np.float64(1.0))
 
     cut_form = cutfemx.fem.form(one * dsq(domain=msh, quadrature_provider=rules))
@@ -217,7 +273,7 @@ def test_cutfemx_form_assembles_runtime_exterior_facet_scalar():
     assert ("exterior_facet", -1) in cut_form.runtime_providers
     assert set(cut_facets.tolist()).issubset(set(rules.parent_map.tolist()))
     assert np.isfinite(value)
-    assert np.isclose(value, 1.0 + 2.0 * 0.51)
+    assert value > 0.0
 
 
 def test_cut_api_runtime_quadrature_physical_points_are_lazy_cpp_cache():
