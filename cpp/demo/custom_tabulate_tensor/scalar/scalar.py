@@ -30,6 +30,6 @@ V = FunctionSpace(mesh, e)
 alpha = Constant(mesh)
 
 
-# Finally, we define the bilinear and linear forms according to the
-# variational formulation of the equations:
-L = alpha*(dx(scheme="runtime")+dx)
+# Finally, we define a scalar cell form. The C++ demo calls the generated UFCx
+# cell kernel directly and accumulates the result over a DOLFINx mesh.
+L = alpha * dx

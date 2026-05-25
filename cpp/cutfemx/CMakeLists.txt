@@ -26,7 +26,7 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/distance/stl
   FILES_MATCHING PATTERN "*.h")
 
 target_include_directories(cutfemx PUBLIC
-  $<INSTALL_INTERFACE:include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..;${CMAKE_CURRENT_SOURCE_DIR}>")
 
 target_link_libraries(cutfemx PUBLIC CUTCELLS::cutcells)
@@ -44,4 +44,7 @@ if(CUTFEMX_USE_MULTIPRECISION_PSM)
   target_include_directories(cutfemx PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/geogram.psm.MultiPrecision>)
   target_compile_definitions(cutfemx PUBLIC CUTFEMX_USE_MULTIPRECISION_PSM)
+  install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/geogram.psm.MultiPrecision/MultiPrecision_psm.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    COMPONENT Development)
 endif()
