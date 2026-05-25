@@ -300,7 +300,7 @@ void reinitialize(
     }
     
     // 1. Store original signs for all vertices
-    auto phi_vals = phi.x()->array();
+    std::span<const Real> phi_vals = phi.x()->array();
     std::vector<int> original_signs(phi_vals.size());
     for (std::size_t i = 0; i < phi_vals.size(); ++i) {
         original_signs[i] = (phi_vals[i] >= 0) ? 1 : -1;
@@ -353,7 +353,7 @@ void reinitialize(
     VertexMapCache<Real> vmap;
     vmap.build(*mesh, phi.function_space().get());
     
-    auto func_vals = phi.x()->array();
+    std::span<Real> func_vals = phi.x()->array();
     for (std::int32_t v = 0; v < num_vertices; ++v) {
         std::int32_t dof = vmap.vert_to_dof[v];
         if (dof >= 0 && dof < (std::int32_t)func_vals.size()) {

@@ -96,6 +96,20 @@ def demo_stl_distance():
     
     t1 = time.time()
     if rank == 0: print(f"Computed distance in {t1-t0:.4f} s", flush=True)
+
+    local_values = dist.x.array
+    local_min = np.min(local_values) if local_values.size else np.inf
+    local_max = np.max(local_values) if local_values.size else -np.inf
+    local_neg = np.count_nonzero(local_values < 0.0)
+    global_min = comm.allreduce(local_min, op=MPI.MIN)
+    global_max = comm.allreduce(local_max, op=MPI.MAX)
+    global_neg = comm.allreduce(local_neg, op=MPI.SUM)
+    if rank == 0:
+        print(
+            f"Signed distance range: [{global_min:.6e}, {global_max:.6e}] "
+            f"with {global_neg} negative dofs",
+            flush=True,
+        )
     
     if rank == 0:
         print("Writing distance field to distance_from_stl.xdmf")

@@ -30,6 +30,7 @@
 #include <cutfemx/fem/deactivate.h>
 
 #include <cassert>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -42,6 +43,224 @@ namespace nb = nanobind;
 
 namespace
 {
+template <typename T>
+void validate_petsc_matrix_rows(Mat A, std::span<const std::int32_t> rows)
+{
+  if (A == nullptr)
+    throw std::runtime_error("Block deactivation received a null PETSc matrix");
+
+  PetscInt local_rows = 0;
+  PetscInt local_cols = 0;
+  MatGetLocalSize(A, &local_rows, &local_cols);
+  if (!rows.empty() && rows.back() >= local_rows)
+  {
+    throw std::runtime_error(
+        "ActiveDomain inactive rows are incompatible with the PETSc matrix row map");
+  }
+}
+
+template <typename T, typename U>
+void validate_petsc_block_deactivation_inputs(
+    const std::vector<std::vector<Mat>>& A_blocks,
+    const std::vector<cutfemx::fem::ActiveDomain<T, U>*>& active_domains)
+{
+  if (A_blocks.empty())
+    throw std::runtime_error("Block deactivation requires at least one block row");
+  if (A_blocks.size() != active_domains.size())
+  {
+    throw std::runtime_error(
+        "Block deactivation requires one ActiveDomain per block row");
+  }
+
+  const std::size_t num_blocks = A_blocks.size();
+  for (std::size_t i = 0; i < num_blocks; ++i)
+  {
+    if (A_blocks[i].size() != num_blocks)
+    {
+      throw std::runtime_error(
+          "Block deactivation requires a square block matrix");
+    }
+    if (active_domains[i] == nullptr)
+    {
+      throw std::runtime_error(
+          "Block deactivation received a null ActiveDomain");
+    }
+    validate_petsc_matrix_rows<T>(A_blocks[i][i],
+                                  active_domains[i]->inactive_dofs);
+  }
+}
+
+template <typename T, typename U>
+void deactivate_outside_petsc_blocks(
+    const std::vector<std::vector<Mat>>& A_blocks,
+    const std::vector<cutfemx::fem::ActiveDomain<T, U>*>& active_domains,
+    T diagonal)
+{
+  validate_petsc_block_deactivation_inputs<T, U>(A_blocks, active_domains);
+  for (std::size_t i = 0; i < A_blocks.size(); ++i)
+  {
+    Mat Aii = A_blocks[i][i];
+    MatAssemblyBegin(Aii, MAT_FLUSH_ASSEMBLY);
+    MatAssemblyEnd(Aii, MAT_FLUSH_ASSEMBLY);
+
+    cutfemx::fem::deactivate_outside(
+        dolfinx::la::petsc::Matrix::set_fn(Aii, INSERT_VALUES),
+        *active_domains[i], diagonal);
+  }
+}
+
+template <typename T, typename U>
+void deactivate_outside_petsc_blocks(
+    const std::vector<std::vector<Mat>>& A_blocks,
+    const std::vector<Vec>& b_blocks,
+    const std::vector<cutfemx::fem::ActiveDomain<T, U>*>& active_domains,
+    T diagonal, T rhs_value)
+{
+  validate_petsc_block_deactivation_inputs<T, U>(A_blocks, active_domains);
+  if (b_blocks.size() != A_blocks.size())
+  {
+    throw std::runtime_error(
+        "Block deactivation requires one RHS vector per block row");
+  }
+
+  for (std::size_t i = 0; i < A_blocks.size(); ++i)
+  {
+    Mat Aii = A_blocks[i][i];
+    MatAssemblyBegin(Aii, MAT_FLUSH_ASSEMBLY);
+    MatAssemblyEnd(Aii, MAT_FLUSH_ASSEMBLY);
+
+    Vec b = b_blocks[i];
+    if (b == nullptr)
+      throw std::runtime_error("Block deactivation received a null RHS vector");
+
+    Vec b_local;
+    VecGhostGetLocalForm(b, &b_local);
+    PetscInt n = 0;
+    VecGetLocalSize(b_local, &n);
+    PetscScalar* array = nullptr;
+    VecGetArray(b_local, &array);
+
+    try
+    {
+      cutfemx::fem::deactivate_outside(
+          dolfinx::la::petsc::Matrix::set_fn(Aii, INSERT_VALUES),
+          std::span<T>(reinterpret_cast<T*>(array), n), *active_domains[i],
+          diagonal, rhs_value);
+    }
+    catch (...)
+    {
+      VecRestoreArray(b_local, &array);
+      VecGhostRestoreLocalForm(b, &b_local);
+      throw;
+    }
+
+    VecRestoreArray(b_local, &array);
+    VecGhostRestoreLocalForm(b, &b_local);
+  }
+}
+
+template <typename T>
+bool petsc_row_has_nonzero(const std::vector<Mat>& row_blocks,
+                           PetscInt global_row, double tol)
+{
+  for (Mat A : row_blocks)
+  {
+    if (A == nullptr)
+      continue;
+
+    PetscInt ncols = 0;
+    const PetscInt* cols = nullptr;
+    const PetscScalar* values = nullptr;
+    MatGetRow(A, global_row, &ncols, &cols, &values);
+
+    bool nonzero = false;
+    for (PetscInt k = 0; k < ncols; ++k)
+    {
+      if (std::abs(static_cast<T>(values[k])) > tol)
+      {
+        nonzero = true;
+        break;
+      }
+    }
+
+    MatRestoreRow(A, global_row, &ncols, &cols, &values);
+    if (nonzero)
+      return true;
+  }
+  return false;
+}
+
+template <typename T>
+std::vector<std::int32_t> zero_petsc_rows(Mat A, double tol)
+{
+  if (A == nullptr)
+    throw std::runtime_error("Zero-row scan received a null PETSc matrix");
+
+  MatAssemblyBegin(A, MAT_FLUSH_ASSEMBLY);
+  MatAssemblyEnd(A, MAT_FLUSH_ASSEMBLY);
+
+  PetscInt rstart = 0;
+  PetscInt rend = 0;
+  MatGetOwnershipRange(A, &rstart, &rend);
+
+  std::vector<std::int32_t> rows;
+  rows.reserve(static_cast<std::size_t>(rend - rstart));
+  std::vector<Mat> row_blocks = {A};
+  for (PetscInt row = rstart; row < rend; ++row)
+    if (!petsc_row_has_nonzero<T>(row_blocks, row, tol))
+      rows.push_back(static_cast<std::int32_t>(row - rstart));
+  return rows;
+}
+
+template <typename T>
+std::vector<std::vector<std::int32_t>> zero_petsc_block_rows(
+    const std::vector<std::vector<Mat>>& A_blocks, double tol)
+{
+  if (A_blocks.empty())
+    throw std::runtime_error("Zero-row scan requires at least one block row");
+
+  const std::size_t num_blocks = A_blocks.size();
+  std::vector<std::vector<std::int32_t>> rows(num_blocks);
+  for (std::size_t i = 0; i < num_blocks; ++i)
+  {
+    if (A_blocks[i].size() != num_blocks)
+      throw std::runtime_error("Zero-row scan requires a square block matrix");
+    if (A_blocks[i][i] == nullptr)
+      throw std::runtime_error("Zero-row scan requires every diagonal matrix block");
+
+    PetscInt local_rows = 0;
+    PetscInt local_cols = 0;
+    MatGetLocalSize(A_blocks[i][i], &local_rows, &local_cols);
+    for (std::size_t j = 0; j < num_blocks; ++j)
+    {
+      if (A_blocks[i][j] == nullptr)
+        continue;
+      MatAssemblyBegin(A_blocks[i][j], MAT_FLUSH_ASSEMBLY);
+      MatAssemblyEnd(A_blocks[i][j], MAT_FLUSH_ASSEMBLY);
+
+      PetscInt block_rows = 0;
+      PetscInt block_cols = 0;
+      MatGetLocalSize(A_blocks[i][j], &block_rows, &block_cols);
+      if (block_rows != local_rows)
+      {
+        throw std::runtime_error(
+            "Zero-row scan found incompatible row maps in a block row");
+      }
+    }
+
+    PetscInt rstart = 0;
+    PetscInt rend = 0;
+    MatGetOwnershipRange(A_blocks[i][i], &rstart, &rend);
+    rows[i].reserve(static_cast<std::size_t>(rend - rstart));
+    for (PetscInt row = rstart; row < rend; ++row)
+    {
+      if (!petsc_row_has_nonzero<T>(A_blocks[i], row, tol))
+        rows[i].push_back(static_cast<std::int32_t>(row - rstart));
+    }
+  }
+  return rows;
+}
+
 template <typename T>
 void declare_runtime_petsc(nb::module_& m, std::string type)
 {
@@ -221,6 +440,45 @@ void declare_runtime_petsc(nb::module_& m, std::string type)
       nb::arg("A"), nb::arg("b"), nb::arg("active_domain"),
       nb::arg("diagonal"), nb::arg("rhs_value"),
       "Deactivate PETSc matrix rows and matching RHS entries outside a CutFEMx active domain.");
+
+  m.def(
+      ("deactivate_outside_blocks_" + type).c_str(),
+      [](const std::vector<std::vector<Mat>>& A_blocks,
+         const std::vector<ActiveDomain*>& active_domains, T diagonal)
+      {
+        deactivate_outside_petsc_blocks<T, U>(A_blocks, active_domains,
+                                              diagonal);
+      },
+      nb::arg("A_blocks"), nb::arg("active_domains"),
+      nb::arg("diagonal"),
+      "Deactivate a PETSc block system from per-row ActiveDomain objects.");
+
+  m.def(
+      ("deactivate_outside_blocks_matrix_vector_" + type).c_str(),
+      [](const std::vector<std::vector<Mat>>& A_blocks,
+         const std::vector<Vec>& b_blocks,
+         const std::vector<ActiveDomain*>& active_domains, T diagonal,
+         T rhs_value)
+      {
+        deactivate_outside_petsc_blocks<T, U>(
+            A_blocks, b_blocks, active_domains, diagonal, rhs_value);
+      },
+      nb::arg("A_blocks"), nb::arg("b_blocks"), nb::arg("active_domains"),
+      nb::arg("diagonal"), nb::arg("rhs_value"),
+      "Deactivate a PETSc block system and matching RHS blocks from per-row ActiveDomain objects.");
+
+  m.def(
+      ("zero_rows_" + type).c_str(),
+      [](Mat A, double tol) { return zero_petsc_rows<T>(A, tol); },
+      nb::arg("A"), nb::arg("tol") = 0.0,
+      "Return owned local PETSc rows whose entries are all zero.");
+
+  m.def(
+      ("zero_block_rows_" + type).c_str(),
+      [](const std::vector<std::vector<Mat>>& A_blocks, double tol)
+      { return zero_petsc_block_rows<T>(A_blocks, tol); },
+      nb::arg("A_blocks"), nb::arg("tol") = 0.0,
+      "Return owned local rows whose entries are zero across each PETSc block row.");
 }
 } // namespace
 

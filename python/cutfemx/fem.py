@@ -24,6 +24,7 @@ __all__ = [
     "ActiveDomain",
     "CutForm",
     "active_domain",
+    "apply_lifting",
     "assemble_matrix",
     "assemble_scalar",
     "assemble_vector",
@@ -32,7 +33,10 @@ __all__ = [
     "cut_form",
     "cut_function",
     "deactivate_outside",
+    "deactivate_outside_blocks",
     "form",
+    "zero_block_rows",
+    "zero_rows",
 ]
 
 
@@ -419,11 +423,62 @@ def _unsupported_packed_data(constants: Any | None, coeffs: Any | None) -> None:
         )
 
 
+def _cpp_bcs_by_block(bcs: Sequence[Sequence[Any]]) -> list[list[Any]]:
+    return [[bc._cpp_object for bc in block] for block in bcs]
+
+
+def _lifting_x0_arrays(x0: Sequence[Any] | None) -> list[np.ndarray] | None:
+    if x0 is None:
+        return None
+
+    arrays = []
+    for values in x0:
+        if values is None:
+            arrays.append(np.empty(0, dtype=np.float64))
+        elif hasattr(values, "array"):
+            arrays.append(np.asarray(values.array))
+        elif hasattr(values, "x") and hasattr(values.x, "array"):
+            arrays.append(np.asarray(values.x.array))
+        else:
+            arrays.append(np.asarray(values))
+    return arrays
+
+
+def apply_lifting(
+    b: np.ndarray,
+    a: Sequence[CutForm | None],
+    bcs: Sequence[Sequence[Any]],
+    x0: Sequence[Any] | None = None,
+    alpha: float = 1.0,
+) -> None:
+    """Apply Dirichlet lifting for CutFEMx runtime bilinear forms."""
+    if not all(form is None or isinstance(form, CutForm) for form in a):
+        return fem.apply_lifting(b, a, bcs, x0=x0, alpha=alpha)
+
+    cpp_forms = [None if form is None else form._cpp_object for form in a]
+    _cpp.fem.apply_lifting_float64(
+        b,
+        cpp_forms,
+        _cpp_bcs_by_block(bcs),
+        _lifting_x0_arrays(x0),
+        np.float64(alpha),
+    )
+
+
 def _wrap_cpp_function(cpp_func: Any, V: Any, name: str) -> Function:
     out = Function(V, dtype=cpp_func.x.array.dtype, name=name)
     out._cpp_object = cpp_func
     out._x = la.Vector(out._cpp_object.x)
     return out
+
+
+def _same_function_space(V0: Any, V1: Any) -> bool:
+    if V0 is V1:
+        return True
+    try:
+        return bool(V0 == V1)
+    except Exception:
+        return False
 
 
 def active_domain(a: CutForm) -> ActiveDomain:
@@ -467,6 +522,66 @@ def deactivate_outside(
         np.float64(rhs_value),
     )
     return domain
+
+
+def _cpp_matrix_block_rows(A_blocks: Sequence[Sequence[Any]]) -> list[list[Any]]:
+    rows: list[list[Any]] = []
+    for row in A_blocks:
+        rows.append([None if A is None else A._cpp_object for A in row])
+    return rows
+
+
+def deactivate_outside_blocks(
+    A_blocks: Sequence[Sequence[la.MatrixCSR | None]],
+    active_domains: Sequence[ActiveDomain],
+    b_blocks: Sequence[la.Vector] | None = None,
+    *,
+    diagonal: float = 1.0,
+    rhs_value: float = 0.0,
+) -> list[ActiveDomain]:
+    """Deactivate block rows from per-row active-domain support.
+
+    The inactive rows are taken directly from ``active_domains[i]``. Only the
+    matching diagonal block ``A_blocks[i][i]`` and optional RHS block
+    ``b_blocks[i]`` are modified.
+    """
+    domains = list(active_domains)
+    cpp_domains = [domain._cpp_object for domain in domains]
+    cpp_A_blocks = _cpp_matrix_block_rows(A_blocks)
+
+    if b_blocks is None:
+        _cpp.fem.deactivate_outside_blocks_float64(
+            cpp_A_blocks, cpp_domains, np.float64(diagonal)
+        )
+        return domains
+
+    _cpp.fem.deactivate_outside_blocks_matrix_vector_float64(
+        cpp_A_blocks,
+        [b._cpp_object for b in b_blocks],
+        cpp_domains,
+        np.float64(diagonal),
+        np.float64(rhs_value),
+    )
+    return domains
+
+
+def zero_rows(A: la.MatrixCSR, *, tol: float = 0.0) -> np.ndarray:
+    """Return owned scalar rows whose assembled MatrixCSR entries are zero."""
+    return np.asarray(
+        _cpp.fem.zero_rows_float64(A._cpp_object, float(tol)), dtype=np.int32
+    )
+
+
+def zero_block_rows(
+    A_blocks: Sequence[Sequence[la.MatrixCSR | None]], *, tol: float = 0.0
+) -> list[np.ndarray]:
+    """Return zero rows for each row of a MatrixCSR block system."""
+    return [
+        np.asarray(rows, dtype=np.int32)
+        for rows in _cpp.fem.zero_block_rows_float64(
+            _cpp_matrix_block_rows(A_blocks), float(tol)
+        )
+    ]
 
 
 def create_sparsity_pattern(a: Any) -> Any:
@@ -554,7 +669,7 @@ def _assemble_matrix_csr(
     cpp_bcs = [] if bcs is None else [bc._cpp_object for bc in bcs]
     _cpp.fem.assemble_matrix_float64(A._cpp_object, a._cpp_object, cpp_bcs)
 
-    if a.function_spaces[0] is a.function_spaces[1]:
+    if _same_function_space(a.function_spaces[0], a.function_spaces[1]):
         _cpp.fem.insert_diagonal_float64(
             A._cpp_object,
             a._cpp_object.function_spaces[0],

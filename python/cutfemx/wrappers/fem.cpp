@@ -187,6 +187,70 @@ void declare_runtime_fem(nb::module_& m, std::string type)
       "Assemble a linear CutFEMx runtime form into an existing array.");
 
   m.def(
+      ("apply_lifting_" + type).c_str(),
+      [](nb::ndarray<T, nb::ndim<1>, nb::c_contig> b,
+         const std::vector<const Form*>& forms,
+         const std::vector<std::vector<const DirichletBC*>>& bcs,
+         std::optional<std::vector<
+             nb::ndarray<const T, nb::ndim<1>, nb::c_contig>>> x0,
+         T alpha)
+      {
+        if (forms.size() != bcs.size())
+        {
+          throw std::runtime_error(
+              "Mismatch in size between bilinear forms and boundary "
+              "condition blocks.");
+        }
+
+        std::vector<std::optional<std::reference_wrapper<const Form>>>
+            lifting_forms;
+        lifting_forms.reserve(forms.size());
+        for (const Form* form : forms)
+        {
+          if (form == nullptr)
+            lifting_forms.emplace_back(std::nullopt);
+          else
+            lifting_forms.emplace_back(std::cref(*form));
+        }
+
+        std::vector<std::vector<std::reference_wrapper<const DirichletBC>>>
+            lifting_bcs;
+        lifting_bcs.reserve(bcs.size());
+        for (const std::vector<const DirichletBC*>& block : bcs)
+        {
+          auto& out_block = lifting_bcs.emplace_back();
+          out_block.reserve(block.size());
+          for (const DirichletBC* bc : block)
+          {
+            if (bc == nullptr)
+              throw std::runtime_error(
+                  "CutFEMx apply_lifting received a null DirichletBC.");
+            out_block.push_back(*bc);
+          }
+        }
+
+        std::vector<std::span<const T>> lifting_x0;
+        if (x0)
+        {
+          if (x0->size() != forms.size())
+          {
+            throw std::runtime_error(
+                "Mismatch in size between x0 and bilinear forms.");
+          }
+          lifting_x0.reserve(x0->size());
+          for (const auto& values : *x0)
+            lifting_x0.emplace_back(values.data(), values.size());
+        }
+
+        dolfinx_custom_data::fem::apply_lifting(
+            std::span<T>(b.data(), b.size()), std::move(lifting_forms),
+            lifting_bcs, lifting_x0, alpha);
+      },
+      nb::arg("b"), nb::arg("forms"), nb::arg("bcs"),
+      nb::arg("x0") = nb::none(), nb::arg("alpha") = T(1),
+      "Apply Dirichlet lifting for CutFEMx runtime bilinear forms.");
+
+  m.def(
       ("create_sparsity_pattern_" + type).c_str(),
       [](const Form& form)
       {
@@ -339,6 +403,47 @@ void declare_runtime_fem(nb::module_& m, std::string type)
       nb::arg("A"), nb::arg("b"), nb::arg("active_domain"),
       nb::arg("diagonal"), nb::arg("rhs_value"),
       "Deactivate matrix rows and matching RHS entries outside a CutFEMx active domain.");
+
+  m.def(
+      ("deactivate_outside_blocks_" + type).c_str(),
+      [](const std::vector<std::vector<dolfinx::la::MatrixCSR<T>*>>& A_blocks,
+         const std::vector<ActiveDomain*>& active_domains, T diagonal)
+      {
+        cutfemx::fem::deactivate_outside_blocks(A_blocks, active_domains,
+                                                diagonal);
+      },
+      nb::arg("A_blocks"), nb::arg("active_domains"),
+      nb::arg("diagonal"),
+      "Deactivate a MatrixCSR block system from per-row ActiveDomain objects.");
+
+  m.def(
+      ("deactivate_outside_blocks_matrix_vector_" + type).c_str(),
+      [](const std::vector<std::vector<dolfinx::la::MatrixCSR<T>*>>& A_blocks,
+         const std::vector<Vector*>& b_blocks,
+         const std::vector<ActiveDomain*>& active_domains, T diagonal,
+         T rhs_value)
+      {
+        cutfemx::fem::deactivate_outside_blocks(
+            A_blocks, b_blocks, active_domains, diagonal, rhs_value);
+      },
+      nb::arg("A_blocks"), nb::arg("b_blocks"), nb::arg("active_domains"),
+      nb::arg("diagonal"), nb::arg("rhs_value"),
+      "Deactivate a MatrixCSR block system and matching RHS blocks from per-row ActiveDomain objects.");
+
+  m.def(
+      ("zero_rows_" + type).c_str(),
+      [](const dolfinx::la::MatrixCSR<T>& A, double tol)
+      { return cutfemx::fem::impl::zero_rows(A, tol); },
+      nb::arg("A"), nb::arg("tol") = 0.0,
+      "Return owned scalar rows whose MatrixCSR entries are all zero.");
+
+  m.def(
+      ("zero_block_rows_" + type).c_str(),
+      [](const std::vector<std::vector<dolfinx::la::MatrixCSR<T>*>>& A_blocks,
+         double tol)
+      { return cutfemx::fem::impl::zero_block_rows(A_blocks, tol); },
+      nb::arg("A_blocks"), nb::arg("tol") = 0.0,
+      "Return owned scalar rows whose entries are zero across each MatrixCSR block row.");
 }
 } // namespace
 

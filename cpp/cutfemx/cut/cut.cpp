@@ -853,18 +853,35 @@ std::vector<std::int32_t> interior_facets_for_cells(
   const std::int32_t num_owned_facets
       = static_cast<std::int32_t>(facet_map->size_local());
 
-  std::vector<std::int32_t> facets;
+  std::vector<std::uint8_t> selected_cells(num_cells, 0);
   for (std::int32_t cell : cells)
   {
     if (cell < 0 || cell >= num_cells)
       throw std::out_of_range("Cell index is out of range.");
+    selected_cells[cell] = 1;
+  }
 
+  std::vector<std::int32_t> facets;
+  for (std::int32_t cell : cells)
+  {
     for (std::int32_t facet : c_to_f->links(cell))
     {
       if (!include_ghosts && facet >= num_owned_facets)
         continue;
-      if (f_to_c->links(facet).size() == 2)
+
+      std::span<const std::int32_t> adjacent_cells = f_to_c->links(facet);
+      if (adjacent_cells.size() != 2)
+        continue;
+
+      if (std::ranges::all_of(adjacent_cells,
+                              [&](std::int32_t adjacent)
+                              {
+                                return adjacent >= 0 && adjacent < num_cells
+                                       && selected_cells[adjacent] != 0;
+                              }))
+      {
         facets.push_back(facet);
+      }
     }
   }
 

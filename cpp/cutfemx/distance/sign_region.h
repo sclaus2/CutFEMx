@@ -424,7 +424,7 @@ void apply_sign_flood_fill(
     vmap.build(mesh, phi.function_space().get());
     const std::vector<std::int32_t>& vert_to_dof = vmap.vert_to_dof;
     
-    auto data = phi.x()->array();
+    std::span<Real> data = phi.x()->array();
     
     for (std::int32_t v = 0; v < num_vertices; ++v) {
         std::int32_t dof = vert_to_dof[v];

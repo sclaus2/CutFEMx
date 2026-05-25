@@ -671,6 +671,80 @@ def test_cutfemx_form_assembles_runtime_vector_and_matrix():
     assert matrix_nnz > 0
 
 
+def test_cutfemx_block_deactivation_uses_per_row_active_domains():
+    msh, level_set = _line_level_set()
+
+    cutter = cutfemx.cut(level_set)
+    inside_cells = cutfemx.locate_entities(cutter, "phi<0")
+    outside_cells = cutfemx.locate_entities(cutter, "phi>0")
+    inside_rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
+    outside_rules = cutfemx.runtime_quadrature(cutter, "phi>0", order=2)
+    dx_inside = ufl.Measure(
+        "dx",
+        domain=msh,
+        subdomain_id=0,
+        subdomain_data=[inside_cells, inside_rules],
+    )
+    dx_outside = ufl.Measure(
+        "dx",
+        domain=msh,
+        subdomain_id=1,
+        subdomain_data=[outside_cells, outside_rules],
+    )
+
+    V1 = fem.functionspace(msh, ("Lagrange", 1))
+    V2 = fem.functionspace(msh, ("Lagrange", 1))
+    W = ufl.MixedFunctionSpace(V1, V2)
+    u1, u2 = ufl.TrialFunctions(W)
+    v1, v2 = ufl.TestFunctions(W)
+
+    a = u1 * v1 * dx_inside + u2 * v2 * dx_outside
+    a += 0.25 * u2 * v1 * dx_inside + 0.5 * u1 * v2 * dx_outside
+    L = v1 * dx_inside + 2.0 * v2 * dx_outside
+
+    a_blocks = ufl.extract_blocks(a)
+    L_blocks = ufl.extract_blocks(L)
+    a_forms = [
+        [cutfemx.fem.form(a_blocks[i][j]) for j in range(2)] for i in range(2)
+    ]
+    L_forms = [cutfemx.fem.form(L_blocks[i]) for i in range(2)]
+
+    A_blocks = [
+        [cutfemx.fem.assemble_matrix(a_forms[i][j]) for j in range(2)]
+        for i in range(2)
+    ]
+    for row in A_blocks:
+        for A in row:
+            A.scatter_reverse()
+    b_blocks = [cutfemx.fem.assemble_vector(L_form) for L_form in L_forms]
+    for b in b_blocks:
+        b.scatter_reverse(la.InsertMode.add)
+
+    domains = [
+        cutfemx.fem.active_domain(a_forms[0][0]),
+        cutfemx.fem.active_domain(a_forms[1][1]),
+    ]
+    zero_before = cutfemx.fem.zero_block_rows(A_blocks)
+    assert set(domains[0].inactive_dofs.tolist()).issubset(
+        set(zero_before[0].tolist())
+    )
+    assert set(domains[1].inactive_dofs.tolist()).issubset(
+        set(zero_before[1].tolist())
+    )
+
+    for b, domain in zip(b_blocks, domains):
+        b.array[domain.inactive_dofs] = 3.0
+    returned = cutfemx.fem.deactivate_outside_blocks(A_blocks, domains, b_blocks)
+    zero_after = cutfemx.fem.zero_block_rows(A_blocks)
+
+    assert returned == domains
+    assert all(rows.size == 0 for rows in zero_after)
+    for i, domain in enumerate(domains):
+        np.testing.assert_allclose(b_blocks[i].array[domain.inactive_dofs], 0.0)
+        diagonal = A_blocks[i][i].to_scipy().diagonal()
+        np.testing.assert_allclose(diagonal[domain.inactive_dofs], 1.0)
+
+
 def test_cutfemx_quadrature_function_normal_assembles_runtime_cell_scalar():
     msh, level_set = _line_level_set()
 
@@ -706,6 +780,29 @@ def test_cut_api_ghost_penalty_facets_are_owned_unique_interior_facets():
     assert all(len(facet_to_cell.links(int(facet))) == 2 for facet in facets)
 
 
+def test_cut_api_interior_facets_for_cells_stays_inside_cell_set():
+    msh = mesh.create_unit_square(MPI.COMM_WORLD, 4, 4)
+    tdim = msh.topology.dim
+    fdim = tdim - 1
+    msh.topology.create_entities(fdim)
+    msh.topology.create_connectivity(fdim, tdim)
+    facet_to_cell = msh.topology.connectivity(fdim, tdim)
+    num_cells = msh.topology.index_map(tdim).size_local
+
+    selected = np.arange(0, num_cells, 2, dtype=np.int32)
+    selected_set = set(selected.tolist())
+    facets = cutfemx.interior_facets_for_cells(msh, selected)
+
+    for facet in facets:
+        adjacent = [int(c) for c in facet_to_cell.links(int(facet))]
+        assert len(adjacent) == 2
+        assert all(c in selected_set for c in adjacent)
+
+    all_cells = np.arange(num_cells, dtype=np.int32)
+    all_facets = cutfemx.interior_facets_for_cells(msh, all_cells)
+    assert np.array_equal(all_facets, _interior_facet_indices(msh))
+
+
 def test_cutfemx_standard_only_form_active_domain_allows_no_inactive_dofs():
     msh, _ = _line_level_set()
     V = fem.functionspace(msh, ("Lagrange", 1))
@@ -726,6 +823,48 @@ def test_cutfemx_standard_only_form_active_domain_allows_no_inactive_dofs():
     assert np.array_equal(domain.active_cells, all_cells)
     assert domain.inactive_dofs.size == 0
     assert returned is domain
+
+
+def test_cutfemx_active_domain_supports_mixed_space():
+    msh, level_set = _line_level_set()
+    cutter = cutfemx.cut(level_set)
+    inside_cells = cutfemx.locate_entities(cutter, "phi<0")
+    rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
+    dx_inside = ufl.Measure(
+        "dx",
+        domain=msh,
+        subdomain_id=0,
+        subdomain_data=[inside_cells, rules],
+    )
+
+    import basix.ufl
+
+    velocity = basix.ufl.element(
+        "Lagrange", msh.basix_cell(), 1, shape=(msh.geometry.dim,)
+    )
+    pressure = basix.ufl.element("Lagrange", msh.basix_cell(), 1)
+    W = fem.functionspace(msh, basix.ufl.mixed_element([velocity, pressure]))
+    w = ufl.TrialFunction(W)
+    z = ufl.TestFunction(W)
+    u, p = ufl.split(w)
+    v, q = ufl.split(z)
+
+    a = cutfemx.fem.form((ufl.inner(u, v) + p * q) * dx_inside)
+    L = cutfemx.fem.form((v[0] + q) * dx_inside)
+    A = cutfemx.fem.assemble_matrix(a)
+    A.scatter_reverse()
+    b = cutfemx.fem.assemble_vector(L)
+    b.scatter_reverse(la.InsertMode.add)
+    domain = cutfemx.fem.active_domain(a)
+    returned = cutfemx.fem.deactivate_outside(A, b, domain)
+
+    expected_active_cells = np.unique(
+        np.concatenate([inside_cells, rules.parent_map])
+    )
+    assert np.array_equal(domain.active_cells, expected_active_cells)
+    assert domain.inactive_dofs.size > 0
+    assert returned is domain
+    np.testing.assert_allclose(b.array[domain.inactive_dofs], 0.0)
 
 
 def test_cutfemx_deactivation_removes_old_selector_api():

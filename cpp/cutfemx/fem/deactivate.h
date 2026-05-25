@@ -7,12 +7,15 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <complex>
 #include <cstdint>
 #include <dolfinx/fem/Function.h>
 #include <dolfinx/fem/FunctionSpace.h>
 #include <dolfinx/fem/assembler.h>
 #include <dolfinx/la/MatrixCSR.h>
+#include <dolfinx/la/Vector.h>
 #include <memory>
 #include <numeric>
 #include <span>
@@ -25,6 +28,9 @@
 
 namespace cutfemx::fem
 {
+template <dolfinx::scalar T, std::floating_point U>
+struct ActiveDomain;
+
 namespace impl
 {
 template <dolfinx::scalar T, std::floating_point U>
@@ -86,13 +92,7 @@ void validate_bilinear_target_space(
         "cutfemx.fem.active_domain requires trial and test spaces on the same mesh");
   }
 
-  if (spaces[0]->element()->is_mixed() || spaces[1]->element()->is_mixed())
-  {
-    throw std::invalid_argument(
-        "cutfemx.fem.active_domain does not support mixed spaces in v1");
-  }
-  if (*spaces[0]->element() != *spaces[1]->element()
-      || !(*spaces[0]->dofmap() == *spaces[1]->dofmap()))
+  if (!(*spaces[0]->dofmap() == *spaces[1]->dofmap()))
   {
     throw std::invalid_argument(
         "cutfemx.fem.active_domain requires structurally equivalent trial "
@@ -228,6 +228,113 @@ void validate_matrix_rows(const dolfinx::la::MatrixCSR<T>& A,
         "ActiveDomain inactive rows are incompatible with the matrix row map");
   }
 }
+
+template <dolfinx::scalar T>
+std::int32_t owned_scalar_rows(const dolfinx::la::MatrixCSR<T>& A)
+{
+  return static_cast<std::int32_t>(A.num_owned_rows() * A.block_size()[0]);
+}
+
+template <dolfinx::scalar T>
+bool scalar_row_has_nonzero(const dolfinx::la::MatrixCSR<T>& A,
+                            std::int32_t row, double tol)
+{
+  if (row < 0 || row >= owned_scalar_rows(A))
+    throw std::runtime_error("Matrix row is out of range for zero-row scan");
+
+  const std::array<int, 2> bs = A.block_size();
+  const std::int32_t block_row = row / bs[0];
+  const int row_component = row % bs[0];
+  const int block_size = bs[0] * bs[1];
+  const auto& row_ptr = A.row_ptr();
+  const auto& values = A.values();
+
+  for (std::int64_t p = row_ptr[block_row]; p < row_ptr[block_row + 1]; ++p)
+  {
+    for (int col_component = 0; col_component < bs[1]; ++col_component)
+    {
+      const T value = values[p * block_size + row_component * bs[1]
+                             + col_component];
+      if (std::abs(value) > tol)
+        return true;
+    }
+  }
+  return false;
+}
+
+template <dolfinx::scalar T>
+std::vector<std::int32_t> zero_rows(const dolfinx::la::MatrixCSR<T>& A,
+                                    double tol = 0.0)
+{
+  std::vector<std::int32_t> rows;
+  const std::int32_t num_rows = owned_scalar_rows(A);
+  rows.reserve(num_rows);
+  for (std::int32_t row = 0; row < num_rows; ++row)
+    if (!scalar_row_has_nonzero(A, row, tol))
+      rows.push_back(row);
+  return rows;
+}
+
+template <dolfinx::scalar T>
+std::vector<std::vector<std::int32_t>> zero_block_rows(
+    const std::vector<std::vector<dolfinx::la::MatrixCSR<T>*>>& A_blocks,
+    double tol = 0.0)
+{
+  if (A_blocks.empty())
+    throw std::runtime_error("Zero-row scan requires at least one block row");
+
+  const std::size_t num_blocks = A_blocks.size();
+  std::vector<std::vector<std::int32_t>> rows(num_blocks);
+  for (std::size_t i = 0; i < num_blocks; ++i)
+  {
+    if (A_blocks[i].size() != num_blocks)
+      throw std::runtime_error("Zero-row scan requires a square block matrix");
+    if (A_blocks[i][i] == nullptr)
+      throw std::runtime_error("Zero-row scan requires every diagonal matrix block");
+
+    const std::int32_t num_rows = owned_scalar_rows(*A_blocks[i][i]);
+    rows[i].reserve(num_rows);
+    for (std::size_t j = 0; j < num_blocks; ++j)
+    {
+      if (A_blocks[i][j] != nullptr
+          && owned_scalar_rows(*A_blocks[i][j]) != num_rows)
+      {
+        throw std::runtime_error(
+            "Zero-row scan found incompatible row maps in a block row");
+      }
+    }
+
+    for (std::int32_t row = 0; row < num_rows; ++row)
+    {
+      bool nonzero = false;
+      for (std::size_t j = 0; j < num_blocks && !nonzero; ++j)
+      {
+        if (A_blocks[i][j] != nullptr)
+          nonzero = scalar_row_has_nonzero(*A_blocks[i][j], row, tol);
+      }
+      if (!nonzero)
+        rows[i].push_back(row);
+    }
+  }
+  return rows;
+}
+
+template <dolfinx::scalar T>
+void validate_block_rhs_inputs(
+    const std::vector<dolfinx::la::Vector<T>*>& b_blocks,
+    std::size_t num_blocks)
+{
+  if (b_blocks.size() != num_blocks)
+  {
+    throw std::runtime_error(
+        "Block deactivation requires one RHS vector per block row");
+  }
+  for (dolfinx::la::Vector<T>* b : b_blocks)
+  {
+    if (b == nullptr)
+      throw std::runtime_error("Block deactivation received a null RHS vector");
+  }
+}
 } // namespace impl
 
 template <dolfinx::scalar T, std::floating_point U>
@@ -238,6 +345,44 @@ struct ActiveDomain
   std::vector<std::int32_t> active_cells;
   std::vector<std::int32_t> inactive_dofs;
 };
+
+namespace impl
+{
+template <dolfinx::scalar T, std::floating_point U>
+void validate_block_deactivation_inputs(
+    const std::vector<std::vector<dolfinx::la::MatrixCSR<T>*>>& A_blocks,
+    const std::vector<ActiveDomain<T, U>*>& active_domains)
+{
+  if (A_blocks.empty())
+    throw std::runtime_error("Block deactivation requires at least one block row");
+  if (A_blocks.size() != active_domains.size())
+  {
+    throw std::runtime_error(
+        "Block deactivation requires one ActiveDomain per block row");
+  }
+
+  const std::size_t num_blocks = A_blocks.size();
+  for (std::size_t i = 0; i < num_blocks; ++i)
+  {
+    if (A_blocks[i].size() != num_blocks)
+    {
+      throw std::runtime_error(
+          "Block deactivation requires a square block matrix");
+    }
+    if (active_domains[i] == nullptr)
+    {
+      throw std::runtime_error(
+          "Block deactivation received a null ActiveDomain");
+    }
+    if (A_blocks[i][i] == nullptr)
+    {
+      throw std::runtime_error(
+          "Block deactivation requires every diagonal matrix block");
+    }
+    validate_matrix_rows(*A_blocks[i][i], active_domains[i]->inactive_dofs);
+  }
+}
+} // namespace impl
 
 template <dolfinx::scalar T, std::floating_point U>
 ActiveDomain<T, U>
@@ -270,5 +415,44 @@ ActiveDomain<T, U>& deactivate_outside(
   dolfinx::fem::set_diagonal(set_fn, active_domain.inactive_dofs, diagonal);
   impl::set_vector_entries<T>(b, active_domain.inactive_dofs, rhs_value);
   return active_domain;
+}
+
+template <dolfinx::scalar T, std::floating_point U>
+std::vector<ActiveDomain<T, U>*> deactivate_outside_blocks(
+    const std::vector<std::vector<dolfinx::la::MatrixCSR<T>*>>& A_blocks,
+    const std::vector<ActiveDomain<T, U>*>& active_domains,
+    T diagonal = 1.0)
+{
+  impl::validate_block_deactivation_inputs<T, U>(A_blocks, active_domains);
+
+  for (std::size_t i = 0; i < A_blocks.size(); ++i)
+  {
+    // Inactive rows come only from the row-support ActiveDomain. Off-diagonal
+    // blocks are intentionally untouched; inactive coupling entries indicate a
+    // form/domain consistency bug rather than something to clean here.
+    deactivate_outside(A_blocks[i][i]->mat_set_values(), *active_domains[i],
+                       diagonal);
+  }
+  return active_domains;
+}
+
+template <dolfinx::scalar T, std::floating_point U>
+std::vector<ActiveDomain<T, U>*> deactivate_outside_blocks(
+    const std::vector<std::vector<dolfinx::la::MatrixCSR<T>*>>& A_blocks,
+    const std::vector<dolfinx::la::Vector<T>*>& b_blocks,
+    const std::vector<ActiveDomain<T, U>*>& active_domains, T diagonal = 1.0,
+    T rhs_value = 0)
+{
+  impl::validate_block_deactivation_inputs<T, U>(A_blocks, active_domains);
+  impl::validate_block_rhs_inputs<T>(b_blocks, A_blocks.size());
+
+  for (std::size_t i = 0; i < A_blocks.size(); ++i)
+  {
+    auto& values = b_blocks[i]->array();
+    deactivate_outside(A_blocks[i][i]->mat_set_values(),
+                       std::span<T>(values.data(), values.size()),
+                       *active_domains[i], diagonal, rhs_value);
+  }
+  return active_domains;
 }
 } // namespace cutfemx::fem

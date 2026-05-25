@@ -24,6 +24,9 @@ __all__ = [
     "create_matrix",
     "create_vector",
     "deactivate_outside",
+    "deactivate_outside_blocks",
+    "zero_block_rows",
+    "zero_rows",
 ]
 
 
@@ -162,3 +165,65 @@ def deactivate_outside(
         A, b, domain._cpp_object, PETSc.ScalarType(diagonal), PETSc.ScalarType(rhs_value)
     )
     return domain
+
+
+def _petsc_matrix_block_rows(A_blocks: Any) -> list[list[PETSc.Mat | None]]:
+    if isinstance(A_blocks, PETSc.Mat):
+        try:
+            rows, cols = A_blocks.getNestSize()
+        except Exception as exc:
+            raise TypeError(
+                "deactivate_outside_blocks expects a nested PETSc Mat or "
+                "a nested sequence of PETSc Mat blocks"
+            ) from exc
+        return [
+            [A_blocks.getNestSubMatrix(i, j) for j in range(cols)]
+            for i in range(rows)
+        ]
+    return [list(row) for row in A_blocks]
+
+
+def deactivate_outside_blocks(
+    A_blocks: Any,
+    active_domains: Sequence[ActiveDomain],
+    b_blocks: Sequence[PETSc.Vec] | None = None,
+    diagonal: float = 1.0,
+    rhs_value: float = 0.0,
+) -> list[ActiveDomain]:
+    """Deactivate PETSc block rows from per-row active-domain support."""
+    petsc_mod = _runtime_petsc_module()
+    domains = list(active_domains)
+    cpp_domains = [domain._cpp_object for domain in domains]
+    mat_blocks = _petsc_matrix_block_rows(A_blocks)
+
+    if b_blocks is None:
+        petsc_mod.deactivate_outside_blocks_float64(
+            mat_blocks,
+            cpp_domains,
+            PETSc.ScalarType(diagonal),
+        )
+        return domains
+
+    petsc_mod.deactivate_outside_blocks_matrix_vector_float64(
+        mat_blocks,
+        list(b_blocks),
+        cpp_domains,
+        PETSc.ScalarType(diagonal),
+        PETSc.ScalarType(rhs_value),
+    )
+    return domains
+
+
+def zero_rows(A: PETSc.Mat, tol: float = 0.0) -> list[int]:
+    """Return owned local PETSc rows whose assembled entries are zero."""
+    return list(_runtime_petsc_module().zero_rows_float64(A, float(tol)))
+
+
+def zero_block_rows(A_blocks: Any, tol: float = 0.0) -> list[list[int]]:
+    """Return zero rows for each row of a PETSc block system."""
+    return [
+        list(rows)
+        for rows in _runtime_petsc_module().zero_block_rows_float64(
+            _petsc_matrix_block_rows(A_blocks), float(tol)
+        )
+    ]

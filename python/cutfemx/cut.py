@@ -264,7 +264,7 @@ def interior_facets_for_cells(
     *,
     include_ghosts: bool = False,
 ) -> npt.NDArray[np.int32]:
-    """Return raw local interior facet ids touched by ``cells``."""
+    """Return raw local interior facet ids whose adjacent cells are in ``cells``."""
     local_cells = np.ascontiguousarray(np.asarray(cells, dtype=np.int32).ravel())
     dtype = np.dtype(msh.geometry.x.dtype)
     if dtype == np.dtype(np.float64):
