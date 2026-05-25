@@ -327,7 +327,7 @@ def main(
         cell_type=mesh.CellType.triangle,
     )
 
-    V_phi = fem.functionspace(msh, ("Lagrange", 1))
+    V_phi = fem.functionspace(msh, ("Lagrange", 2))
     phi = fem.Function(V_phi)
     phi.interpolate(circle_level_set)
 
@@ -385,9 +385,7 @@ def main(
     # and a standard ghost penalty on the cut-cell stabilization band.
     a_cut = ufl.inner(ufl.grad(u), ufl.grad(v)) * dxq
     a_cut += (
-        -ufl.dot(ufl.grad(u), n_gamma) * v
-        - ufl.dot(ufl.grad(v), n_gamma) * u
-        + gamma / h * u * v
+        -ufl.dot(ufl.grad(u), n_gamma) * v - ufl.dot(ufl.grad(v), n_gamma) * u + gamma / h * u * v
     ) * dsq
     if ghost_facets.size > 0:
         a_cut += (

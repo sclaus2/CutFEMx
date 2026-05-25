@@ -159,6 +159,10 @@ if(TARGET cutcells)
   if(NOT TARGET CUTCELLS::cutcells)
     add_library(CUTCELLS::cutcells ALIAS cutcells)
   endif()
+  if(APPLE)
+    set_target_properties(cutcells PROPERTIES
+      INSTALL_NAME_DIR "@loader_path")
+  endif()
 elseif(NOT TARGET CUTCELLS::cutcells)
   _cutfemx_find_packaged_cutcells()
 endif()
@@ -291,11 +295,17 @@ if(DEFINED ENV{CONDA_PREFIX})
 endif()
 
 set_target_properties(cutfemx_cpp PROPERTIES
+  BUILD_RPATH "${_cutfemx_runtime_rpath}"
   INSTALL_RPATH "${_cutfemx_runtime_rpath}"
-  INSTALL_RPATH_USE_LINK_PATH TRUE)
+  INSTALL_RPATH_USE_LINK_PATH FALSE)
 set_target_properties(cutfemx PROPERTIES
+  BUILD_RPATH "${_cutfemx_runtime_rpath}"
   INSTALL_RPATH "${_cutfemx_runtime_rpath}"
-  INSTALL_RPATH_USE_LINK_PATH TRUE)
+  INSTALL_RPATH_USE_LINK_PATH FALSE)
+if(APPLE)
+  set_target_properties(cutfemx PROPERTIES
+    INSTALL_NAME_DIR "@loader_path")
+endif()
 
 # Install the extension into the python package
 install(TARGETS cutfemx_cpp DESTINATION cutfemx)

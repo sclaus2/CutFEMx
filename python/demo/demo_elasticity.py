@@ -4,13 +4,14 @@
 #
 # SPDX-License-Identifier:    MIT
 
-"""Linear elasticity on a cut plate with level-set holes.
+"""Linear elasticity on a 3D cut dogbone cylinder.
 
-The physical domain is a rectangular background mesh with circular holes
-removed by one level set. The left edge is clamped and the right edge is pulled
-in the x-direction. The von Mises stress is evaluated only after the
-displacement has been restricted to the physical cut mesh, which avoids sampling
-stresses in inactive or stabilization-only background cells.
+The physical domain is a cylindrical tensile specimen embedded in a box-shaped
+background mesh. The cylinder has larger grip sections near the ends and a
+slender gauge section in the middle. The left end is clamped and the right end
+is pulled in the x-direction. The von Mises stress is recovered once per
+background parent cell and then transferred to the physical cut mesh, avoiding
+cut-size-dependent stress values on small cut subcells.
 """
 
 from __future__ import annotations
@@ -27,17 +28,21 @@ import ufl
 from dolfinx import default_scalar_type, fem, io, la, mesh
 
 
-def _holes_level_set(
-    holes: tuple[tuple[tuple[float, float], float], ...],
+def _dogbone_level_set(
+    *,
+    half_length: float,
+    grip_radius: float,
+    waist_radius: float,
+    gauge_half_length: float,
 ):
-    """Return the union-of-holes level set, negative inside any circle."""
+    """Return a smooth dogbone-cylinder level set, negative inside the solid."""
 
     def level_set(x: np.ndarray) -> np.ndarray:
-        values = [
-            np.sqrt((x[0] - center[0]) ** 2 + (x[1] - center[1]) ** 2) - radius
-            for center, radius in holes
-        ]
-        return np.minimum.reduce(values)
+        t = (np.abs(x[0]) - gauge_half_length) / (half_length - gauge_half_length)
+        t = np.clip(t, 0.0, 1.0)
+        shoulder = t * t * (3.0 - 2.0 * t)
+        radius = waist_radius + (grip_radius - waist_radius) * shoulder
+        return np.sqrt(x[1] ** 2 + x[2] ** 2) - radius
 
     return level_set
 
@@ -51,17 +56,16 @@ def _sigma(u, mu: float, lmbda: float, gdim: int):
     return 2.0 * mu * eps + lmbda * ufl.tr(eps) * ufl.Identity(gdim)
 
 
-def _von_mises_plane_strain(u, mu: float, lmbda: float):
-    stress = _sigma(u, mu, lmbda, 2)
-    stress_zz = lmbda * ufl.tr(_epsilon(u))
+def _von_mises_3d(u, mu: float, lmbda: float):
+    stress = _sigma(u, mu, lmbda, 3)
     return ufl.sqrt(
         0.5
         * (
             (stress[0, 0] - stress[1, 1]) ** 2
-            + (stress[1, 1] - stress_zz) ** 2
-            + (stress_zz - stress[0, 0]) ** 2
+            + (stress[1, 1] - stress[2, 2]) ** 2
+            + (stress[2, 2] - stress[0, 0]) ** 2
         )
-        + 3.0 * stress[0, 1] ** 2
+        + 3.0 * (stress[0, 1] ** 2 + stress[1, 2] ** 2 + stress[2, 0] ** 2)
     )
 
 
@@ -90,7 +94,7 @@ def _solve_scipy(
     if zero_rows.size > 0:
         raise RuntimeError(f"Zero matrix rows remain after deactivation: {zero_rows.tolist()}")
 
-    uh = fem.Function(V, name="u")
+    uh = fem.Function(V, name="deformation")
     uh.x.array[:] = spsolve(A.to_scipy().tocsr(), b.array)
     uh.x.scatter_forward()
     return uh, active
@@ -107,21 +111,21 @@ def _function_cell_values(u: fem.Function) -> np.ndarray:
     return values
 
 
-def _compute_von_mises_on_cut_mesh(
-    u_cut: fem.Function,
+def _compute_von_mises_on_background_mesh(
+    u: fem.Function,
     *,
     mu: float,
     lmbda: float,
 ) -> fem.Function:
-    """Interpolate von Mises stress on the physical cut mesh only."""
-    cut_msh = u_cut.function_space.mesh
-    Q = fem.functionspace(cut_msh, ("Discontinuous Lagrange", 0))
+    """Interpolate von Mises stress once per background cell."""
+    msh = u.function_space.mesh
+    Q = fem.functionspace(msh, ("Discontinuous Lagrange", 0))
     von_mises = fem.Function(Q, name="von_mises")
     interpolation_points = Q.element.interpolation_points
     if callable(interpolation_points):
         interpolation_points = interpolation_points()
     expr = fem.Expression(
-        _von_mises_plane_strain(u_cut, mu, lmbda),
+        _von_mises_3d(u, mu, lmbda),
         interpolation_points,
     )
     von_mises.interpolate(expr)
@@ -129,11 +133,11 @@ def _compute_von_mises_on_cut_mesh(
 
 
 def _warp_factor(points: np.ndarray, displacement: np.ndarray) -> float:
-    max_displacement = float(np.max(np.linalg.norm(displacement[:, :2], axis=1)))
+    max_displacement = float(np.max(np.linalg.norm(displacement, axis=1)))
     if not np.isfinite(max_displacement) or max_displacement <= np.finfo(float).eps:
         return 1.0
 
-    extents = np.ptp(points[:, :2], axis=0)
+    extents = np.ptp(points, axis=0)
     width = float(np.max(extents)) if extents.size > 0 else 1.0
     if not np.isfinite(width) or width <= np.finfo(float).eps:
         width = 1.0
@@ -212,7 +216,8 @@ def _plot_solution(
         show_edges=True,
         scalar_bar_args={"title": "|u|"},
     )
-    plotter.view_xy()
+    plotter.view_isometric()
+    plotter.add_axes()
 
     plotter.subplot(0, 1)
     plotter.add_title("von Mises stress", font_size=12)
@@ -223,7 +228,8 @@ def _plot_solution(
         show_edges=True,
         scalar_bar_args={"title": "sigma_vm"},
     )
-    plotter.view_xy()
+    plotter.view_isometric()
+    plotter.add_axes()
     plotter.link_views()
 
     if screenshot is not None:
@@ -245,18 +251,21 @@ def _write_xdmf(
         return
 
     prefix_path = Path(prefix)
-    path = prefix_path.with_suffix(".xdmf")
-    with io.XDMFFile(cut_mesh.mesh.comm, path.as_posix(), "w") as xdmf:
+    deformation_path = prefix_path.with_name(f"{prefix_path.name}_deformation.xdmf")
+    stress_path = prefix_path.with_name(f"{prefix_path.name}_von_mises.xdmf")
+    with io.XDMFFile(cut_mesh.mesh.comm, deformation_path.as_posix(), "w") as xdmf:
         xdmf.write_mesh(cut_mesh.mesh)
         xdmf.write_function(u_cut)
+    with io.XDMFFile(cut_mesh.mesh.comm, stress_path.as_posix(), "w") as xdmf:
+        xdmf.write_mesh(cut_mesh.mesh)
         xdmf.write_function(von_mises)
     if cut_mesh.mesh.comm.rank == 0:
-        print(f"Wrote XDMF file to {path}")
+        print(f"Wrote XDMF files to {deformation_path} and {stress_path}")
 
 
 def main(
     *,
-    n: int = 32,
+    n: int = 10,
     order: int = 4,
     young_modulus: float = 1.0e3,
     poisson_ratio: float = 0.3,
@@ -264,11 +273,11 @@ def main(
     gamma_ghost: float = 0.05,
     plot: bool = True,
     screenshot: str | None = None,
-    xdmf_prefix: str | None = None,
+    xdmf_prefix: str | None = "dogbone_elasticity",
 ) -> None:
     comm = MPI.COMM_WORLD
-    if n < 8:
-        raise ValueError("--n must be at least 8.")
+    if n < 4:
+        raise ValueError("--n must be at least 4.")
     if order < 1:
         raise ValueError("--order must be at least 1.")
     if young_modulus <= 0.0:
@@ -276,24 +285,40 @@ def main(
     if not (-1.0 < poisson_ratio < 0.5):
         raise ValueError("--poisson-ratio must be in (-1, 0.5).")
 
-    msh = mesh.create_rectangle(
+    half_length = 1.5
+    grip_radius = 0.42
+    waist_radius = 0.22
+    gauge_half_length = 0.45
+    box_radius = 0.50
+    if not (0.0 < waist_radius < grip_radius < box_radius):
+        raise ValueError("Expected 0 < waist_radius < grip_radius < box_radius.")
+    if not (0.0 < gauge_half_length < half_length):
+        raise ValueError("Expected 0 < gauge_half_length < half_length.")
+
+    nx = 4 * n
+    msh = mesh.create_box(
         comm,
-        ((-1.5, -0.6), (1.5, 0.6)),
-        (3 * n, n),
-        cell_type=mesh.CellType.triangle,
+        (
+            np.array([-half_length, -box_radius, -box_radius]),
+            np.array([half_length, box_radius, box_radius]),
+        ),
+        (nx, n, n),
+        cell_type=mesh.CellType.tetrahedron,
     )
 
     V_phi = fem.functionspace(msh, ("Lagrange", 1))
-    holes = (
-        ((-0.62, 0.0), 0.18),
-        ((0.0, 0.18), 0.16),
-        ((0.53, -0.12), 0.15),
-    )
     phi = fem.Function(V_phi, name="phi")
-    phi.interpolate(_holes_level_set(holes))
+    phi.interpolate(
+        _dogbone_level_set(
+            half_length=half_length,
+            grip_radius=grip_radius,
+            waist_radius=waist_radius,
+            gauge_half_length=gauge_half_length,
+        )
+    )
 
     cut_data = cutfemx.cut(phi)
-    selector = "phi>0"
+    selector = "phi<0"
     solid_cells = cutfemx.locate_entities(cut_data, selector)
     solid_rules = cutfemx.runtime_quadrature(cut_data, selector, order)
     ghost_facets = cutfemx.ghost_penalty_facets(cut_data, selector)
@@ -316,9 +341,7 @@ def main(
     v = ufl.TestFunction(V)
     gdim = msh.geometry.dim
     mu = young_modulus / (2.0 * (1.0 + poisson_ratio))
-    lmbda = young_modulus * poisson_ratio / (
-        (1.0 + poisson_ratio) * (1.0 - 2.0 * poisson_ratio)
-    )
+    lmbda = young_modulus * poisson_ratio / ((1.0 + poisson_ratio) * (1.0 - 2.0 * poisson_ratio))
 
     a = ufl.inner(_sigma(u, mu, lmbda, gdim), _epsilon(v)) * dx_solid
     if ghost_facets.size > 0 and gamma_ghost != 0.0:
@@ -326,7 +349,7 @@ def main(
         h_avg = ufl.avg(ufl.CellDiameter(msh))
         a += (
             gamma_ghost
-            * mu
+            * (2 * mu + lmbda)
             * h_avg
             * ufl.inner(
                 ufl.jump(ufl.grad(u), n_facet),
@@ -335,16 +358,12 @@ def main(
             * dS_ghost
         )
 
-    zero_force = fem.Constant(msh, default_scalar_type((0.0, 0.0)))
+    zero_force = fem.Constant(msh, default_scalar_type((0.0, 0.0, 0.0)))
     L = ufl.inner(zero_force, v) * dx_solid
 
     fdim = msh.topology.dim - 1
-    left_facets = mesh.locate_entities_boundary(
-        msh, fdim, lambda x: np.isclose(x[0], -1.5)
-    )
-    right_facets = mesh.locate_entities_boundary(
-        msh, fdim, lambda x: np.isclose(x[0], 1.5)
-    )
+    left_facets = mesh.locate_entities_boundary(msh, fdim, lambda x: np.isclose(x[0], -half_length))
+    right_facets = mesh.locate_entities_boundary(msh, fdim, lambda x: np.isclose(x[0], half_length))
     u_left = fem.Function(V)
     left_dofs = fem.locate_dofs_topological(V, fdim, left_facets)
     bcs = [fem.dirichletbc(u_left, left_dofs)]
@@ -363,14 +382,17 @@ def main(
     if cut_mesh.mesh is None:
         raise RuntimeError("The selected cut domain is empty.")
     u_cut = cutfemx.fem.cut_function(uh, cut_mesh)
-    von_mises = _compute_von_mises_on_cut_mesh(u_cut, mu=mu, lmbda=lmbda)
+    u_cut.name = "deformation"
+    von_mises_bg = _compute_von_mises_on_background_mesh(uh, mu=mu, lmbda=lmbda)
+    von_mises = cutfemx.fem.cut_function(von_mises_bg, cut_mesh)
+    von_mises.name = "von_mises"
 
     displacement_norm = float(np.max(np.linalg.norm(uh.x.array.reshape((-1, gdim)), axis=1)))
     max_stress = float(np.max(von_mises.x.array)) if von_mises.x.array.size else 0.0
     if comm.rank == 0:
-        print("CutFEMx elasticity demo")
-        print(f"  cells: {3 * n} x {n}")
-        print("  level set: phi = min(phi_0, phi_1, phi_2)")
+        print("CutFEMx dogbone elasticity demo")
+        print(f"  cells: {nx} x {n} x {n}")
+        print(f"  dogbone radii: waist={waist_radius:.3f}, grip={grip_radius:.3f}")
         print(f"  solid standard cells: {solid_cells.size}")
         print(f"  cut cells: {solid_rules.parent_map.size}")
         print(f"  ghost facets: {ghost_facets.size}")
@@ -394,13 +416,13 @@ def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Solve linear elasticity on a cut plate with level-set holes."
+        description="Solve 3D linear elasticity on a cut dogbone cylinder."
     )
-    parser.add_argument("--n", type=int, default=32, help="Vertical background cells.")
+    parser.add_argument("--n", type=int, default=10, help="Transverse background cells.")
     parser.add_argument("--order", type=int, default=4, help="Runtime quadrature order.")
     parser.add_argument("--young-modulus", type=float, default=1.0e3)
     parser.add_argument("--poisson-ratio", type=float, default=0.3)
-    parser.add_argument("--pull", type=float, default=0.12, help="Right-edge x displacement.")
+    parser.add_argument("--pull", type=float, default=0.12, help="Right-end x displacement.")
     parser.add_argument("--gamma-ghost", type=float, default=0.05)
     parser.add_argument(
         "--no-plot",
@@ -416,8 +438,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--xdmf-prefix",
         type=str,
-        default=None,
-        help="Write cut displacement and von Mises fields to '<prefix>.xdmf'.",
+        default="dogbone_elasticity",
+        help=(
+            "Write cut deformation and von Mises fields to "
+            "'<prefix>_deformation.xdmf' and '<prefix>_von_mises.xdmf'."
+        ),
+    )
+    parser.add_argument(
+        "--no-xdmf",
+        action="store_true",
+        help="Disable XDMF output.",
     )
     args = parser.parse_args()
     main(
@@ -429,5 +459,5 @@ if __name__ == "__main__":
         gamma_ghost=args.gamma_ghost,
         plot=not args.no_plot,
         screenshot=args.screenshot,
-        xdmf_prefix=args.xdmf_prefix,
+        xdmf_prefix=None if args.no_xdmf else args.xdmf_prefix,
     )

@@ -56,6 +56,21 @@ def test_cut_api_locate_entities_default_cells():
     assert np.array_equal(intersected_entities, entities_exact)
 
 
+def test_cut_api_update_reclassifies_when_level_set_values_change():
+    _, level_set = _line_level_set()
+
+    cutter = cutfemx.cut(level_set)
+    initial = cutfemx.locate_entities(cutter, "phi=0")
+
+    level_set.interpolate(lambda x: x[1] - 0.51)
+    cutfemx.update(cutter)
+    updated = cutfemx.locate_entities(cutter, "phi=0")
+    fresh = cutfemx.locate_entities(cutfemx.cut(level_set), "phi=0")
+
+    assert not np.array_equal(updated, initial)
+    assert np.array_equal(updated, fresh)
+
+
 def test_cut_api_locate_entities_accepts_inclusive_selectors():
     _, level_set = _line_level_set()
 
@@ -130,6 +145,24 @@ def test_cut_api_cut_requires_entity_dim_with_subset():
 
     with pytest.raises(ValueError, match="entity_dim must be supplied"):
         cutfemx.cut(level_set, entities=np.arange(11, dtype=np.int32))
+
+
+def test_cut_api_cut_rejects_entity_dim_without_subset():
+    _, level_set = _line_level_set()
+
+    with pytest.raises(ValueError, match="entity_dim is only valid"):
+        cutfemx.cut(level_set, entity_dim=0)
+
+
+def test_cut_api_cut_rejects_invalid_level_set_inputs():
+    _, level_set = _line_level_set()
+
+    with pytest.raises(TypeError, match="expects a Function"):
+        cutfemx.cut("phi")
+    with pytest.raises(ValueError, match="requires at least one"):
+        cutfemx.cut([])
+    with pytest.raises(TypeError, match="sequence entries"):
+        cutfemx.cut([level_set, object()])
 
 
 def test_cut_api_create_cut_mesh_full():
@@ -538,6 +571,28 @@ def test_cut_api_multiple_level_sets_names_and_or_selector():
     first = cutfemx.locate_entities(cutfemx.cut(level_set), "phi=0")
     second_only = cutfemx.locate_entities(cutfemx.cut(second), "cap=0")
     assert set(selected.tolist()) == set(first.tolist()) | set(second_only.tolist())
+
+
+def test_cut_api_multiple_level_sets_accepts_cell_subset():
+    msh, level_set = _line_level_set()
+    V = level_set.function_space
+    second = fem.Function(V, name="cap")
+    second.interpolate(lambda x: x[1] - 0.51)
+    cells = np.arange(11, dtype=np.int32)
+
+    cutter = cutfemx.cut([level_set, second], cells, msh.topology.dim)
+    selected = cutfemx.locate_entities(cutter, "phi=0 or cap=0")
+    first = cutfemx.locate_entities(
+        cutfemx.cut(level_set, cells, msh.topology.dim), "phi=0"
+    )
+    second_only = cutfemx.locate_entities(
+        cutfemx.cut(second, cells, msh.topology.dim), "cap=0"
+    )
+
+    assert cutter.entity_dim == msh.topology.dim
+    assert np.array_equal(cutter.entities, cells)
+    assert set(selected.tolist()) == set(first.tolist()) | set(second_only.tolist())
+    assert set(selected.tolist()).issubset(set(cells.tolist()))
 
 
 def test_cut_api_multiple_level_sets_default_names_are_frozen():
