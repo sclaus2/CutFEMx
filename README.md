@@ -44,6 +44,9 @@ Poisson problem in a circular domain described by a level set function.
   cells.
 - **Parallel support**: compatible with MPI-distributed FEniCSx workflows.
 
+The documentation is available at
+[https://sclaus2.github.io/CutFEMx/](https://sclaus2.github.io/CutFEMx/).
+
 ## Installation
 
 These instructions assume a Unix-like shell and an activated conda-forge
