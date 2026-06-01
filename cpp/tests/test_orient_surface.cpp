@@ -1,10 +1,10 @@
 
 #include <catch2/catch_test_macros.hpp>
-#include <cutfemx/mesh/orient_surface.h>
-#include <cutfemx/mesh/stl_surface.h>
+#include <cutfemx/distance/stl/orient_surface.h>
+#include <cutfemx/distance/stl/surface.h>
 #include <cmath>
 
-using namespace cutfemx::mesh;
+using namespace cutfemx::distance;
 
 TEST_CASE("orient_surface", "[geometry]")
 {

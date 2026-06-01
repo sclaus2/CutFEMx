@@ -2,10 +2,10 @@
 <img src="img/cutfemx_logo.png" alt="CutFEMx Logo" style="width:50%;" />
 </p>
 
-CutFEMx is a cut finite element library for FEniCSx. 
-It is developed to support cut finite element methods as described in 
+CutFEMx is a cut finite element library for FEniCSx. It supports cut finite
+element methods as described in
 
-```bash
+```bibtex
 @article{CutFEM2015,
   title={CutFEM: discretizing geometry and partial differential equations},
   author={Burman, Erik and Claus, Susanne and Hansbo, Peter and Larson, Mats G and Massing, Andr{\'e}},
@@ -18,7 +18,16 @@ It is developed to support cut finite element methods as described in
 }
 ```
 
-The current version supports FEniCSx 0.9 with a customised ffcx version for runtime quadrature at [ffcx-runtime](https://github.com/sclaus2/ffcx-runtime-0.9.0).
+The current development version targets the FEniCSx main-branch stack
+(Basix/UFL/FFCx/DOLFINx), with runtime quadrature provided by
+[runintgen](https://github.com/sclaus2/runintgen) and cut geometry provided by
+[CutCells](https://github.com/sclaus2/cutcells).
+
+## License
+
+CutFEMx is licensed under the MIT License except for DOLFINx-derived form and
+assembler sources under `cpp/dolfinx_custom_data`, which are licensed under
+LGPL-3.0-or-later. See `THIRD_PARTY_NOTICES.md` for provenance and details.
 
 ![SVG Image](img/quadrature.svg)
 
@@ -26,134 +35,168 @@ The current version supports FEniCSx 0.9 with a customised ffcx version for runt
 Poisson problem in a circular domain described by a level set function.
 
 ## Features
-- **Unfitted Discretization**: Solve PDEs on geometries defined by level set functions without remeshing.
-- **Runtime Quadrature**: Automatically generates quadrature rules on cut elements using the [CutCells](https://github.com/sclaus2/cutcells) library and a custom FFCX backend.
-- **Stabilization**: Implements **Ghost Penalty** stabilization to ensure condition number robustness independent of cut geometry..
-- **Parallel Support**: Fully compatible with MPI for large-scale distributed simulations.
 
-## Installation Instructions
+- **Unfitted discretization**: solve PDEs on geometries defined by level-set
+  functions without remeshing.
+- **Runtime quadrature**: generate quadrature rules on cut entities with
+  CutCells and assemble them through runintgen.
+- **Stabilization**: ghost-penalty stabilization for robustness with small cut
+  cells.
+- **Parallel support**: compatible with MPI-distributed FEniCSx workflows.
 
-The CutFEMx library requires a FEniCSx installation version 0.9.0 with an extended version of ffcx from here `git clone git@github.com:sclaus2/ffcx-runtime-0.9.0.git` . CutFEMx also requires CutCells. The installation instructions using conda to manage the dependencies are detailed below. Make sure to use python 3.12. 
+## Installation
 
-1. Create and activate a new conda environment:
-    ```bash
-    conda create -n cutfemx python=3.12
-    conda activate cutfemx
-    ```
+These instructions assume a Unix-like shell and an activated conda-forge
+environment. They intentionally avoid user-specific paths; all CMake installs
+use the active environment prefix through `$CONDA_PREFIX`.
 
-2. Install general packages required for the build:
-    ```bash
-    conda install -c conda-forge cxx-compiler cmake python pkg-config pip nanobind
-    ```
+### 1. Create an environment
 
-3. Install dependencies:
-    ```bash
-    conda install -c conda-forge numpy scipy sympy numba pyvista pytest
-    conda install -c conda-forge blas blas-devel lapack libblas libcblas liblapack liblapacke libtmglib
-    conda install -c conda-forge mpi mpich kahip libboost-devel parmetis libscotch libptscotch pugixml spdlog ccache
-    conda install -c conda-forge mpi4py petsc4py slepc4py scikit-build-core 
-    conda install -c conda-forge 'hdf5=*=mpi*' 'petsc=*=*real*' 'slepc=*=*real*' 'libadios2=*=mpi*'
-    ```
+```bash
+conda create -n cutfemx-dev -c conda-forge python=3.13
+conda activate cutfemx-dev
 
-4. Install Basix:
-    ```bash
-    git clone git@github.com:FEniCS/basix.git
-    cd basix
-    git checkout v0.9.0
+conda install -c conda-forge \
+  c-compiler cxx-compiler cmake ninja pkg-config pip \
+  mpi mpich mpi4py petsc petsc4py \
+  hdf5 libadios2 pugixml spdlog boost-cpp \
+  parmetis libscotch ptscotch kahip \
+  numpy scipy matplotlib pyvista pytest \
+  scikit-build-core nanobind cffi
+```
 
-    cd cpp
-    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" -B build-dir -S .
-    cmake --build build-dir
-    cmake --install build-dir
-    
-    cd ../python
-    pip install .
-    cd ../..
-    ```
+Use one consistent MPI/PETSc stack for every build step. If you use OpenMPI
+instead of MPICH, install matching MPI, PETSc, `mpi4py`, and `petsc4py`
+packages from conda-forge.
 
-5. Install UFL:
-    ```bash
-    git clone https://github.com/FEniCS/ufl.git
-    cd ufl
-    git checkout 2024.2.0
-    pip install .
-    cd ..
-    ```
+### 2. Install FEniCSx development packages
 
-6. Install runtime integral extended FFCX:
-    ```bash
-    git clone git@github.com:sclaus2/ffcx-runtime-0.9.0.git
-    cd ffcx-runtime-0.9.0
-    pip install .
-    cd ..
-    ```
+CutFEMx currently targets:
 
-7. Install DOLFINx:
-    ```bash
-    git clone git@github.com:FEniCS/dolfinx.git
-    cd dolfinx
-    git checkout v0.9.0
+- `fenics-basix >= 0.11.0.dev0`
+- `fenics-ufl >= 2025.3.0.dev0`
+- `fenics-ffcx >= 0.11.0.dev0`
+- `fenics-dolfinx >= 0.11.0.dev0`
 
-    cd cpp
-    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" -B build-dir -S .
-    cmake --build build-dir
-    cmake --install build-dir
+Install Basix, UFL, and FFCx from the FEniCS `main` branches:
 
-    cd ../python
-    pip install -r build-requirements.txt
-    pip install --check-build-dependencies --no-build-isolation .
-    ```
+```bash
+python -m pip install --upgrade pip setuptools wheel
 
-8. Install CutCells:
-    ```bash
-    git clone git@github.com:sclaus2/cutcells.git
+python -m pip install --upgrade --force-reinstall --no-deps \
+  "fenics-basix @ git+https://github.com/FEniCS/basix.git@main" \
+  "fenics-ufl @ git+https://github.com/FEniCS/ufl.git@main" \
+  "fenics-ffcx @ git+https://github.com/FEniCS/ffcx.git@main"
+```
 
-    cd cutcells/cpp
-    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" -B build-dir -S .
-    cmake --build build-dir
-    cmake --install build-dir
+Build and install DOLFINx from source into the same environment:
 
-    cd ../python
-    pip install .
-    ```
+```bash
+git clone https://github.com/FEniCS/dolfinx.git
+cd dolfinx
 
-9. Install CutFEMx:
-    ```bash
-    git clone https://github.com/sclaus2/CutFEMx
-    cd CutFEMx
+cmake -G Ninja -S cpp -B cpp/build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" \
+  -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
+cmake --build cpp/build
+cmake --install cpp/build
 
-    # 1. Install C++ library and headers (Required for C++ demos/tests)
-    cd cpp
-    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" -B build-dir -S .
-    cmake --build build-dir
-    cmake --install build-dir
-    cd ..
+python -m pip install --check-build-dependencies --no-build-isolation --no-deps \
+  ./python
 
-    # 2. Install Python interface
-    python -m pip install --check-build-dependencies --no-build-isolation -v .
-    ```
+cd ..
+```
+
+### 3. Install runintgen
+
+```bash
+git clone https://github.com/sclaus2/runintgen.git
+cd runintgen
+
+python -m pip install --no-build-isolation --no-deps --force-reinstall .
+
+cd ..
+```
+
+### 4. Install CutCells
+
+```bash
+git clone https://github.com/sclaus2/cutcells.git CutCells
+cd CutCells
+
+cmake -G Ninja -S cpp -B cpp/build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" \
+  -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
+cmake --build cpp/build
+cmake --install cpp/build
+
+python -m pip install --no-build-isolation --no-deps --force-reinstall \
+  ./python
+
+cd ..
+```
+
+### 5. Install CutFEMx
+
+```bash
+git clone https://github.com/sclaus2/CutFEMx.git
+cd CutFEMx
+
+python -m pip install --no-build-isolation --no-deps --force-reinstall .
+```
+
+`--no-build-isolation` is required because CutFEMx must use the active
+FEniCSx/MPI/PETSc/runintgen stack and DOLFINx wrapper headers. `--no-deps`
+prevents `pip` from replacing development FEniCSx packages with incompatible
+release packages.
+
+Verify the installation:
+
+```bash
+python - <<'PY'
+import cutcells
+import cutfemx
+import dolfinx
+import runintgen
+
+print("DOLFINx:", dolfinx.__version__)
+print("runintgen:", getattr(runintgen, "__version__", "installed"))
+print("CutCells:", getattr(cutcells, "__version__", "installed"))
+print("CutFEMx:", getattr(cutfemx, "__version__", "installed"))
+PY
+```
 
 ## Available Demos
 
-The `python/demo` directory contains several examples illustrating the usage of CutFEMx:
+The `python/demo` directory contains examples illustrating the usage of CutFEMx:
 
-- **Poisson Equation** (`demo_cut_poisson.py`): Solving the Poisson equation on a circular domain using Nitsche's method and ghost penalty stabilization.
-- **Stokes Flow** (`demo_stokes.py`): Simulating Stokes flow around a cylinder using P1-P1 elements. Features include:
-  - Global Continuous Interior Penalty (CIP) stabilization for pressure.
-  - Ghost penalty stabilization for velocity.
-  - VTX output for parallel visualization.
-- **Moving Domain** (`demo_moving_poisson.py`): solving a time-dependent problem with a moving interface, demonstrating how to update quadrature rules and integration domains dynamically at each time step.
-- **Distance from STL** (`demo_stl_distance.py`): Computing a signed distance field from an arbitrary STL surface using a parallel Fast Marching Method. Automatically refining a background mesh around an STL surface to improve geometric resolution.
-- **Level Set Reinitialization** (`demo_reinit.py`): Converting a distorted level set function (e.g., parabolic) into a clean signed distance field using parallel FMM.
+- **Poisson equation** (`demo_poisson.py`): solve a cut Poisson problem on a
+  circular domain with Nitsche terms and ghost-penalty stabilization.
+- **Cut DG Poisson** (`demo_dg_poisson.py`): solve a DG Poisson problem with
+  runtime quadrature on cells and the active interior skeleton.
+- **Interface Poisson** (`demo_interface_poisson.py`): solve an interface
+  problem across level-set-defined subdomains.
+- **Moving domain** (`demo_moving_poisson.py`): update quadrature rules and
+  integration domains as the interface moves.
+- **Exterior-facet runtime quadrature** (`demo_boundary_sphere_perimeter.py`):
+  integrate on cut exterior facets.
+- **Distance from STL** (`demo_stl_distance.py`): compute a signed distance
+  field from an STL surface.
+- **Level-set reinitialization** (`demo_reinit.py`): convert a distorted level
+  set into a signed distance field.
 
 ## Geometry and Level Sets
 
-CutFEMx provides robust tools for handling complex geometries via level set functions. The library can generate distance fields from standard STL files and adaptively refine the mesh around them.
+CutFEMx provides tools for handling complex geometries through level-set
+functions. The library can generate distance fields from standard STL files and
+adaptively refine a background mesh around an STL surface.
 
 <p align="center">
   <img src="img/dino.png" alt="Dino STL distance field" width="45%" />
   <img src="img/dino2.png" alt="Dino STL distance field (sliced)" width="45%" />
 </p>
 <p align="center">
-  <i>Example: Signed distance field computed from a dino STL surface on an adaptively refined mesh using `demo_stl_distance.py`.</i>
+  <i>Example: signed distance field computed from a dino STL surface on an adaptively refined mesh using `demo_stl_distance.py`.</i>
 </p>

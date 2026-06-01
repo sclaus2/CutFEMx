@@ -1,6 +1,8 @@
-# STL Distance and Level Set Reinitialization
+# Distance Module: STL Distance and Level Set Reinitialization
 
-This document details the algorithms and implementation strategies used in CutFEMx for computing signed distance fields from STL surfaces and reinitializing level set functions in a distributed MPI environment.
+This document details the algorithms and implementation strategies used by
+`cutfemx.distance` for computing signed distance fields from STL surfaces and
+reinitializing level set functions in a distributed MPI environment.
 
 ## 1. STL Surface Distribution
 
@@ -159,14 +161,14 @@ Standard FMM computes $|\phi|$ (unsigned). We determine the sign using one of th
 from mpi4py import MPI
 from dolfinx.mesh import create_box, CellType, GhostMode
 from dolfinx.fem import FunctionSpace, Function
-from cutfemx.level_set import compute_distance_from_stl, SignMode
+from cutfemx.distance import SignMode, from_stl
 
 # 1. Setup Mesh
 mesh = create_box(MPI.COMM_WORLD, [[0,0,0], [1,1,1]], [10,10,10], CellType.tetrahedron)
 
 # 2. Compute Signed Distance (using default ComponentAnchor method)
-dist_func = compute_distance_from_stl(mesh, "geometry.stl", sign_mode=SignMode.ComponentAnchor)
+dist_func = from_stl(mesh, "geometry.stl", sign_mode=SignMode.ComponentAnchor)
 
 # 3. Use other sign methods if needed
-dist_winding = compute_distance_from_stl(mesh, "geometry.stl", sign_mode=SignMode.WindingNumber)
+dist_winding = from_stl(mesh, "geometry.stl", sign_mode=SignMode.WindingNumber)
 ```

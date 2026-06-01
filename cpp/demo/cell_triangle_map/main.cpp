@@ -24,8 +24,8 @@
 #include <dolfinx/fem/FunctionSpace.h>
 #include <dolfinx/io/VTKFile.h>
 
-#include <cutfemx/mesh/stl_surface.h>
-#include <cutfemx/mesh/cell_triangle_map.h>
+#include <cutfemx/distance/stl/cell_triangle_map.h>
+#include <cutfemx/distance/stl/surface.h>
 
 using T = double;
 using namespace dolfinx;
@@ -34,7 +34,7 @@ using namespace dolfinx;
 /// @param center Center of the sphere
 /// @param radius Radius of the sphere  
 /// @param subdivisions Number of subdivision levels (0 = icosahedron)
-#include <cutfemx/mesh/distribute_stl.h>
+#include <cutfemx/distance/stl/distribute.h>
 
 
 
@@ -79,10 +79,10 @@ int main(int argc, char* argv[])
     }
     MPI_Barrier(MPI_COMM_WORLD);
     
-    cutfemx::mesh::DistributeSTLOptions stl_opt;
+    cutfemx::distance::DistributeSTLOptions stl_opt;
     stl_opt.aabb_padding = 0.05; // 5% padding for AABB overlap
     
-    auto sphere_soup = cutfemx::mesh::distribute_stl_facets(
+    auto sphere_soup = cutfemx::distance::distribute_stl_facets(
         MPI_COMM_WORLD, *bg_mesh, stl_filename, stl_opt);
     
     if (rank == 0)
@@ -95,12 +95,12 @@ int main(int argc, char* argv[])
         // So we just write local parts to separate files? 
         // Or blindly write local part.
         // Let's write local part.
-        cutfemx::mesh::write_trisoup_vtk(sphere_soup, "sphere_surface_rank0.vtk");
+        cutfemx::distance::write_trisoup_vtk(sphere_soup, "sphere_surface_rank0.vtk");
     }
     
     // Build cell-triangle map
-    cutfemx::mesh::CellTriangleMapOptions opt;
-    auto cell_tri_map = cutfemx::mesh::build_cell_triangle_map(*bg_mesh, sphere_soup, opt);
+    cutfemx::distance::CellTriangleMapOptions opt;
+    auto cell_tri_map = cutfemx::distance::build_cell_triangle_map(*bg_mesh, sphere_soup, opt);
     
     // Count intersections
     auto topology = bg_mesh->topology();
@@ -134,19 +134,20 @@ int main(int argc, char* argv[])
     }
     
     // Create a DG0 function to visualize which cells are intersected
-    basix::FiniteElement e = basix::create_element<T>(
-        basix::element::family::P,
-        basix::cell::type::tetrahedron, 0,  // DG0
-        basix::element::lagrange_variant::unset,
-        basix::element::dpc_variant::unset, true);  // discontinuous
+    auto element = std::make_shared<const fem::FiniteElement<T>>(
+        basix::create_element<T>(
+            basix::element::family::P,
+            basix::cell::type::tetrahedron, 0,  // DG0
+            basix::element::lagrange_variant::unset,
+            basix::element::dpc_variant::unset, true));  // discontinuous
     
     auto V = std::make_shared<fem::FunctionSpace<T>>(
-        fem::create_functionspace(bg_mesh, e));
+        fem::create_functionspace(bg_mesh, element));
     
     auto marker = std::make_shared<fem::Function<T>>(V);
     
     // Set marker values: 0 = no intersection, positive = number of triangles
-    std::span<T> marker_vals = marker->x()->mutable_array();
+    std::span<T> marker_vals = marker->x()->array();
     
     for (std::int32_t c = 0; c < num_local_cells; ++c)
     {

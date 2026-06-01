@@ -1,390 +1,493 @@
-// Copyright (c) 2022 ONERA
+// Copyright (c) 2026 ONERA
 // Authors: Susanne Claus
-// This file is part of CutCells
+// This file is part of CutFEMx
 //
 // SPDX-License-Identifier:    MIT
-#include <array.h>
-#include <caster_mpi.h>
-#include <numpy_dtype.h>
-#include <pycoeff.h>
 
-#include <iostream>
+#include <cstdint>
+#include <array>
+#include <functional>
+#include <map>
+#include <memory>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
-#include <nanobind/stl/string.h>
-#include <nanobind/stl/vector.h>
-#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/map.h>
-#include <nanobind/stl/pair.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
+#include <nanobind/stl/vector.h>
+#include <optional>
 #include <span>
-#include <map>
-#include <algorithm>
+#include <stdexcept>
+#include <tuple>
+#include <vector>
 
-#include <cutfemx/fem/CutForm.h>
-#include <cutfemx/fem/interpolate.h>
-#include <cutfemx/quadrature/quadrature.h>
-#include <cutfemx/fem/assembler.h>
-#include <cutfemx/fem/pack_coefficients.h>
-#include <cutfemx/fem/deactivate.h>
+#include <array.h>
 
-#include <dolfinx/mesh/Mesh.h>
-#include <dolfinx/fem/Form.h>
+#include <dolfinx/fem/Constant.h>
 #include <dolfinx/fem/DirichletBC.h>
+#include <dolfinx/fem/Function.h>
+#include <dolfinx/fem/FunctionSpace.h>
 #include <dolfinx/la/MatrixCSR.h>
 #include <dolfinx/la/SparsityPattern.h>
-#include <ufcx.h>
+#include <dolfinx/la/Vector.h>
+#include <dolfinx/mesh/EntityMap.h>
+#include <dolfinx/mesh/Mesh.h>
 
+#include <dolfinx_custom_data/fem/Form.h>
+#include <dolfinx_custom_data/fem/assembler.h>
+
+#include <cutfemx/extensions/cell_aggregation.h>
+#include <cutfemx/extensions/extension_penalty.h>
+#include <cutfemx/fem/deactivate.h>
 
 namespace nb = nanobind;
 
 namespace
 {
+template <typename T>
+using kernel_fn_t
+    = void (*)(T*, const T*, const T*, const typename dolfinx::scalar_value_t<T>*,
+               const int*, const std::uint8_t*, void*);
 
 template <typename T>
-std::map<std::pair<cutfemx::fem::IntegralType, int>,
-         std::pair<std::span<const T>, int>>
-py_to_cpp_coeffs_rt(
-    const std::map<std::pair<cutfemx::fem::IntegralType, int>,
-                   nb::ndarray<T, nb::ndim<2>, nb::c_contig>>& coeffs)
+std::function<void(T*, const T*, const T*, const dolfinx::scalar_value_t<T>*,
+                   const int*, const std::uint8_t*, void*)>
+kernel_from_pointer(std::uintptr_t kernel_ptr)
 {
-  using Key_t = typename std::remove_reference_t<decltype(coeffs)>::key_type;
-  std::map<Key_t, std::pair<std::span<const T>, int>> c;
-  std::ranges::transform(
-      coeffs, std::inserter(c, c.end()),
-      [](auto& e) -> typename decltype(c)::value_type
-      {
-        return {e.first,
-                {std::span(static_cast<const T*>(e.second.data()),
-                           e.second.shape(0)),
-                 e.second.shape(1)}};
-      });
-  return c;
+  if (kernel_ptr == 0)
+    throw std::runtime_error("Cannot create CutFEMx Form with a null kernel.");
+
+  auto fn = reinterpret_cast<kernel_fn_t<T>>(kernel_ptr);
+  return [fn](T* A, const T* w, const T* c,
+              const dolfinx::scalar_value_t<T>* coordinate_dofs,
+              const int* entity_local_index, const std::uint8_t* permutation,
+              void* custom_data)
+  { fn(A, w, c, coordinate_dofs, entity_local_index, permutation, custom_data); };
 }
 
 template <typename T>
-void declare_fem(nb::module_& m, std::string type)
+void declare_runtime_fem(nb::module_& m, std::string type)
 {
-  using U = typename dolfinx::scalar_value_type_t<T>;
+  using U = typename dolfinx::scalar_value_t<T>;
+  using Form = dolfinx_custom_data::fem::Form<T, U>;
+  using FunctionSpace = dolfinx::fem::FunctionSpace<U>;
+  using Function = dolfinx::fem::Function<T, U>;
+  using Constant = dolfinx::fem::Constant<T>;
+  using DirichletBC = dolfinx::fem::DirichletBC<T, U>;
+  using Vector = dolfinx::la::Vector<T>;
+  using Mesh = dolfinx::mesh::Mesh<U>;
+  using ActiveDomain = cutfemx::fem::ActiveDomain<T, U>;
+  using CellAggregation = cutfemx::extensions::CellAggregation<U>;
+  using integral_spec_t
+      = std::tuple<std::uintptr_t,
+                   nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig>,
+                   std::vector<int>, std::optional<std::uintptr_t>>;
 
-  std::string pyclass_cutform_name = std::string("CutForm_") + type;
-  nb::class_<cutfemx::fem::CutForm<T,U>>(m, pyclass_cutform_name.c_str(),
-                                         "CutForm object")
-      .def(
-          "__init__",
-          [](cutfemx::fem::CutForm<T, U>* fp, std::uintptr_t ufcform,
-                std::shared_ptr<const dolfinx::fem::Form<T, U>> form,
-                const std::map<cutfemx::fem::IntegralType,
-                std::vector<std::pair<std::int32_t, std::shared_ptr<cutfemx::quadrature::QuadratureRules<U>>>>>&
-                subdomains,
-                const std::map<std::pair<cutfemx::fem::IntegralType, int>,
-                               std::vector<cutfemx::fem::ElementSource>>&
-                element_sources_map = {})
+  std::string form_name = "Form_" + type;
+  nb::class_<Form>(m, form_name.c_str(), "CutFEMx runtime form")
+      .def_prop_ro("rank", &Form::rank)
+      .def_prop_ro("mesh", &Form::mesh, nb::rv_policy::reference_internal)
+      .def_prop_ro("function_spaces", &Form::function_spaces,
+                   nb::rv_policy::reference_internal)
+      .def_prop_ro("needs_facet_permutations",
+                   &Form::needs_facet_permutations);
+
+  std::string active_domain_name = "ActiveDomain_" + type;
+  nb::class_<ActiveDomain>(m, active_domain_name.c_str(),
+                           "CutFEMx form-derived active domain")
+      .def_prop_ro(
+          "indicator",
+          [](ActiveDomain& self) { return self.indicator; },
+          nb::rv_policy::reference_internal)
+      .def_prop_ro(
+          "active_cells",
+          [](ActiveDomain& self)
           {
-            ufcx_form* p = reinterpret_cast<ufcx_form*>(ufcform);
-            new (fp)
-                cutfemx::fem::CutForm<T, U>(cutfemx::fem::create_cut_form_factory<T>(
-                    *p, form, subdomains, element_sources_map));
-          }
-          , nb::arg("ufcx_form"), nb::arg("form"), nb::arg("subdomains"),
-            nb::arg("element_sources_map") = std::map<std::pair<cutfemx::fem::IntegralType, int>,
-                                                       std::vector<cutfemx::fem::ElementSource>>{}
-          , "Create a Cutform from a pointer to a ufcx_form")
-      .def(
-          "integral_ids",
-          [](const cutfemx::fem::CutForm<T, U>& self,
-             cutfemx::fem::IntegralType type)
-          {
-            auto ids = self.integral_ids(type);
-            return dolfinx_wrappers::as_nbarray(std::move(ids));
+            return nb::ndarray<const std::int32_t, nb::numpy>(
+                self.active_cells.data(), {self.active_cells.size()},
+                nb::cast(self, nb::rv_policy::reference));
           },
-          nb::arg("type"))
-      .def_prop_ro("integral_types", &cutfemx::fem::CutForm<T, U>::integral_types)
-      .def_prop_ro("form", &cutfemx::fem::CutForm<T, U>::form)
-      .def("update_integration_domains",[](cutfemx::fem::CutForm<T, U>& self,
-             const std::map<
-                 dolfinx::fem::IntegralType,
-                 std::vector<std::pair<
-                     std::int32_t, nb::ndarray<const std::int32_t, nb::ndim<1>,
-                                               nb::c_contig>>>>& subdomains,
-             const std::map<std::shared_ptr<const dolfinx::mesh::Mesh<U>>,
-                            nb::ndarray<const std::int32_t, nb::ndim<1>,
-                                        nb::c_contig>>& entity_maps = {})
-        {
-          //convert array to span
-          std::map<dolfinx::fem::IntegralType,
-          std::vector<std::pair<std::int32_t,
-                                std::span<const std::int32_t>>>>
-          sd;
-          for (auto& [itg, data] : subdomains)
+          nb::rv_policy::reference_internal)
+      .def_prop_ro(
+          "inactive_dofs",
+          [](ActiveDomain& self)
           {
-            std::vector<
-                std::pair<std::int32_t, std::span<const std::int32_t>>>
-                x;
-            for (auto& [id, e] : data)
-              x.emplace_back(id, std::span(e.data(), e.size()));
-            sd.insert({itg, std::move(x)});
-          }
-          std::map<std::shared_ptr<const dolfinx::mesh::Mesh<U>>,
-                    std::span<const int32_t>>
-              _entity_maps;
-          for (auto& [msh, map] : entity_maps)
-            _entity_maps.emplace(msh, std::span(map.data(), map.size()));
-
-          self.update_integration_domains(sd,_entity_maps);
-        }, nb::arg("subdomains"), nb::arg("entity_maps"))
-      .def("update_runtime_domains", &cutfemx::fem::CutForm<T, U>::update_runtime_domains)
-      .def(
-          "quadrature_rules",
-          [](const cutfemx::fem::CutForm<T, U>& self,
-             cutfemx::fem::IntegralType type, int i)
-          {
-            return self.quadrature_rules(type, i);
+            return nb::ndarray<const std::int32_t, nb::numpy>(
+                self.inactive_dofs.data(), {self.inactive_dofs.size()},
+                nb::cast(self, nb::rv_policy::reference));
           },
-          nb::rv_policy::reference_internal, nb::arg("type"), nb::arg("i"));
+          nb::rv_policy::reference_internal);
 
-  m.def("create_cut_function", [](const dolfinx::fem::Function<T,U>& u, const cutfemx::mesh::CutMesh<U>& sub_mesh)
-          {
-            return cutfemx::fem::create_cut_function(u, sub_mesh);
-          }
-        , "create function over cut mesh");
+  m.def(
+      ("create_form_" + type).c_str(),
+      [](const std::vector<std::shared_ptr<const FunctionSpace>>& spaces,
+         const std::map<std::tuple<int, int, int>, integral_spec_t>& specs,
+         std::shared_ptr<const Mesh> mesh,
+         const std::vector<std::shared_ptr<const Function>>& coefficients,
+         const std::vector<std::shared_ptr<const Constant>>& constants,
+         bool needs_facet_permutations)
+      {
+        std::map<std::tuple<dolfinx_custom_data::fem::IntegralType, int, int>,
+                 dolfinx_custom_data::fem::integral_data<T, U>>
+            integrals;
 
-  m.def("interpolate_cut_expression",
-        [](dolfinx::fem::Expression<T, U>& expr,
-           std::shared_ptr<dolfinx::fem::FunctionSpace<U>> V_cut,
-           const cutfemx::mesh::CutMesh<U>& sub_mesh)
+        for (const auto& [key, spec] : specs)
         {
-          // Cast to const shared_ptr to match function signature
-          auto V_cut_const = std::const_pointer_cast<const dolfinx::fem::FunctionSpace<U>>(V_cut);
-          return cutfemx::fem::interpolate_cut_expression(expr, V_cut_const, sub_mesh);
-        },
-        nb::arg("expr"), nb::arg("V_cut"), nb::arg("sub_mesh"),
-        "Interpolate expression onto cut mesh using parent cell mapping.");
+          const auto [type_index, subdomain_id, kernel_index] = key;
+          const auto& [kernel_ptr, entities_array, active_coeffs, data_ptr]
+              = spec;
 
-    m.def(
-      "pack_coefficients",
-      [](const cutfemx::fem::CutForm<T, U>& form)
-      {
-        using Key_t = typename std::pair<cutfemx::fem::IntegralType, int>;
+          if (type_index < 0 or type_index > 4)
+          {
+            throw std::runtime_error(
+                "CutFEMx Form received an invalid integral type index.");
+          }
 
-        // Pack coefficients
-        std::map<Key_t, std::pair<std::vector<T>, int>> coeffs
-            = cutfemx::fem::allocate_coefficient_storage(form);
-        cutfemx::fem::pack_coefficients(form, coeffs);
+          std::vector<std::int32_t> entities(
+              entities_array.data(), entities_array.data() + entities_array.size());
+          std::optional<void*> custom_data = std::nullopt;
+          if (data_ptr)
+            custom_data = reinterpret_cast<void*>(*data_ptr);
 
-        // Move into NumPy data structures
-        std::map<Key_t, nb::ndarray<T, nb::numpy>> c;
-        std::ranges::transform(
-            coeffs, std::inserter(c, c.end()),
-            [](auto& e) -> typename decltype(c)::value_type
-            {
-              std::size_t num_ents
-                  = e.second.first.empty()
-                        ? 0
-                        : e.second.first.size() / e.second.second;
-              return std::pair<const std::pair<cutfemx::fem::IntegralType, int>,
-                               nb::ndarray<T, nb::numpy>>(
-                  e.first,
-                  dolfinx_wrappers::as_nbarray(
-                      std::move(e.second.first),
-                      {num_ents, static_cast<std::size_t>(e.second.second)}));
-            });
+          integrals.emplace(
+              std::make_tuple(static_cast<dolfinx_custom_data::fem::IntegralType>(type_index),
+                              subdomain_id, kernel_index),
+              dolfinx_custom_data::fem::integral_data<T, U>(
+                  kernel_from_pointer<T>(kernel_ptr), std::move(entities),
+                  active_coeffs, custom_data));
+        }
 
-        return c;
+        std::vector<std::reference_wrapper<const dolfinx::mesh::EntityMap>>
+            entity_maps;
+        return std::make_shared<Form>(spaces, std::move(integrals), mesh,
+                                      coefficients, constants,
+                                      needs_facet_permutations, entity_maps);
       },
-      nb::arg("form"), "Pack coefficients for a CutForm.");
+      nb::arg("function_spaces"), nb::arg("integrals"), nb::arg("mesh"),
+      nb::arg("coefficients"), nb::arg("constants"),
+      nb::arg("needs_facet_permutations"),
+      "Create a CutFEMx runtime Form from compiled runintgen integral data.");
 
-  // Functional
   m.def(
-      "assemble_scalar",
-      [](const cutfemx::fem::CutForm<T, U>& M,
-         nb::ndarray<const T, nb::ndim<1>, nb::c_contig> constants,
-         const std::map<std::pair<dolfinx::fem::IntegralType, int>,
-                        nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
-             coefficients,
-         const std::map<std::pair<cutfemx::fem::IntegralType, int>,
-                        nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
-             coeffs_rt)
+      ("assemble_scalar_" + type).c_str(),
+      [](const Form& form) { return dolfinx_custom_data::fem::assemble_scalar(form); },
+      nb::arg("form"), "Assemble a scalar CutFEMx runtime form.");
+
+  m.def(
+      ("assemble_vector_" + type).c_str(),
+      [](nb::ndarray<T, nb::ndim<1>, nb::c_contig> b, const Form& form)
       {
-        return cutfemx::fem::assemble_scalar<T,U>(
-            M, std::span(constants.data(), constants.size()),
-            py_to_cpp_coeffs(coefficients),py_to_cpp_coeffs_rt(coeffs_rt));
+        if (form.rank() != 1)
+        {
+          throw std::runtime_error(
+              "Cannot assemble vector. Form is not linear.");
+        }
+        dolfinx_custom_data::fem::assemble_vector(std::span<T>(b.data(), b.size()), form);
       },
-      nb::arg("M"), nb::arg("constants"), nb::arg("coefficients"), nb::arg("coefficients runtime"),
-      "Assemble functional over mesh with provided constants and "
-      "coefficients");
+      nb::arg("b"), nb::arg("form"),
+      "Assemble a linear CutFEMx runtime form into an existing array.");
+
   m.def(
-      "assemble_vector",
+      ("apply_lifting_" + type).c_str(),
       [](nb::ndarray<T, nb::ndim<1>, nb::c_contig> b,
-         const cutfemx::fem::CutForm<T, U>& L,
-         nb::ndarray<const T, nb::ndim<1>, nb::c_contig> constants,
-         const std::map<std::pair<dolfinx::fem::IntegralType, int>,
-                        nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
-             coefficients,
-         const std::map<std::pair<cutfemx::fem::IntegralType, int>,
-                        nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
-             coeffs_rt)
+         const std::vector<const Form*>& forms,
+         const std::vector<std::vector<const DirichletBC*>>& bcs,
+         std::optional<std::vector<
+             nb::ndarray<const T, nb::ndim<1>, nb::c_contig>>> x0,
+         T alpha)
       {
-        cutfemx::fem::assemble_vector<T>(
-            std::span(b.data(), b.size()), L,
-            std::span(constants.data(), constants.size()),
-            py_to_cpp_coeffs(coefficients),
-            py_to_cpp_coeffs_rt(coeffs_rt));
-      },
-      nb::arg("b"), nb::arg("L"), nb::arg("constants"), nb::arg("coeffs"), nb::arg("coeffs_rt"),
-      "Assemble linear form into an existing vector with pre-packed constants "
-      "and coefficients");
+        if (forms.size() != bcs.size())
+        {
+          throw std::runtime_error(
+              "Mismatch in size between bilinear forms and boundary "
+              "condition blocks.");
+        }
 
-   m.def(
-      "create_sparsity_pattern",
-      [](const cutfemx::fem::CutForm<T, U>& a)
-      {
-        return cutfemx::fem::create_sparsity_pattern(a);
+        std::vector<std::optional<std::reference_wrapper<const Form>>>
+            lifting_forms;
+        lifting_forms.reserve(forms.size());
+        for (const Form* form : forms)
+        {
+          if (form == nullptr)
+            lifting_forms.emplace_back(std::nullopt);
+          else
+            lifting_forms.emplace_back(std::cref(*form));
+        }
+
+        std::vector<std::vector<std::reference_wrapper<const DirichletBC>>>
+            lifting_bcs;
+        lifting_bcs.reserve(bcs.size());
+        for (const std::vector<const DirichletBC*>& block : bcs)
+        {
+          auto& out_block = lifting_bcs.emplace_back();
+          out_block.reserve(block.size());
+          for (const DirichletBC* bc : block)
+          {
+            if (bc == nullptr)
+              throw std::runtime_error(
+                  "CutFEMx apply_lifting received a null DirichletBC.");
+            out_block.push_back(*bc);
+          }
+        }
+
+        std::vector<std::span<const T>> lifting_x0;
+        if (x0)
+        {
+          if (x0->size() != forms.size())
+          {
+            throw std::runtime_error(
+                "Mismatch in size between x0 and bilinear forms.");
+          }
+          lifting_x0.reserve(x0->size());
+          for (const auto& values : *x0)
+            lifting_x0.emplace_back(values.data(), values.size());
+        }
+
+        dolfinx_custom_data::fem::apply_lifting(
+            std::span<T>(b.data(), b.size()), std::move(lifting_forms),
+            lifting_bcs, lifting_x0, alpha);
       },
-      nb::arg("a"),
-      "Create a sparsity pattern.");
-    m.def(
-      "assemble_matrix",
-      [](dolfinx::la::MatrixCSR<T>& A, const cutfemx::fem::CutForm<T, U>& a,
-         nb::ndarray<const T, nb::ndim<1>, nb::c_contig> constants,
-         const std::map<std::pair<dolfinx::fem::IntegralType, int>,
-                        nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
-             coefficients,
-         const std::map<std::pair<cutfemx::fem::IntegralType, int>,
-         nb::ndarray<const T, nb::ndim<2>, nb::c_contig>>&
-             coeffs_rt,
-         const std::vector<
-             std::shared_ptr<const dolfinx::fem::DirichletBC<T, U>>>& bcs)
+      nb::arg("b"), nb::arg("forms"), nb::arg("bcs"),
+      nb::arg("x0") = nb::none(), nb::arg("alpha") = T(1),
+      "Apply Dirichlet lifting for CutFEMx runtime bilinear forms.");
+
+  m.def(
+      ("create_sparsity_pattern_" + type).c_str(),
+      [](const Form& form)
       {
+        return dolfinx_custom_data::fem::create_sparsity_pattern(form);
+      },
+      nb::arg("form"),
+      "Create an unfinalized sparsity pattern for a CutFEMx runtime form.");
+
+  m.def(
+      ("create_matrix_" + type).c_str(),
+      [](const Form& form)
+      {
+        dolfinx::la::SparsityPattern sp
+            = dolfinx_custom_data::fem::create_sparsity_pattern(form);
+        sp.finalize();
+        return dolfinx::la::MatrixCSR<T>(sp);
+      },
+      nb::arg("form"),
+      "Create a MatrixCSR compatible with a CutFEMx runtime form.");
+
+  m.def(
+      ("create_matrix_with_extension_sparsity_" + type).c_str(),
+      [](const Form& form,
+         const std::vector<std::shared_ptr<const FunctionSpace>>& spaces,
+         const std::vector<const CellAggregation*>& aggregations)
+      {
+        if (form.rank() != 2)
+        {
+          throw std::runtime_error(
+              "Cannot create matrix. Form is not bilinear.");
+        }
+        if (spaces.size() != aggregations.size())
+        {
+          throw std::runtime_error(
+              "Extension sparsity spaces and aggregations have different sizes.");
+        }
+
+        dolfinx::la::SparsityPattern sp
+            = dolfinx_custom_data::fem::create_sparsity_pattern(form);
+        for (std::size_t i = 0; i < spaces.size(); ++i)
+        {
+          if (!spaces[i])
+            throw std::runtime_error("Received a null extension function space.");
+          if (aggregations[i] == nullptr)
+            throw std::runtime_error("Received a null extension aggregation.");
+          cutfemx::extensions::insert_extension_penalty_sparsity(
+              sp, *spaces[i], *aggregations[i]);
+        }
+        sp.finalize();
+        return dolfinx::la::MatrixCSR<T>(sp);
+      },
+      nb::arg("form"), nb::arg("spaces"), nb::arg("aggregations"),
+      "Create a MatrixCSR with CutFEMx runtime form and extension sparsity.");
+
+  m.def(
+      ("assemble_matrix_" + type).c_str(),
+      [](dolfinx::la::MatrixCSR<T>& A, const Form& form,
+         const std::vector<const DirichletBC*>& bcs)
+      {
+        if (form.rank() != 2)
+        {
+          throw std::runtime_error(
+              "Cannot assemble matrix. Form is not bilinear.");
+        }
+
+        std::vector<std::reference_wrapper<const DirichletBC>> _bcs;
+        for (const DirichletBC* bc : bcs)
+        {
+          assert(bc);
+          _bcs.push_back(*bc);
+        }
+
         const std::array<int, 2> data_bs
-            = {a._form->function_spaces().at(0)->dofmap()->index_map_bs(),
-               a._form->function_spaces().at(1)->dofmap()->index_map_bs()};
+            = {form.function_spaces().at(0)->dofmaps(0)->index_map_bs(),
+               form.function_spaces().at(1)->dofmaps(0)->index_map_bs()};
 
         if (data_bs[0] != data_bs[1])
+        {
           throw std::runtime_error(
               "Non-square blocksize unsupported in Python");
+        }
 
         if (data_bs[0] == 1)
         {
-          cutfemx::fem::assemble_matrix(
-              A.mat_add_values(), a,
-              std::span<const T>(constants.data(), constants.size()),
-              py_to_cpp_coeffs(coefficients),
-              py_to_cpp_coeffs_rt(coeffs_rt), bcs);
+          dolfinx_custom_data::fem::assemble_matrix(A.mat_add_values(), form, _bcs);
         }
         else if (data_bs[0] == 2)
         {
-          auto mat_add = A.template mat_add_values<2, 2>();
-          cutfemx::fem::assemble_matrix(
-              mat_add, a, std::span(constants.data(), constants.size()),
-              py_to_cpp_coeffs(coefficients),
-              py_to_cpp_coeffs_rt(coeffs_rt), bcs);
+          dolfinx_custom_data::fem::assemble_matrix(A.template mat_add_values<2, 2>(),
+                                        form, _bcs);
         }
         else if (data_bs[0] == 3)
         {
-          auto mat_add = A.template mat_add_values<3, 3>();
-          cutfemx::fem::assemble_matrix(
-              mat_add, a, std::span(constants.data(), constants.size()),
-              py_to_cpp_coeffs(coefficients),
-              py_to_cpp_coeffs_rt(coeffs_rt), bcs);
+          dolfinx_custom_data::fem::assemble_matrix(A.template mat_add_values<3, 3>(),
+                                        form, _bcs);
         }
         else if (data_bs[0] == 4)
         {
-          auto mat_add = A.template mat_add_values<4, 4>();
-          cutfemx::fem::assemble_matrix(
-              mat_add, a, std::span(constants.data(), constants.size()),
-              py_to_cpp_coeffs(coefficients),
-              py_to_cpp_coeffs_rt(coeffs_rt), bcs);
+          dolfinx_custom_data::fem::assemble_matrix(A.template mat_add_values<4, 4>(),
+                                        form, _bcs);
         }
         else if (data_bs[0] == 5)
         {
-          auto mat_add = A.template mat_add_values<5, 5>();
-          cutfemx::fem::assemble_matrix(
-              mat_add, a, std::span(constants.data(), constants.size()),
-              py_to_cpp_coeffs(coefficients),
-              py_to_cpp_coeffs_rt(coeffs_rt), bcs);
+          dolfinx_custom_data::fem::assemble_matrix(A.template mat_add_values<5, 5>(),
+                                        form, _bcs);
         }
         else if (data_bs[0] == 6)
         {
-          auto mat_add = A.template mat_add_values<6, 6>();
-          cutfemx::fem::assemble_matrix(
-              mat_add, a, std::span(constants.data(), constants.size()),
-              py_to_cpp_coeffs(coefficients),
-              py_to_cpp_coeffs_rt(coeffs_rt), bcs);
+          dolfinx_custom_data::fem::assemble_matrix(A.template mat_add_values<6, 6>(),
+                                        form, _bcs);
         }
         else if (data_bs[0] == 7)
         {
-          auto mat_add = A.template mat_add_values<7, 7>();
-          cutfemx::fem::assemble_matrix(
-              mat_add, a, std::span(constants.data(), constants.size()),
-              py_to_cpp_coeffs(coefficients),
-              py_to_cpp_coeffs_rt(coeffs_rt), bcs);
+          dolfinx_custom_data::fem::assemble_matrix(A.template mat_add_values<7, 7>(),
+                                        form, _bcs);
         }
         else if (data_bs[0] == 8)
         {
-          auto mat_add = A.template mat_add_values<8, 8>();
-          cutfemx::fem::assemble_matrix(
-              mat_add, a, std::span(constants.data(), constants.size()),
-              py_to_cpp_coeffs(coefficients),
-              py_to_cpp_coeffs_rt(coeffs_rt), bcs);
+          dolfinx_custom_data::fem::assemble_matrix(A.template mat_add_values<8, 8>(),
+                                        form, _bcs);
         }
         else if (data_bs[0] == 9)
         {
-          auto mat_add = A.template mat_add_values<9, 9>();
-          cutfemx::fem::assemble_matrix(
-              mat_add, a, std::span(constants.data(), constants.size()),
-              py_to_cpp_coeffs(coefficients),
-              py_to_cpp_coeffs_rt(coeffs_rt), bcs);
+          dolfinx_custom_data::fem::assemble_matrix(A.template mat_add_values<9, 9>(),
+                                        form, _bcs);
         }
         else
           throw std::runtime_error("Block size not supported in Python");
       },
-      nb::arg("A"), nb::arg("a"), nb::arg("constants"), nb::arg("coeffs"), nb::arg("coeffs_rt"),
-      nb::arg("bcs"), "Experimental.");
+      nb::arg("A"), nb::arg("form"), nb::arg("bcs"),
+      "Assemble a bilinear CutFEMx runtime form into an existing MatrixCSR.");
 
-      m.def(
-      "deactivate",
-      []( dolfinx::la::MatrixCSR<T>& A, std::string deactivate_domain,
-          const std::shared_ptr<dolfinx::fem::Function<T,U>> level_set,
-          const std::shared_ptr<dolfinx::fem::FunctionSpace<U>> V,
-          const std::vector<int>& component,
-          T diagonal)
+  m.def(
+      ("insert_diagonal_" + type).c_str(),
+      [](dolfinx::la::MatrixCSR<T>& A, const FunctionSpace& V,
+         const std::vector<const DirichletBC*>& bcs, T diagonal)
       {
-          dolfinx::fem::Function<T,U> xi = cutfemx::fem::deactivate(A.mat_set_values(), 
-                          deactivate_domain, level_set, V, component, diagonal);
-          return xi;
+        std::vector<std::reference_wrapper<const DirichletBC>> _bcs;
+        for (const DirichletBC* bc : bcs)
+        {
+          assert(bc);
+          _bcs.push_back(*bc);
+        }
+        dolfinx_custom_data::fem::set_diagonal(A.mat_set_values(), V, _bcs, diagonal);
       },
-      nb::arg("A"), nb::arg("domain to deactivate"), nb::arg("level_set"), nb::arg("V"), nb::arg("component"), nb::arg("diagonal"),
-      "Deactivate part of the domain by inserting one along the diagonal.");
+      nb::arg("A"), nb::arg("V"), nb::arg("bcs"), nb::arg("diagonal"),
+      "Insert a diagonal value for constrained rows.");
 
+  m.def(
+      ("active_domain_" + type).c_str(),
+      [](const Form& form)
+      {
+        return std::make_shared<ActiveDomain>(
+            cutfemx::fem::active_domain(form));
+      },
+      nb::arg("form"), "Build a CutFEMx active-domain support object.");
+
+  m.def(
+      ("deactivate_outside_" + type).c_str(),
+      [](dolfinx::la::MatrixCSR<T>& A, ActiveDomain& active_domain,
+         T diagonal)
+      {
+        cutfemx::fem::impl::validate_matrix_rows(A,
+                                                 active_domain.inactive_dofs);
+        cutfemx::fem::deactivate_outside(A.mat_set_values(), active_domain,
+                                         diagonal);
+      },
+      nb::arg("A"), nb::arg("active_domain"),
+      nb::arg("diagonal"),
+      "Deactivate matrix rows outside a CutFEMx active domain.");
+
+  m.def(
+      ("deactivate_outside_matrix_vector_" + type).c_str(),
+      [](dolfinx::la::MatrixCSR<T>& A, Vector& b,
+         ActiveDomain& active_domain, T diagonal, T rhs_value)
+      {
+        cutfemx::fem::impl::validate_matrix_rows(A,
+                                                 active_domain.inactive_dofs);
+        auto& values = b.array();
+        cutfemx::fem::deactivate_outside(
+            A.mat_set_values(), std::span<T>(values.data(), values.size()),
+            active_domain, diagonal, rhs_value);
+      },
+      nb::arg("A"), nb::arg("b"), nb::arg("active_domain"),
+      nb::arg("diagonal"), nb::arg("rhs_value"),
+      "Deactivate matrix rows and matching RHS entries outside a CutFEMx active domain.");
+
+  m.def(
+      ("deactivate_outside_blocks_" + type).c_str(),
+      [](const std::vector<std::vector<dolfinx::la::MatrixCSR<T>*>>& A_blocks,
+         const std::vector<ActiveDomain*>& active_domains, T diagonal)
+      {
+        cutfemx::fem::deactivate_outside_blocks(A_blocks, active_domains,
+                                                diagonal);
+      },
+      nb::arg("A_blocks"), nb::arg("active_domains"),
+      nb::arg("diagonal"),
+      "Deactivate a MatrixCSR block system from per-row ActiveDomain objects.");
+
+  m.def(
+      ("deactivate_outside_blocks_matrix_vector_" + type).c_str(),
+      [](const std::vector<std::vector<dolfinx::la::MatrixCSR<T>*>>& A_blocks,
+         const std::vector<Vector*>& b_blocks,
+         const std::vector<ActiveDomain*>& active_domains, T diagonal,
+         T rhs_value)
+      {
+        cutfemx::fem::deactivate_outside_blocks(
+            A_blocks, b_blocks, active_domains, diagonal, rhs_value);
+      },
+      nb::arg("A_blocks"), nb::arg("b_blocks"), nb::arg("active_domains"),
+      nb::arg("diagonal"), nb::arg("rhs_value"),
+      "Deactivate a MatrixCSR block system and matching RHS blocks from per-row ActiveDomain objects.");
+
+  m.def(
+      ("zero_rows_" + type).c_str(),
+      [](const dolfinx::la::MatrixCSR<T>& A, double tol)
+      { return cutfemx::fem::impl::zero_rows(A, tol); },
+      nb::arg("A"), nb::arg("tol") = 0.0,
+      "Return owned scalar rows whose MatrixCSR entries are all zero.");
+
+  m.def(
+      ("zero_block_rows_" + type).c_str(),
+      [](const std::vector<std::vector<dolfinx::la::MatrixCSR<T>*>>& A_blocks,
+         double tol)
+      { return cutfemx::fem::impl::zero_block_rows(A_blocks, tol); },
+      nb::arg("A_blocks"), nb::arg("tol") = 0.0,
+      "Return owned scalar rows whose entries are zero across each MatrixCSR block row.");
 }
-
 } // namespace
 
 namespace cutfemx_wrappers
 {
-  void fem(nb::module_& m)
-  {
-    nb::enum_<cutfemx::fem::IntegralType>(m, "IntegralType")
-    .value("cutcell", cutfemx::fem::IntegralType::cutcell, "runtime integral on cell")
-    .value("interface", cutfemx::fem::IntegralType::interface,
-            "runtime integral on interface between two parent cells");
-
-    // Bind ElementSourceType enum
-    nb::enum_<cutfemx::fem::ElementSourceType>(m, "ElementSourceType")
-        .value("Argument", cutfemx::fem::ElementSourceType::Argument)
-        .value("Coefficient", cutfemx::fem::ElementSourceType::Coefficient)
-        .value("Geometry", cutfemx::fem::ElementSourceType::Geometry);
-
-    // Bind ElementSource struct
-    nb::class_<cutfemx::fem::ElementSource>(m, "ElementSource")
-        .def(nb::init<cutfemx::fem::ElementSourceType, int, int, int>(),
-             nb::arg("type"), nb::arg("index"), nb::arg("component"), nb::arg("deriv_order"))
-        .def_rw("type", &cutfemx::fem::ElementSource::type)
-        .def_rw("index", &cutfemx::fem::ElementSource::index)
-        .def_rw("component", &cutfemx::fem::ElementSource::component)
-        .def_rw("deriv_order", &cutfemx::fem::ElementSource::deriv_order);
-
-    declare_fem<float>(m, "float32");
-    declare_fem<double>(m, "float64");
-  }
-} // end of namespace cutfemx_wrappers
+void fem_runtime(nb::module_& m)
+{
+  declare_runtime_fem<double>(m, "float64");
+}
+} // namespace cutfemx_wrappers

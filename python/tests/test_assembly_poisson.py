@@ -6,14 +6,8 @@ import dolfinx.mesh as mesh
 import dolfinx.fem as fem
 import ufl
 import cutfemx.fem as cf_fem
-# import cutfemx.quadrature as cf_quad # Not using installed module for debugging helper
-from cutfemx import cutfemx_cpp as _cpp
-import basix
-from dolfinx.fem import CoordinateElement
-from dolfinx.mesh import Mesh
 
-
-from cutfemx.quadrature import runtime_quadrature_mesh
+from quadrature_utils import runtime_quadrature_mesh
 
 def test_poisson_assembly():
     """
@@ -37,10 +31,10 @@ def test_poisson_assembly():
     # Let's use order 2 to be safe.
     qr = runtime_quadrature_mesh(msh, order=2)
     
-    # Use dC measure with runtime quadrature
-    dx_cut = ufl.Measure("dC", subdomain_data=[(0, qr)], domain=msh)
-    
-    a_cut = ufl.inner(ufl.grad(u), ufl.grad(v)) * dx_cut(0)
+    # Use dx with a runtime quadrature provider.
+    dx_cut = ufl.Measure("dx", subdomain_data=qr, domain=msh)
+
+    a_cut = ufl.inner(ufl.grad(u), ufl.grad(v)) * dx_cut
     
     print("DEBUG: Assembling CutFEMx matrix...")
     # CutFEMx assembly

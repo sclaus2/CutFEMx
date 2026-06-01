@@ -7,7 +7,7 @@ import pytest
 from mpi4py import MPI
 import numpy as np
 
-from cutfemx.level_set import locate_entities, locate_entities_part
+import cutfemx
 from dolfinx import fem, mesh
 
 def test_locate_entities():
@@ -27,9 +27,8 @@ def test_locate_entities():
 
   level_set = fem.Function(V)
   level_set.interpolate(line)
-  dim = msh.topology.dim
-
-  intersected_entities = locate_entities(level_set,dim,"phi=0")
+  cut_data = cutfemx.cut(level_set)
+  intersected_entities = cutfemx.locate_entities(cut_data, "phi=0")
 
   entities_exact = np.array([2,4,7,10,13,15],dtype=np.int32)
 
@@ -54,9 +53,10 @@ def test_locate_entities_part():
   level_set.interpolate(line)
   dim = msh.topology.dim
 
-  entities_part = np.arange(11)
+  entities_part = np.arange(11, dtype=np.int32)
 
-  intersected_entities = locate_entities_part(level_set,entities_part,dim,"phi=0")
+  cut_data = cutfemx.cut(level_set, entities_part, dim)
+  intersected_entities = cutfemx.locate_entities(cut_data, "phi=0")
 
   print(intersected_entities)
 

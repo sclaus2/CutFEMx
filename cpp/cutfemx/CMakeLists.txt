@@ -1,36 +1,35 @@
-# ------------------------------------------------------------------------------
 include(GNUInstallDirs)
 
-# ------------------------------------------------------------------------------
-# Declare the library (target)
 add_library(cutfemx)
 
-# ------------------------------------------------------------------------------
-# Add source files to the target
-set(CUTFEMX_DIRS level_set fem mesh quadrature)
+set(CUTFEMX_DIRS
+  cut
+  distance
+  extensions
+  fem
+  mesh)
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.h.in version.h)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
-# Add source to dolfinx target, and get sets of header files
 foreach(DIR ${CUTFEMX_DIRS})
   add_subdirectory(${DIR})
 endforeach()
 
 foreach(DIR ${CUTFEMX_DIRS})
-  set_target_properties(cutfemx PROPERTIES PRIVATE_HEADER "${HEADERS_${DIR}}")
   install(FILES ${HEADERS_${DIR}} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/cutfemx/${DIR}
     COMPONENT Development)
 endforeach()
 
-install(FILES ${HEADERS_mesh_stl} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/cutfemx/mesh/stl
-  COMPONENT Development)
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/distance/stl
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/cutfemx/distance
+  COMPONENT Development
+  FILES_MATCHING PATTERN "*.h")
 
 target_include_directories(cutfemx PUBLIC
-  $<INSTALL_INTERFACE:include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..;${CMAKE_CURRENT_SOURCE_DIR}>")
 
-# dolfinx
 target_link_libraries(cutfemx PUBLIC CUTCELLS::cutcells)
 target_link_libraries(cutfemx PUBLIC dolfinx)
 target_link_libraries(cutfemx PUBLIC spdlog::spdlog)
@@ -46,5 +45,7 @@ if(CUTFEMX_USE_MULTIPRECISION_PSM)
   target_include_directories(cutfemx PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/geogram.psm.MultiPrecision>)
   target_compile_definitions(cutfemx PUBLIC CUTFEMX_USE_MULTIPRECISION_PSM)
+  install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/geogram.psm.MultiPrecision/MultiPrecision_psm.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    COMPONENT Development)
 endif()
-

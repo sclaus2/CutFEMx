@@ -6,22 +6,26 @@
 //#include "interpolate.h"
 #pragma once
 
-#include <dolfinx/fem/FunctionSpace.h>
-#include <dolfinx/fem/Function.h>
 #include <dolfinx/fem/Expression.h>
+#include <dolfinx/fem/Function.h>
+#include <dolfinx/fem/FunctionSpace.h>
 
 #include <basix/finite-element.h>
 
-#include <dolfinx/mesh/Mesh.h>
 #include <dolfinx/fem/utils.h>
+#include <dolfinx/mesh/Mesh.h>
 
-#include <cutcells/cell_flags.h>
-#include <cutcells/utils.h>
 #include "../mesh/cut_mesh.h"
 
-#include <span>
-#include <string>
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
 #include <memory>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace cutfemx::fem
 {
@@ -29,163 +33,100 @@ namespace cutfemx::fem
   dolfinx::fem::Function<T,U> create_cut_function(const dolfinx::fem::Function<T,U>& u,
                                              const cutfemx::mesh::CutMesh<U>& sub_mesh)
   {
-    //use same function space as incoming function u
-    auto element_in = u.function_space()->element();
-    auto dofmap_in = u.function_space()->dofmap();
-    const auto& _value_shape = u.function_space()->value_shape();
-    std::vector<std::size_t> value_shape;
-    value_shape.assign(_value_shape.begin(), _value_shape.end());
-    int bs = dofmap_in->index_map_bs();
+    if (!sub_mesh._cut_mesh)
+      throw std::invalid_argument("Cannot create a cut function on an empty cut mesh");
 
-    const basix::FiniteElement<T>& basix_element = element_in->basix_element();
+    if (sub_mesh._parent_index.size() != sub_mesh._is_cut_cell.size())
+      throw std::runtime_error("CutMesh parent_index and is_cut_cell sizes differ");
+
+    auto element_in = u.function_space()->element();
+    const basix::FiniteElement<U>& basix_element = element_in->basix_element();
     auto sub_mesh_cell_type = sub_mesh._cut_mesh->topology()->cell_type();
 
-    basix::FiniteElement<T> e = basix::create_element<T>(
-      basix_element.family(),
-      dolfinx::mesh::cell_type_to_basix_type(sub_mesh_cell_type), basix_element.degree(),
-      basix_element.lagrange_variant(),
-      basix_element.dpc_variant(),
-      basix_element.discontinuous());
+    basix::FiniteElement<U> basix_out = basix::create_element<U>(
+        basix_element.family(),
+        dolfinx::mesh::cell_type_to_basix_type(sub_mesh_cell_type),
+        basix_element.degree(), basix_element.lagrange_variant(),
+        basix_element.dpc_variant(), basix_element.discontinuous());
 
-    const std::span<const T>& u_in_values = u.x()->array();
-    auto V = std::make_shared<dolfinx::fem::FunctionSpace<U>>(dolfinx::fem::create_functionspace(sub_mesh._cut_mesh,e,value_shape));
+    std::optional<std::vector<std::size_t>> value_shape = std::nullopt;
+    if (!element_in->value_shape().empty())
+    {
+      value_shape = std::vector<std::size_t>(element_in->value_shape().begin(),
+                                             element_in->value_shape().end());
+    }
 
-    dolfinx::fem::Function<T,U> u_out(V);
+    auto element_out = std::make_shared<const dolfinx::fem::FiniteElement<U>>(
+        basix_out, value_shape, element_in->symmetric());
+    auto V = std::make_shared<const dolfinx::fem::FunctionSpace<U>>(
+        dolfinx::fem::create_functionspace(sub_mesh._cut_mesh, element_out));
+    dolfinx::fem::Function<T, U> u_out(V);
+
+    auto cell_map = sub_mesh._cut_mesh->topology()->index_map(
+        sub_mesh._cut_mesh->topology()->dim());
+    if (!cell_map)
+      throw std::runtime_error("Cut mesh has no cell index map");
+    const std::size_t num_local_cells = cell_map->size_local();
+    if (num_local_cells != sub_mesh._parent_index.size())
+      throw std::runtime_error("CutMesh parent_index does not match cut mesh cells");
+
+    std::vector<U> dof_coordinates = V->tabulate_dof_coordinates(false);
+    const std::size_t num_dofs = dof_coordinates.size() / 3;
+    std::vector<std::int32_t> parent_for_dof(num_dofs, -1);
 
     auto dofmap_out = V->dofmap();
-    const int bs_dof = dofmap_out->bs();
-    auto u_out_values = u_out.x()->mutable_array();
-
-    assert(bs == bs_dof);
-
-    //cell to vertex map for new cells
-    std::size_t tdim = sub_mesh._cut_mesh->topology()->dim();
-    std::size_t gdim = sub_mesh._cut_mesh->geometry().dim();
-
-    auto x_dofmap
-        = sub_mesh._cut_mesh->geometry().dofmap();
-    std::span<const U> x_nodes = sub_mesh._cut_mesh->geometry().x();
-    const std::size_t num_dofs_g = sub_mesh._cut_mesh->geometry().cmap().dim();
-
-    std::set<int32_t> treated_dofs;
-
-    // first copy in all cells which do not change
-    for(int c=0;c<sub_mesh._parent_index.size();c++)
+    for (std::size_t c = 0; c < sub_mesh._parent_index.size(); ++c)
     {
-      bool is_cut_cell = sub_mesh._is_cut_cell[c];
-      if(is_cut_cell)
+      std::span<const std::int32_t> dofs = dofmap_out->cell_dofs(c);
+      for (std::int32_t dof : dofs)
       {
-        // do not do anything here treated in next loop
-      }
-      else{
-
-        int parent_index = sub_mesh._parent_index[c];
-
-        //copy
-        std::span<const std::int32_t> dofs_in = dofmap_in->cell_dofs(parent_index);
-        std::span<const std::int32_t> dofs_out = dofmap_out->cell_dofs(c);
-
-        assert(dofs_in.size() == dofs_out.size()); //need to have same size to copy over value
-
-        for(int dof=0;dof<dofs_out.size();dof++)
-        {
-          int32_t dof1 = dofs_out[dof];
-          if(treated_dofs.find(dof1) == treated_dofs.end()) // dof not yet treated
-          {
-            for (int k = 0; k < bs_dof; ++k)
-            {
-              u_out_values[bs_dof * dofs_out[dof] + k]
-                  = u_in_values[bs * dofs_in[dof] + k];
-            }
-            treated_dofs.insert(dofs_out[dof]);
-          }
-        }
+        if (dof < 0 || static_cast<std::size_t>(dof) >= parent_for_dof.size())
+          throw std::runtime_error("Cut function dof index is out of range");
+        if (parent_for_dof[static_cast<std::size_t>(dof)] < 0)
+          parent_for_dof[static_cast<std::size_t>(dof)]
+              = sub_mesh._parent_index[c];
       }
     }
 
-    std::vector<U> new_points;
-    std::vector<int32_t> new_points_cell_index; //index of cell points belong to
-    std::vector<int32_t> interpolated_dofs;
-
-    //Iterate over all cells of submesh if cell has not changed geometry fill in values
-    // if it has changed geometry value needs to be interpolated in parent cell
-    for(int c=0;c<sub_mesh._parent_index.size();c++)
+    std::vector<U> points;
+    std::vector<std::int32_t> cells;
+    std::vector<std::int32_t> dofs;
+    points.reserve(3 * num_dofs);
+    cells.reserve(num_dofs);
+    dofs.reserve(num_dofs);
+    for (std::size_t dof = 0; dof < parent_for_dof.size(); ++dof)
     {
-      int parent_index = sub_mesh._parent_index[c];
-      bool is_cut_cell = sub_mesh._is_cut_cell[c];
-
-      //FIXME: this should not be cell is new but rather vertex is new
-      if(is_cut_cell)
-      {
-        //interpolate
-        auto x_dofs = MDSPAN_IMPL_STANDARD_NAMESPACE::submdspan(
-          x_dofmap, c, MDSPAN_IMPL_STANDARD_NAMESPACE::full_extent);
-        std::span<const std::int32_t> dofs_out = dofmap_out->cell_dofs(c);
-
-        for (std::size_t dof = 0; dof < x_dofs.size(); ++dof)
-        {
-          int32_t dof1 = dofs_out[dof];
-          if (treated_dofs.find(dof1) != treated_dofs.end())
-          {
-            //dof already treated
-          }
-          else
-          {
-            std::vector<U> coordinate_dofs(3 * num_dofs_g);
-
-            // Get cell coordinates/geometry
-            for (std::size_t i = 0; i < x_dofs.size(); ++i)
-            {
-              std::copy_n(std::next(x_nodes.begin(), 3 * x_dofs[i]), 3,
-                          std::next(coordinate_dofs.begin(), 3 * i));
-            }
-            std::vector<U> new_point(3);
-
-            //get coordinate of vertex
-            for(std::size_t j=0;j<3;j++)
-            {
-              new_point[j] = coordinate_dofs[dof*3+j];
-            }
-
-            int id = cutcells::utils::vertex_exists<T>(new_points, new_point, 0, 3);
-
-            if(id==-1) //point does not exist yet
-            {
-              // check if dof has already been taken care of in "old" cells
-              //FIXME: this might not work for high order approximation
-              //vertex does not exist, and dof also not yet
-              // add vertex to new_points
-              new_points.insert(new_points.end(),new_point.begin(),new_point.end());
-              new_points_cell_index.push_back(parent_index);
-              interpolated_dofs.push_back(dof1);
-            }
-            else
-            {
-              //point already treated
-            }
-          }
-        }
-      }
+      if (parent_for_dof[dof] < 0)
+        continue;
+      points.insert(points.end(), dof_coordinates.begin() + 3 * dof,
+                    dof_coordinates.begin() + 3 * dof + 3);
+      cells.push_back(parent_for_dof[dof]);
+      dofs.push_back(static_cast<std::int32_t>(dof));
     }
 
-    // do the interpolation in new points
-    int num_new_points = new_points.size() / 3;
-    // Evaluate the interpolating function where possible
-    const std::size_t value_size = u.function_space()->value_size();
-
-    std::vector<T> send_values(num_new_points * value_size);
-    u.eval(new_points, {static_cast<std::size_t>(num_new_points), (std::size_t)3},
-          new_points_cell_index, send_values, {static_cast<std::size_t>(num_new_points), (std::size_t)value_size});
-
-    // assign interpolated values
-    for(int p=0;p<num_new_points;p++)
+    const std::size_t num_points = cells.size();
+    const int value_size = element_in->value_size();
+    const int bs = dofmap_out->index_map_bs();
+    if (bs != value_size)
     {
-      int32_t dof1 = interpolated_dofs[p];
+      throw std::runtime_error(
+          "create_cut_function currently supports blocked point-evaluation "
+          "spaces with dofmap block size equal to value size");
+    }
 
-      for(int j=0;j<bs_dof;j++)
-      {
-        u_out_values[bs_dof*dof1+j] = send_values[p*bs_dof+j];
-      }
+    std::vector<T> values(num_points * static_cast<std::size_t>(value_size));
+    u.eval(std::span<const U>(points.data(), points.size()), {num_points, 3},
+           std::span<const std::int32_t>(cells.data(), cells.size()),
+           std::span<T>(values.data(), values.size()),
+           {num_points, static_cast<std::size_t>(value_size)}, 1.0e-6, 15);
+
+    auto& out_values = u_out.x()->array();
+    std::ranges::fill(out_values, T(0));
+    for (std::size_t p = 0; p < dofs.size(); ++p)
+    {
+      const std::size_t dof = static_cast<std::size_t>(dofs[p]);
+      for (int k = 0; k < bs; ++k)
+        out_values[bs * dof + k] = values[p * static_cast<std::size_t>(bs) + k];
     }
 
     return u_out;

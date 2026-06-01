@@ -10,11 +10,27 @@ namespace nb = nanobind;
 
 namespace cutfemx_wrappers
 {
+#ifdef CUTFEMX_HAS_CUT_API
+void cut(nb::module_& m);
+#endif
+#ifdef CUTFEMX_HAS_DISTANCE
+void distance(nb::module_& m);
+#endif
+#ifdef CUTFEMX_HAS_LEVEL_SET
 void level_set(nb::module_& m);
-void quadrature(nb::module_& m);
-void mesh(nb::module_& m);
-void fem(nb::module_& m);
-void petsc(nb::module_& m);
+#endif
+#ifdef CUTFEMX_HAS_FEM_INTERPOLATION
+void fem_interpolation(nb::module_& m);
+#endif
+#ifdef CUTFEMX_HAS_RUNTIME_FEM
+void fem_runtime(nb::module_& m);
+#endif
+#ifdef CUTFEMX_HAS_RUNTIME_PETSC
+void petsc_runtime(nb::module_& m);
+#endif
+#ifdef CUTFEMX_HAS_EXTENSIONS
+void extensions(nb::module_& m);
+#endif
 } // namespace cutfemx_wrappers
 
 NB_MODULE(cutfemx_cpp, m)
@@ -26,24 +42,36 @@ NB_MODULE(cutfemx_cpp, m)
   nanobind::set_leak_warnings(false);
 #endif
 
-  // Create level_set submodule
-  nb::module_ level_set = m.def_submodule("level_set", "LevelSet module");
+#ifdef CUTFEMX_HAS_CUT_API
+  cutfemx_wrappers::cut(m);
+#endif
+
+#ifdef CUTFEMX_HAS_DISTANCE
+  nb::module_ distance = m.def_submodule("distance", "Distance module");
+  cutfemx_wrappers::distance(distance);
+#endif
+
+#ifdef CUTFEMX_HAS_LEVEL_SET
+  nb::module_ level_set = m.def_submodule("level_set", "Level-set module");
   cutfemx_wrappers::level_set(level_set);
+#endif
 
-  // Create quadrature submodule
-  nb::module_ quadrature = m.def_submodule("quadrature", "Quadrature module");
-  cutfemx_wrappers::quadrature(quadrature);
-
-  // Create mesh submodule
-  nb::module_ mesh = m.def_submodule("mesh", "Mesh module");
-  cutfemx_wrappers::mesh(mesh);
-
-  // Create fem submodule
+#if defined(CUTFEMX_HAS_FEM_INTERPOLATION) || defined(CUTFEMX_HAS_RUNTIME_FEM)
   nb::module_ fem = m.def_submodule("fem", "FEM module");
-  cutfemx_wrappers::fem(fem);
+#ifdef CUTFEMX_HAS_FEM_INTERPOLATION
+  cutfemx_wrappers::fem_interpolation(fem);
+#endif
+#ifdef CUTFEMX_HAS_RUNTIME_FEM
+  cutfemx_wrappers::fem_runtime(fem);
+#endif
+#if defined(CUTFEMX_HAS_RUNTIME_PETSC) && defined(HAS_PETSC)                   \
+    && defined(HAS_PETSC4PY)
+  cutfemx_wrappers::petsc_runtime(fem);
+#endif
+#endif
 
-#if defined(HAS_PETSC) && defined(HAS_PETSC4PY)
-  // PETSc-specific wrappers
-  cutfemx_wrappers::petsc(fem);
+#ifdef CUTFEMX_HAS_EXTENSIONS
+  nb::module_ extensions = m.def_submodule("extensions", "Extensions module");
+  cutfemx_wrappers::extensions(extensions);
 #endif
 }

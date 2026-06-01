@@ -1,0 +1,12 @@
+set(HEADERS_distance
+  ${CMAKE_CURRENT_SOURCE_DIR}/eikonal_update.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/fast_iterative.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/parallel_exchange.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/point_triangle_distance.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/reinitialize.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/sign.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/sign_options.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/sign_region.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/vertex_map.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/winding.h
+  PARENT_SCOPE)

@@ -1,0 +1,248 @@
+/* CutFEMx documentation: restrained tutorial layout on top of PyData. */
+
+:root {
+  --cutfemx-blue: #1f5d8c;
+  --cutfemx-blue-dark: #173f61;
+  --cutfemx-border: #d8dee8;
+  --cutfemx-muted: #5f6f82;
+  --pst-font-size-base: 16px;
+  --pst-font-size-h1: 2rem;
+  --pst-font-size-h2: 1.45rem;
+  --pst-font-size-h3: 1.2rem;
+}
+
+html[data-theme="light"] {
+  --pst-color-primary: var(--cutfemx-blue);
+  --pst-color-secondary: #2f7d55;
+  --pst-color-link: var(--cutfemx-blue);
+  --pst-color-link-hover: var(--cutfemx-blue-dark);
+}
+
+html[data-theme="dark"] {
+  --pst-color-primary: #8bbfe8;
+  --pst-color-link: #9dcced;
+  --pst-color-link-hover: #c4e3f8;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+}
+
+code,
+kbd,
+pre,
+.highlight {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+/* Keep the book/tutorial structure: left chapters, article, right page TOC. */
+.bd-page {
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+.bd-main .bd-content .bd-article-container {
+  max-width: 820px;
+}
+
+.bd-sidebar-primary {
+  border-right: 1px solid var(--pst-color-border);
+}
+
+.bd-sidebar-primary .sidebar-primary-items__end {
+  margin-top: 1rem;
+}
+
+.bd-sidebar-primary .pst-sidebar-collapse .pst-collapse-sidebar-label,
+.bd-sidebar-primary .pst-sidebar-collapse .pst-expand-sidebar-label {
+  display: none;
+}
+
+.bd-sidebar-primary .bd-links__title {
+  color: var(--cutfemx-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.35rem;
+  text-transform: uppercase;
+}
+
+.bd-sidebar-primary .caption {
+  color: var(--cutfemx-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.bd-sidebar-primary .toctree-l1 > a,
+.bd-sidebar-primary .toctree-l2 > a {
+  border-radius: 0;
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+}
+
+.bd-sidebar-primary .current > a,
+.bd-sidebar-primary a.current {
+  border-left: 3px solid var(--pst-color-primary);
+  color: var(--pst-color-primary);
+  font-weight: 600;
+}
+
+.bd-sidebar-secondary {
+  font-size: 0.88rem;
+}
+
+.bd-sidebar-secondary .toc-entry a.nav-link {
+  padding-top: 0.2rem;
+  padding-bottom: 0.2rem;
+}
+
+.bd-header {
+  border-bottom: 1px solid var(--pst-color-border);
+  box-shadow: none;
+}
+
+.navbar-brand img {
+  max-height: 36px;
+}
+
+.navbar-brand .title {
+  font-weight: 600;
+}
+
+article.bd-article h1 {
+  border-bottom: 1px solid var(--pst-color-border);
+  margin-bottom: 1.2rem;
+  padding-bottom: 0.35rem;
+}
+
+article.bd-article h2 {
+  margin-top: 2.1rem;
+}
+
+article.bd-article h3 {
+  margin-top: 1.5rem;
+}
+
+article.bd-article p {
+  margin-bottom: 0.85rem;
+}
+
+article.bd-article ul,
+article.bd-article ol {
+  margin-bottom: 1rem;
+}
+
+.highlight,
+div[class*="highlight-"] {
+  border: 1px solid var(--pst-color-border);
+  border-radius: 4px;
+}
+
+.highlight pre {
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.admonition,
+div.admonition {
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.admonition > .admonition-title::before,
+.admonition > .admonition-title::after,
+div.admonition > .admonition-title::before,
+div.admonition > .admonition-title::after,
+.admonition p.admonition-title::before,
+.admonition p.admonition-title::after,
+.admonition-title .fa,
+.admonition-title .fas,
+.admonition-title .far,
+.admonition-title .fab,
+.admonition-title .fa-solid,
+.admonition-title svg {
+  content: none !important;
+  display: none !important;
+}
+
+.admonition.theory,
+.admonition.formulation,
+.admonition.practice,
+.admonition.geometry {
+  border: 1px solid var(--cutfemx-border);
+  border-left-width: 5px;
+  margin: 1.35rem 0;
+}
+
+.admonition.theory {
+  background: color-mix(in srgb, var(--pst-color-primary) 8%, var(--pst-color-background));
+  border-left-color: var(--pst-color-primary);
+}
+
+.admonition.formulation {
+  background: color-mix(in srgb, #2f7d55 10%, var(--pst-color-background));
+  border-left-color: #2f7d55;
+}
+
+.admonition.practice {
+  background: color-mix(in srgb, #8a5a00 10%, var(--pst-color-background));
+  border-left-color: #b7791f;
+}
+
+.admonition.geometry {
+  background: color-mix(in srgb, #7a4ab0 10%, var(--pst-color-background));
+  border-left-color: #7a4ab0;
+}
+
+.admonition.theory > .admonition-title,
+.admonition.formulation > .admonition-title,
+.admonition.practice > .admonition-title,
+.admonition.geometry > .admonition-title {
+  background: transparent;
+  font-weight: 700;
+}
+
+.admonition.theory .math,
+.admonition.formulation .math,
+.admonition.practice .math,
+.admonition.geometry .math {
+  margin: 0.7rem 0;
+}
+
+table {
+  font-size: 0.92rem;
+}
+
+/* Existing docs use this class for displayed formulations. */
+.math-box {
+  background: var(--pst-color-surface);
+  border: 1px solid var(--cutfemx-border);
+  border-left: 4px solid var(--pst-color-primary);
+  border-radius: 4px;
+  margin: 1.4rem 0;
+  padding: 1rem 1.25rem;
+}
+
+.math-box h4 {
+  color: var(--pst-color-heading-color);
+  font-size: 1rem;
+  margin: 0 0 0.75rem;
+}
+
+.math-box .math {
+  margin-bottom: 0;
+}
+
+/* Root page should read like a tutorial entry point, not a marketing page. */
+.bd-article-container .toctree-wrapper:empty {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .bd-main .bd-content .bd-article-container {
+    max-width: 100%;
+  }
+}
