@@ -28,6 +28,9 @@
 #include <dolfinx_custom_data/fem/assembler.h>
 
 #include <cutfemx/fem/deactivate.h>
+#include <cutfemx/cut/cut.h>
+#include <cutfemx/extensions/cell_aggregation.h>
+#include <cutfemx/extensions/extension_penalty.h>
 
 #include <cassert>
 #include <cmath>
@@ -269,6 +272,8 @@ void declare_runtime_petsc(nb::module_& m, std::string type)
   using FunctionSpace = dolfinx::fem::FunctionSpace<U>;
   using DirichletBC = dolfinx::fem::DirichletBC<T, U>;
   using ActiveDomain = cutfemx::fem::ActiveDomain<T, U>;
+  using CutData = cutfemx::CutData<U>;
+  using CellAggregation = cutfemx::extensions::CellAggregation<U>;
 
   m.def(
       ("create_matrix_" + type).c_str(),
@@ -289,6 +294,43 @@ void declare_runtime_petsc(nb::module_& m, std::string type)
       nb::rv_policy::take_ownership, nb::arg("form"),
       nb::arg("type") = nb::none(),
       "Create a PETSc Mat compatible with a CutFEMx runtime form.");
+
+  m.def(
+      ("create_matrix_with_extension_sparsity_" + type).c_str(),
+      [](const Form& form,
+         const std::vector<std::shared_ptr<const FunctionSpace>>& spaces,
+         const std::vector<const CellAggregation*>& aggregations,
+         std::optional<std::string> mat_type)
+      {
+        if (form.rank() != 2)
+        {
+          throw std::runtime_error(
+              "Cannot create PETSc matrix. Form is not bilinear.");
+        }
+        if (spaces.size() != aggregations.size())
+        {
+          throw std::runtime_error(
+              "Extension sparsity spaces and aggregations have different sizes.");
+        }
+
+        dolfinx::la::SparsityPattern sp
+            = dolfinx_custom_data::fem::create_sparsity_pattern(form);
+        for (std::size_t i = 0; i < spaces.size(); ++i)
+        {
+          if (!spaces[i])
+            throw std::runtime_error("Received a null extension function space.");
+          if (aggregations[i] == nullptr)
+            throw std::runtime_error("Received a null extension aggregation.");
+          cutfemx::extensions::insert_extension_penalty_sparsity(
+              sp, *spaces[i], *aggregations[i]);
+        }
+        sp.finalize();
+        return dolfinx::la::petsc::create_matrix(form.mesh()->comm(), sp,
+                                                 mat_type);
+      },
+      nb::rv_policy::take_ownership, nb::arg("form"), nb::arg("spaces"),
+      nb::arg("aggregations"), nb::arg("type") = nb::none(),
+      "Create a PETSc Mat with CutFEMx runtime form and extension sparsity.");
 
   m.def(
       ("assemble_vector_" + type).c_str(),
@@ -351,6 +393,50 @@ void declare_runtime_petsc(nb::module_& m, std::string type)
       },
       nb::arg("A"), nb::arg("form"), nb::arg("bcs"),
       "Assemble a bilinear CutFEMx runtime form into an existing PETSc Mat.");
+
+  m.def(
+      ("assemble_extension_penalty_scalar_" + type).c_str(),
+      [](Mat A, std::shared_ptr<const FunctionSpace> V,
+         const CutData& cut_data, const CellAggregation& aggregation, T beta,
+         int quadrature_degree)
+      {
+        if (!V)
+          throw std::runtime_error("Received a null function space.");
+        std::function<int(std::span<const std::int32_t>,
+                          std::span<const std::int32_t>,
+                          std::span<const U>)>
+            mat_add = dolfinx::la::petsc::Matrix::set_fn(A, ADD_VALUES);
+        cutfemx::extensions::assemble_extension_penalty(
+            mat_add, *V, cut_data, aggregation, beta, quadrature_degree);
+      },
+      nb::arg("A"), nb::arg("V"), nb::arg("cut_data"),
+      nb::arg("aggregation"), nb::arg("beta"),
+      nb::arg("quadrature_degree"),
+      "Assemble a scalar-coefficient extension penalty into a PETSc Mat.");
+
+  m.def(
+      ("assemble_extension_penalty_cellwise_" + type).c_str(),
+      [](Mat A, std::shared_ptr<const FunctionSpace> V,
+         const CutData& cut_data, const CellAggregation& aggregation,
+         nb::ndarray<const U, nb::ndim<1>, nb::c_contig> beta_cell_values,
+         int quadrature_degree)
+      {
+        if (!V)
+          throw std::runtime_error("Received a null function space.");
+        std::function<int(std::span<const std::int32_t>,
+                          std::span<const std::int32_t>,
+                          std::span<const U>)>
+            mat_add = dolfinx::la::petsc::Matrix::set_fn(A, ADD_VALUES);
+        cutfemx::extensions::assemble_extension_penalty(
+            mat_add, *V, cut_data, aggregation,
+            std::span<const U>(beta_cell_values.data(),
+                               beta_cell_values.size()),
+            quadrature_degree);
+      },
+      nb::arg("A"), nb::arg("V"), nb::arg("cut_data"),
+      nb::arg("aggregation"), nb::arg("beta_cell_values"),
+      nb::arg("quadrature_degree"),
+      "Assemble a cellwise-coefficient extension penalty into a PETSc Mat.");
 
   m.def(
       ("insert_diagonal_" + type).c_str(),

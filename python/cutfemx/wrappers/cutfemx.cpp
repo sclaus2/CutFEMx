@@ -28,6 +28,9 @@ void fem_runtime(nb::module_& m);
 #ifdef CUTFEMX_HAS_RUNTIME_PETSC
 void petsc_runtime(nb::module_& m);
 #endif
+#ifdef CUTFEMX_HAS_EXTENSIONS
+void extensions(nb::module_& m);
+#endif
 } // namespace cutfemx_wrappers
 
 NB_MODULE(cutfemx_cpp, m)
@@ -65,5 +68,10 @@ NB_MODULE(cutfemx_cpp, m)
     && defined(HAS_PETSC4PY)
   cutfemx_wrappers::petsc_runtime(fem);
 #endif
+#endif
+
+#ifdef CUTFEMX_HAS_EXTENSIONS
+  nb::module_ extensions = m.def_submodule("extensions", "Extensions module");
+  cutfemx_wrappers::extensions(extensions);
 #endif
 }

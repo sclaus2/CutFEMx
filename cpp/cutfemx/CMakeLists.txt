@@ -5,6 +5,7 @@ add_library(cutfemx)
 set(CUTFEMX_DIRS
   cut
   distance
+  extensions
   fem
   mesh)
 

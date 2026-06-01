@@ -8,6 +8,7 @@
 
 from cutfemx import cutfemx_cpp as cutfemx_cpp
 from cutfemx import distance as distance
+from cutfemx import extensions as extensions
 from cutfemx import fem as fem
 from cutfemx import level_set as level_set
 from cutfemx._runintgen_adapter import (

@@ -38,6 +38,8 @@
 #include <dolfinx_custom_data/fem/Form.h>
 #include <dolfinx_custom_data/fem/assembler.h>
 
+#include <cutfemx/extensions/cell_aggregation.h>
+#include <cutfemx/extensions/extension_penalty.h>
 #include <cutfemx/fem/deactivate.h>
 
 namespace nb = nanobind;
@@ -77,6 +79,7 @@ void declare_runtime_fem(nb::module_& m, std::string type)
   using Vector = dolfinx::la::Vector<T>;
   using Mesh = dolfinx::mesh::Mesh<U>;
   using ActiveDomain = cutfemx::fem::ActiveDomain<T, U>;
+  using CellAggregation = cutfemx::extensions::CellAggregation<U>;
   using integral_spec_t
       = std::tuple<std::uintptr_t,
                    nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig>,
@@ -270,6 +273,40 @@ void declare_runtime_fem(nb::module_& m, std::string type)
       },
       nb::arg("form"),
       "Create a MatrixCSR compatible with a CutFEMx runtime form.");
+
+  m.def(
+      ("create_matrix_with_extension_sparsity_" + type).c_str(),
+      [](const Form& form,
+         const std::vector<std::shared_ptr<const FunctionSpace>>& spaces,
+         const std::vector<const CellAggregation*>& aggregations)
+      {
+        if (form.rank() != 2)
+        {
+          throw std::runtime_error(
+              "Cannot create matrix. Form is not bilinear.");
+        }
+        if (spaces.size() != aggregations.size())
+        {
+          throw std::runtime_error(
+              "Extension sparsity spaces and aggregations have different sizes.");
+        }
+
+        dolfinx::la::SparsityPattern sp
+            = dolfinx_custom_data::fem::create_sparsity_pattern(form);
+        for (std::size_t i = 0; i < spaces.size(); ++i)
+        {
+          if (!spaces[i])
+            throw std::runtime_error("Received a null extension function space.");
+          if (aggregations[i] == nullptr)
+            throw std::runtime_error("Received a null extension aggregation.");
+          cutfemx::extensions::insert_extension_penalty_sparsity(
+              sp, *spaces[i], *aggregations[i]);
+        }
+        sp.finalize();
+        return dolfinx::la::MatrixCSR<T>(sp);
+      },
+      nb::arg("form"), nb::arg("spaces"), nb::arg("aggregations"),
+      "Create a MatrixCSR with CutFEMx runtime form and extension sparsity.");
 
   m.def(
       ("assemble_matrix_" + type).c_str(),

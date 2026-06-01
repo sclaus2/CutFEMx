@@ -16,6 +16,7 @@ import numpy as np
 import basix.ufl
 import ufl
 from cutfemx import cutfemx_cpp as _cpp
+from cutfemx import extensions as _extensions
 from cutfemx.cut import CutMesh
 from dolfinx import default_scalar_type, fem, la
 from dolfinx.fem import Function
@@ -423,6 +424,49 @@ def _unsupported_packed_data(constants: Any | None, coeffs: Any | None) -> None:
         )
 
 
+def _normalise_extension_terms(extension_terms: Sequence[Any] | None) -> list[Any]:
+    if extension_terms is None:
+        return []
+
+    terms = []
+    for item in extension_terms:
+        if isinstance(item, _extensions.ExtensionPenaltyTerm):
+            term = item
+        elif isinstance(item, tuple) and len(item) == 3:
+            term, cut_data, aggregation = item
+            if not isinstance(term, _extensions.ExtensionPenaltyTerm):
+                raise TypeError(
+                    "Extension term tuples must be "
+                    "(ExtensionPenaltyTerm, CutData, CellAggregation)"
+                )
+            term = term.with_domain(cut_data, aggregation)
+        else:
+            raise TypeError(
+                "extension_terms entries must be ExtensionPenaltyTerm objects "
+                "bound to cut_data/aggregation, or "
+                "(ExtensionPenaltyTerm, CutData, CellAggregation) tuples"
+            )
+
+        if term.cut_data is None or term.aggregation is None:
+            raise ValueError(
+                "MatrixCSR extension terms must be bound to cut_data and aggregation"
+            )
+        terms.append(term)
+    return terms
+
+
+def _assemble_extension_terms(A: la.MatrixCSR, terms: Sequence[Any]) -> None:
+    for term in terms:
+        _extensions.assemble_extension_penalty(
+            A,
+            term.V,
+            term.cut_data,
+            term.aggregation,
+            beta=term.beta,
+            quadrature_degree=term.quadrature_degree,
+        )
+
+
 def _cpp_bcs_by_block(bcs: Sequence[Sequence[Any]]) -> list[list[Any]]:
     return [[bc._cpp_object for bc in block] for block in bcs]
 
@@ -591,10 +635,32 @@ def create_sparsity_pattern(a: Any) -> Any:
     return fem.create_sparsity_pattern(a)
 
 
-def create_matrix(a: Any, block_mode: la.BlockMode | None = None) -> la.MatrixCSR:
+def create_matrix(
+    a: Any,
+    block_mode: la.BlockMode | None = None,
+    extension_terms: Sequence[Any] | None = None,
+) -> la.MatrixCSR:
     """Create a MatrixCSR compatible with a runtime CutFEMx form."""
     if not isinstance(a, CutForm):
+        if extension_terms is not None:
+            raise NotImplementedError(
+                "Extension terms are currently supported for CutFEMx runtime forms only."
+            )
         return fem.create_matrix(a, block_mode)
+
+    terms = _normalise_extension_terms(extension_terms)
+    if terms and block_mode is not None:
+        raise NotImplementedError(
+            "MatrixCSR extension terms are currently supported with default block mode only."
+        )
+    if terms:
+        return la.MatrixCSR(
+            _cpp.fem.create_matrix_with_extension_sparsity_float64(
+                a._cpp_object,
+                [term.V._cpp_object for term in terms],
+                [term.aggregation._cpp_object for term in terms],
+            )
+        )
 
     if block_mode is None:
         return la.MatrixCSR(_cpp.fem.create_matrix_float64(a._cpp_object))
@@ -643,12 +709,18 @@ def assemble_matrix(
     constants: Any | None = None,
     coeffs: Any | None = None,
     block_mode: la.BlockMode | None = None,
+    extension_terms: Sequence[Any] | None = None,
 ) -> la.MatrixCSR:
     """Assemble a bilinear runtime form into a new MatrixCSR."""
     if isinstance(a, CutForm):
-        A = create_matrix(a, block_mode)
-        _assemble_matrix_csr(A, a, bcs, diag, constants, coeffs)
+        terms = _normalise_extension_terms(extension_terms)
+        A = create_matrix(a, block_mode, terms)
+        _assemble_matrix_csr(A, a, bcs, diag, constants, coeffs, terms)
         return A
+    if extension_terms is not None:
+        raise NotImplementedError(
+            "Extension terms are currently supported for CutFEMx runtime forms only."
+        )
     return fem.assemble_matrix(a, bcs, diag, constants, coeffs, block_mode)
 
 
@@ -660,14 +732,21 @@ def _assemble_matrix_csr(
     diag: float = 1.0,
     constants: Any | None = None,
     coeffs: Any | None = None,
+    extension_terms: Sequence[Any] | None = None,
 ) -> la.MatrixCSR:
     """Assemble a bilinear runtime form into an existing MatrixCSR."""
     if not isinstance(a, CutForm):
+        if extension_terms is not None:
+            raise NotImplementedError(
+                "Extension terms are currently supported for CutFEMx runtime forms only."
+            )
         return fem.assemble_matrix(A, a, bcs, diag, constants, coeffs)
 
     _unsupported_packed_data(constants, coeffs)
+    terms = _normalise_extension_terms(extension_terms)
     cpp_bcs = [] if bcs is None else [bc._cpp_object for bc in bcs]
     _cpp.fem.assemble_matrix_float64(A._cpp_object, a._cpp_object, cpp_bcs)
+    _assemble_extension_terms(A, terms)
 
     if _same_function_space(a.function_spaces[0], a.function_spaces[1]):
         _cpp.fem.insert_diagonal_float64(

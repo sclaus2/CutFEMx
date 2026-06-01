@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import functools
+import numbers
 from typing import Any
 
 from petsc4py import PETSc
@@ -16,6 +17,7 @@ from dolfinx.fem import petsc as _dolfinx_petsc
 from dolfinx.fem.bcs import DirichletBC
 
 from cutfemx import cutfemx_cpp as _cpp
+from cutfemx import extensions as _extensions
 from cutfemx.fem import ActiveDomain, CutForm
 
 __all__ = [
@@ -43,15 +45,89 @@ def _unsupported_packed_data(constants: Any | None, coeffs: Any | None) -> None:
         )
 
 
+def _normalise_extension_terms(extension_terms: Sequence[Any] | None) -> list[Any]:
+    if extension_terms is None:
+        return []
+
+    terms = []
+    for item in extension_terms:
+        if isinstance(item, _extensions.ExtensionPenaltyTerm):
+            term = item
+        elif isinstance(item, tuple) and len(item) == 3:
+            term, cut_data, aggregation = item
+            if not isinstance(term, _extensions.ExtensionPenaltyTerm):
+                raise TypeError(
+                    "Extension term tuples must be "
+                    "(ExtensionPenaltyTerm, CutData, CellAggregation)"
+                )
+            term = term.with_domain(cut_data, aggregation)
+        else:
+            raise TypeError(
+                "extension_terms entries must be ExtensionPenaltyTerm objects "
+                "bound to cut_data/aggregation, or "
+                "(ExtensionPenaltyTerm, CutData, CellAggregation) tuples"
+            )
+
+        if term.cut_data is None or term.aggregation is None:
+            raise ValueError(
+                "PETSc extension terms must be bound to cut_data and aggregation"
+            )
+        terms.append(term)
+    return terms
+
+
+def _assemble_extension_terms(A: PETSc.Mat, terms: Sequence[Any]) -> None:
+    petsc_mod = _runtime_petsc_module()
+    for term in terms:
+        type_name = _extensions._geometry_type_name(term.V)
+        if isinstance(term.beta, numbers.Real):
+            getattr(petsc_mod, f"assemble_extension_penalty_scalar_{type_name}")(
+                A,
+                term.V._cpp_object,
+                term.cut_data._cpp_object,
+                term.aggregation._cpp_object,
+                PETSc.ScalarType(term.beta),
+                term.quadrature_degree,
+            )
+        else:
+            values = _extensions._cellwise_values(
+                term.beta, term.V.mesh, term.V.mesh.geometry.x.dtype
+            )
+            getattr(petsc_mod, f"assemble_extension_penalty_cellwise_{type_name}")(
+                A,
+                term.V._cpp_object,
+                term.cut_data._cpp_object,
+                term.aggregation._cpp_object,
+                values,
+                term.quadrature_degree,
+            )
+
+
 def create_vector(V: Any, kind: str | None = None) -> PETSc.Vec:
     """Create a PETSc vector for a CutFEMx/DOLFINx space or space list."""
     return _dolfinx_petsc.create_vector(V, kind)
 
 
-def create_matrix(a: Any, kind: str | None = None) -> PETSc.Mat:
+def create_matrix(
+    a: Any,
+    kind: str | None = None,
+    extension_terms: Sequence[Any] | None = None,
+) -> PETSc.Mat:
     """Create a PETSc matrix for a CutFEMx or DOLFINx bilinear form."""
     if isinstance(a, CutForm):
-        return _runtime_petsc_module().create_matrix_float64(a._cpp_object, kind)
+        terms = _normalise_extension_terms(extension_terms)
+        if not terms:
+            return _runtime_petsc_module().create_matrix_float64(a._cpp_object, kind)
+        return _runtime_petsc_module().create_matrix_with_extension_sparsity_float64(
+            a._cpp_object,
+            [term.V._cpp_object for term in terms],
+            [term.aggregation._cpp_object for term in terms],
+            kind,
+        )
+    if extension_terms is not None:
+        raise NotImplementedError(
+            "Extension terms are currently supported for CutFEMx runtime forms only."
+        )
     return _dolfinx_petsc.create_matrix(a, kind)
 
 
@@ -100,12 +176,18 @@ def assemble_matrix(
     constants: Any | None = None,
     coeffs: Any | None = None,
     kind: str | None = None,
+    extension_terms: Sequence[Any] | None = None,
 ) -> PETSc.Mat:
     """Assemble a bilinear CutFEMx or DOLFINx form into a PETSc matrix."""
     if isinstance(a, CutForm):
-        A = create_matrix(a, kind)
-        assemble_matrix(A, a, bcs, diagonal, constants, coeffs)
+        terms = _normalise_extension_terms(extension_terms)
+        A = create_matrix(a, kind, terms)
+        assemble_matrix(A, a, bcs, diagonal, constants, coeffs, terms)
         return A
+    if extension_terms is not None:
+        raise NotImplementedError(
+            "Extension terms are currently supported for CutFEMx runtime forms only."
+        )
     return _dolfinx_petsc.assemble_matrix(
         a, bcs, diagonal, constants, coeffs, kind
     )
@@ -119,13 +201,16 @@ def _(
     diagonal: float = 1.0,
     constants: Any | None = None,
     coeffs: Any | None = None,
+    extension_terms: Sequence[Any] | None = None,
 ) -> PETSc.Mat:
     """Assemble a bilinear CutFEMx or DOLFINx form into an existing PETSc matrix."""
     if isinstance(a, CutForm):
         _unsupported_packed_data(constants, coeffs)
+        terms = _normalise_extension_terms(extension_terms)
         cpp_bcs = [] if bcs is None else [bc._cpp_object for bc in bcs]
         petsc_mod = _runtime_petsc_module()
         petsc_mod.assemble_matrix_float64(A, a._cpp_object, cpp_bcs)
+        _assemble_extension_terms(A, terms)
         if a.function_spaces[0] is a.function_spaces[1]:
             petsc_mod.insert_diagonal_float64(
                 A,
@@ -134,6 +219,10 @@ def _(
                 PETSc.ScalarType(diagonal),
             )
         return A
+    if extension_terms is not None:
+        raise NotImplementedError(
+            "Extension terms are currently supported for CutFEMx runtime forms only."
+        )
     return _dolfinx_petsc.assemble_matrix(A, a, bcs, diagonal, constants, coeffs)
 
 
