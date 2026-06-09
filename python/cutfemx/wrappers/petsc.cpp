@@ -374,8 +374,8 @@ void declare_runtime_petsc(nb::module_& m, std::string type)
         }
 
         const std::array<int, 2> data_bs
-            = {form.function_spaces().at(0)->dofmaps(0)->index_map_bs(),
-               form.function_spaces().at(1)->dofmaps(0)->index_map_bs()};
+            = {form.function_spaces().at(0)->dofmaps().front()->index_map_bs(),
+               form.function_spaces().at(1)->dofmaps().front()->index_map_bs()};
 
         if (data_bs[0] == data_bs[1])
         {

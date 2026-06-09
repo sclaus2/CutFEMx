@@ -35,7 +35,6 @@ from mpi4py import MPI
 
 import cutfemx
 import numpy as np
-from runintgen import dSq, dxq
 
 import ufl
 from dolfinx import fem, la, mesh
@@ -166,13 +165,21 @@ def main() -> None:
 
         # ## Measures
         #
-        # ``dxq`` and ``dSq`` combine standard entity arrays with runtime
-        # quadrature rules. This is the essential mixed-quadrature pattern for
-        # cut DG: ordinary entities stay ordinary, and only genuinely cut pieces
-        # carry generated runtime quadrature.
-        dx_omega = dxq(0, domain=msh, subdomain_data=[inside_cells, cell_rules])
-        dS_omega = dSq(0, domain=msh, subdomain_data=[inside_skeleton_facets, skeleton_rules])
-        dx_gamma = dxq(1, domain=msh, subdomain_data=interface_rules)
+        # Runtime quadrature is carried directly by ordinary UFL measures in
+        # subdomain_data. Mixed payloads combine standard entity arrays with
+        # runtime rules for genuinely cut pieces.
+        dx_omega = ufl.Measure(
+            "dx", domain=msh, subdomain_id=0, subdomain_data=[inside_cells, cell_rules]
+        )
+        dS_omega = ufl.Measure(
+            "dS",
+            domain=msh,
+            subdomain_id=0,
+            subdomain_data=[inside_skeleton_facets, skeleton_rules],
+        )
+        dx_gamma = ufl.Measure(
+            "dx", domain=msh, subdomain_id=1, subdomain_data=interface_rules
+        )
         dS_ghost = ufl.Measure("dS", domain=msh, subdomain_id=2, subdomain_data=ghost_facets)
         n_gamma = cutfemx.normal(phi)
 

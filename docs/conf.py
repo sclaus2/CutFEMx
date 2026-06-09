@@ -18,8 +18,8 @@ try:
     version = ".".join(cutfemx.__version__.split(".")[:2])  # X.Y format
 except ImportError:
     # Fallback if package not built
-    release = "0.1.0"
-    version = "0.1"
+    release = "0.2.0"
+    version = "0.2"
 
 # -- Project information -----------------------------------------------------
 project = "CutFEMx"

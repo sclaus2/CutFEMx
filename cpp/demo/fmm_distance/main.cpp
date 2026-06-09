@@ -173,7 +173,7 @@ int main(int argc, char* argv[])
     auto dofmap = V->dofmap();
     const auto& geometry = bg_mesh->geometry();
     std::span<const T> x = geometry.x();
-    auto geom_dofmap = geometry.dofmap();
+    auto geom_dofmap = geometry.dofmaps().front();
     
     // Sphere parameters
     const double center[3] = {0.5, 0.5, 0.5};

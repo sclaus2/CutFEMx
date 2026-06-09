@@ -19,8 +19,7 @@ def runtime_quadrature_mesh(mesh, order: int) -> QuadratureRules:
     points_ref = np.ascontiguousarray(points_ref, dtype=np.float64)
     weights_ref = np.ascontiguousarray(weights_ref, dtype=np.float64)
 
-    cmap_attr = mesh.geometry.cmap
-    cmap = cmap_attr() if callable(cmap_attr) else cmap_attr
+    cmap = mesh.geometry.cmaps[0]
     element = basix.create_element(
         basix.ElementFamily.P,
         mesh.basix_cell(),
@@ -30,7 +29,7 @@ def runtime_quadrature_mesh(mesh, order: int) -> QuadratureRules:
     phi = element.tabulate(1, points_ref)
     dphi = phi[1:, :, :, 0].transpose(1, 2, 0)
 
-    x_dofmap = mesh.geometry.dofmap
+    x_dofmap = mesh.geometry.dofmaps[0]
     x_coords = mesh.geometry.x
     num_cells = mesh.topology.index_map(tdim).size_local
     num_points_per_cell = weights_ref.size

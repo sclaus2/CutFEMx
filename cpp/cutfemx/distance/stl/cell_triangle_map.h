@@ -78,7 +78,7 @@ void get_cell_vertices(
 {
     const dolfinx::mesh::Geometry<Real>& geometry = mesh.geometry();
     std::span<const Real> x = geometry.x();
-    auto dofmap = geometry.dofmap();
+    auto dofmap = geometry.dofmaps().front();
     
     // dofmap is an mdspan, access via (cell, local_dof)
     const std::size_t num_dofs_per_cell = dofmap.extent(1);
@@ -317,4 +317,3 @@ CellTriangleMap build_cell_triangle_map(
 }
 
 } // namespace cutfemx::distance
-

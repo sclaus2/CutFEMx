@@ -22,7 +22,6 @@ from mpi4py import MPI
 
 import cutfemx
 from dolfinx import fem, mesh
-from runintgen import dsq
 
 
 def _assemble_scalar(form) -> float:
@@ -176,12 +175,10 @@ def main() -> None:
     standard_area = _assemble_scalar(
         one * ufl.Measure("ds", domain=msh, subdomain_data=standard_tags)(1)
     )
-    cut_patch_area = _assemble_scalar(
-        one * dsq(domain=msh, quadrature_provider=patch_rules)
-    )
-    perimeter = _assemble_scalar(
-        one * dsq(domain=msh, quadrature_provider=curve_rules)
-    )
+    ds_patch = ufl.Measure("ds", domain=msh, subdomain_id=2, subdomain_data=patch_rules)
+    ds_curve = ufl.Measure("ds", domain=msh, subdomain_id=3, subdomain_data=curve_rules)
+    cut_patch_area = _assemble_scalar(one * ds_patch)
+    perimeter = _assemble_scalar(one * ds_curve)
 
     circle_radius = _boundary_circle_radius(centre, args.radius)
     exact_perimeter = 2.0 * np.pi * circle_radius

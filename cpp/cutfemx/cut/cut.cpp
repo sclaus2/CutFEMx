@@ -426,7 +426,7 @@ void build_mesh_view(CutData<T>& cut_data)
   const auto cutcells_cell_type = mesh::dolfinx_to_cutcells_cell_type(cell_type);
   const int num_vertices = cutcells::cell::get_num_vertices(cutcells_cell_type);
 
-  auto x_dofmap = cut_data.mesh_owner->geometry().dofmap();
+  auto x_dofmap = cut_data.mesh_owner->geometry().dofmaps().front();
   const std::size_t x_dofmap_width = x_dofmap.extent(1);
   if (static_cast<int>(x_dofmap_width) < num_vertices)
   {

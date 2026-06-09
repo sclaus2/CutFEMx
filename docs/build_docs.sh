@@ -1,5 +1,3 @@
-#!/bin/bash
-
 # CutFEMx Documentation Build Script
 # This script helps build and serve the documentation locally
 
@@ -11,6 +9,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+DOCS_CONDA_ENV="${CUTFEMX_DOCS_CONDA_ENV:-${CONDA_DEFAULT_ENV:-}}"
 
 # Function to print colored output
 print_status() {
@@ -57,21 +56,26 @@ initialize_conda() {
 
 # Function to activate conda environment
 activate_env() {
-    print_status "Setting up conda environment: fenicsx-pr-clean"
+    if [ -z "$DOCS_CONDA_ENV" ]; then
+        print_status "Using the current shell environment"
+        return
+    fi
+
+    print_status "Setting up conda environment: ${DOCS_CONDA_ENV}"
     
     # Initialize conda
     initialize_conda
     
     # Check if environment exists
-    if ! conda env list | grep -q "fenicsx-pr-clean"; then
-        print_error "Conda environment 'fenicsx-pr-clean' not found"
+    if ! conda env list | grep -q "${DOCS_CONDA_ENV}"; then
+        print_error "Conda environment '${DOCS_CONDA_ENV}' not found"
         print_status "Available environments:"
         conda env list
         exit 1
     fi
     
     # Activate environment
-    conda activate fenicsx-pr-clean
+    conda activate "${DOCS_CONDA_ENV}"
     print_success "Environment activated: $(conda info --envs | grep '*' | awk '{print $1}')"
 }
 
@@ -167,22 +171,22 @@ show_help() {
     echo "Usage: $0 [COMMAND]"
     echo
     echo "Commands:"
-    echo "  install     Install documentation dependencies (activates fenicsx-pr-clean env)"
+    echo "  install     Install documentation dependencies (uses active/configured env)"
     echo "  clean       Clean build directory"
-    echo "  build       Build documentation (activates fenicsx-pr-clean env)"
+    echo "  build       Build documentation (uses active/configured env)"
     echo "  serve       Serve documentation locally (after building)"
-    echo "  live        Build and serve with live reload (activates fenicsx-pr-clean env)"
-    echo "  check       Check for broken links (activates fenicsx-pr-clean env)"
-    echo "  pdf         Build PDF documentation (activates fenicsx-pr-clean env)"
-    echo "  all         Clean, build, and serve documentation (activates fenicsx-pr-clean env)"
+    echo "  live        Build and serve with live reload (uses active/configured env)"
+    echo "  check       Check for broken links (uses active/configured env)"
+    echo "  pdf         Build PDF documentation (uses active/configured env)"
+    echo "  all         Clean, build, and serve documentation (uses active/configured env)"
     echo "  help        Show this help message"
     echo
     echo "Prerequisites:"
-    echo "  - Conda environment 'fenicsx-pr-clean' must exist"
+    echo "  - Activate a suitable build environment, or set CUTFEMX_DOCS_CONDA_ENV"
     echo "  - Run from the docs directory"
     echo
     echo "Examples:"
-    echo "  $0 install     # Install dependencies in fenicsx-pr-clean environment"
+    echo "  $0 install     # Install dependencies in the active or configured environment"
     echo "  $0 build       # Build documentation"
     echo "  $0 live        # Start live development server"
     echo "  $0 all         # Full build and serve"

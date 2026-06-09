@@ -6,6 +6,8 @@
 
 """Main module for CutFEMx"""
 
+__version__ = "0.2.0"
+
 from cutfemx import cutfemx_cpp as cutfemx_cpp
 from cutfemx import distance as distance
 from cutfemx import extensions as extensions

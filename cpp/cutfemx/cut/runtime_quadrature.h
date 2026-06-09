@@ -101,8 +101,9 @@ struct RuntimeQuadrature
           "RuntimeQuadrature offset and parent-map sizes are inconsistent");
     }
 
-    const dolfinx::fem::CoordinateElement<T>& cmap = _mesh->geometry().cmap();
-    const auto x_dofmap = _mesh->geometry().dofmap();
+    const dolfinx::fem::CoordinateElement<T>& cmap
+        = _mesh->geometry().cmaps().front();
+    const auto x_dofmap = _mesh->geometry().dofmaps().front();
     std::span<const T> x = _mesh->geometry().x();
     const std::size_t num_coordinate_dofs = cmap.dim();
     if (x_dofmap.extent(1) != num_coordinate_dofs)

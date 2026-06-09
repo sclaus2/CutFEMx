@@ -94,13 +94,13 @@ interior_entities = np.union1d(active_entities, intersected_entities)
 interior_ids = cutfemx.interior_facets_for_cells(msh, interior_entities)
 
 # Measures
-dxq = ufl.Measure(
+dx_omega = ufl.Measure(
     "dx",
     subdomain_id=0,
     subdomain_data=[uncut_cells, fluid_quad],
     domain=msh,
 )
-dsq = ufl.Measure(
+dx_gamma = ufl.Measure(
     "dx",
     subdomain_id=1,
     subdomain_data=interface_quad,
@@ -121,14 +121,14 @@ def sigma(u, p):
 f = Constant(msh, default_scalar_type((0.0, 0.0)))
 
 # Bulk terms
-a = inner(sigma(u, p), sym(grad(v))) * dxq + div(u) * q * dxq 
+a = inner(sigma(u, p), sym(grad(v))) * dx_omega + div(u) * q * dx_omega 
 
 # Nitsche on Interface (u=0)
 n_gamma = -n_K
 
-a += -dot(dot(sigma(u, p), n_gamma), v) * dsq
-a += -dot(dot(sigma(v, q), n_gamma), u) * dsq # Symmetric Nitsche
-a += (gamma_u / h) * inner(u, v) * dsq
+a += -dot(dot(sigma(u, p), n_gamma), v) * dx_gamma
+a += -dot(dot(sigma(v, q), n_gamma), u) * dx_gamma # Symmetric Nitsche
+a += (gamma_u / h) * inner(u, v) * dx_gamma
 
 # Velocity ghost penalty on the cut-boundary ghost facets.
 a += avg(gamma_g) * avg(h) * inner(jump(grad(u), n), jump(grad(v), n)) * dS_ghost
@@ -136,7 +136,7 @@ a += avg(gamma_g) * avg(h) * inner(jump(grad(u), n), jump(grad(v), n)) * dS_ghos
 # Pressure stabilization on all interior facets of the active domain.
 a += avg(gamma_p) * avg(h)**3 * inner(jump(grad(p), n), jump(grad(q), n)) * dS_interior
 
-L = inner(f, v) * dxq
+L = inner(f, v) * dx_omega
 
 # 6. Boundary Conditions (Physical Domain)
 # Inflow (x = -1)

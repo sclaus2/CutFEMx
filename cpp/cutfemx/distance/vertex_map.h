@@ -38,7 +38,7 @@ struct VertexMapCache {
         auto cell_to_vertex = topology->connectivity(tdim, 0);
         
         const Real* x = mesh.geometry().x().data();
-        auto geom_dofmap = mesh.geometry().dofmap();
+        auto geom_dofmap = mesh.geometry().dofmaps().front();
         
         // Build vert_to_geom and vertex_coords
         vert_to_geom.assign(num_vertices, -1);

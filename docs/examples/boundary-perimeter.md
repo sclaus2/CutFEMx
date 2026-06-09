@@ -110,19 +110,17 @@ curve_rules = cutfemx.runtime_quadrature(cut_data, "phi=0", args.order)
 patch_rules = cutfemx.runtime_quadrature(cut_data, "phi<0", args.order)
 ```
 
-The `runintgen.dsq` measure is the runtime counterpart of an exterior-facet
-measure. It is used for both integrations, with the geometric dimension encoded
-in the quadrature provider:
+Ordinary UFL `ds` measures carry the runtime quadrature providers in
+`subdomain_data`. They are used for both integrations, with the geometric
+dimension encoded in the quadrature provider:
 
 ```python
 one = fem.Constant(msh, np.float64(1.0))
 
-cut_patch_area = _assemble_scalar(
-    one * dsq(domain=msh, quadrature_provider=patch_rules)
-)
-perimeter = _assemble_scalar(
-    one * dsq(domain=msh, quadrature_provider=curve_rules)
-)
+ds_patch = ufl.Measure("ds", domain=msh, subdomain_id=2, subdomain_data=patch_rules)
+ds_curve = ufl.Measure("ds", domain=msh, subdomain_id=3, subdomain_data=curve_rules)
+cut_patch_area = _assemble_scalar(one * ds_patch)
+perimeter = _assemble_scalar(one * ds_curve)
 ```
 
 ```{admonition} Surface and curve integrals

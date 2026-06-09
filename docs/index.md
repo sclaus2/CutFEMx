@@ -1,7 +1,7 @@
 # CutFEMx documentation
 
-CutFEMx provides cut finite element tools for the current FEniCSx development
-stack. The current Python workflow is centered around `cutfemx.cut(...)`,
+CutFEMx provides cut finite element tools for the FEniCSx 0.11 release stack.
+The current Python workflow is centered around `cutfemx.cut(...)`,
 `cutfemx.locate_entities(...)`, `cutfemx.runtime_quadrature(...)`, and
 `cutfemx.create_cut_mesh(...)`.
 

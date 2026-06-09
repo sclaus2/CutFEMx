@@ -104,13 +104,13 @@ interface_quad = cutfemx.runtime_quadrature(cut_data, "phi=0", order)
 They are attached to measures:
 
 ```python
-dxq = ufl.Measure(
+dx_omega = ufl.Measure(
     "dx",
     subdomain_id=0,
     subdomain_data=[uncut_cells, fluid_quad],
     domain=msh,
 )
-dsq = ufl.Measure(
+dx_gamma = ufl.Measure(
     "dx",
     subdomain_id=1,
     subdomain_data=interface_quad,
@@ -118,10 +118,9 @@ dsq = ufl.Measure(
 )
 ```
 
-Here `dxq` represents integration over $\Omega_f$. The measure named `dsq` is
-also written as a UFL `"dx"` measure because the interface is cell-hosted
-runtime quadrature; geometrically it represents integration over
-$\Gamma_c$.
+Here `dx_omega` represents integration over $\Omega_f$. The `dx_gamma` measure
+is also written as a UFL `"dx"` measure because the interface is cell-hosted
+runtime quadrature; geometrically it represents integration over $\Gamma_c$.
 
 ## Taylor-Hood Space
 
@@ -165,8 +164,8 @@ The code defines the stress and bulk form as
 def sigma(u, p):
     return nu * (grad(u) + grad(u).T) - p * Identity(dim)
 
-a = inner(sigma(u, p), sym(grad(v))) * dxq + div(u) * q * dxq
-L = inner(f, v) * dxq
+a = inner(sigma(u, p), sym(grad(v))) * dx_omega + div(u) * q * dx_omega
+L = inner(f, v) * dx_omega
 ```
 
 The body force in the demo is zero:
@@ -207,9 +206,9 @@ $$
 In code:
 
 ```python
-a += -dot(dot(sigma(u, p), n_gamma), v) * dsq
-a += -dot(dot(sigma(v, q), n_gamma), u) * dsq
-a += (gamma_u / h) * inner(u, v) * dsq
+a += -dot(dot(sigma(u, p), n_gamma), v) * dx_gamma
+a += -dot(dot(sigma(v, q), n_gamma), u) * dx_gamma
+a += (gamma_u / h) * inner(u, v) * dx_gamma
 ```
 
 ```{admonition} Traction consistency
@@ -354,4 +353,3 @@ Run the complete example with:
 ```bash
 python python/demo/demo_stokes.py
 ```
-

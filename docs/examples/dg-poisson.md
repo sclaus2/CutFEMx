@@ -114,12 +114,21 @@ interface_rules = cutfemx.runtime_quadrature(cell_cut, "phi=0", args.order)
 skeleton_rules = cutfemx.runtime_quadrature(skeleton_cut, "phi<0", args.order)
 ```
 
-These rules are attached to runintgen measures:
+These rules are attached to ordinary UFL measures:
 
 ```python
-dx_omega = dxq(0, domain=msh, subdomain_data=[inside_cells, cell_rules])
-dS_omega = dSq(0, domain=msh, subdomain_data=[inside_skeleton_facets, skeleton_rules])
-dx_gamma = dxq(1, domain=msh, subdomain_data=interface_rules)
+dx_omega = ufl.Measure(
+    "dx", domain=msh, subdomain_id=0, subdomain_data=[inside_cells, cell_rules]
+)
+dS_omega = ufl.Measure(
+    "dS",
+    domain=msh,
+    subdomain_id=0,
+    subdomain_data=[inside_skeleton_facets, skeleton_rules],
+)
+dx_gamma = ufl.Measure(
+    "dx", domain=msh, subdomain_id=1, subdomain_data=interface_rules
+)
 ```
 
 The roles are:
@@ -313,4 +322,3 @@ Run the complete example with:
 ```bash
 python python/demo/demo_dg_poisson.py
 ```
-

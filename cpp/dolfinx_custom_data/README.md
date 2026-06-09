@@ -1,17 +1,17 @@
 # DOLFINx-Derived Custom-Data Form Copy
 
 This directory is the provenance area for DOLFINx-derived form and assembler
-code used by the CutFEMx runtime quadrature migration.
+code used by CutFEMx runtime quadrature assembly.
 
 Only files that carry a real CutFEMx `custom_data`/loop-index delta, or that
 must be specialized for `dolfinx_custom_data::fem::Form`, should live here. Unmodified
 DOLFINx dependencies should be reached through upstream DOLFINx includes and
 local forward declarations, not copied into this subtree.
 
-The copied files in this directory should be taken from the local patched
-DOLFINx branch that carries the `custom_data` and loop-index changes, then
-adapted only as needed to build under the `dolfinx_custom_data::fem`
-namespace. Keeping the copied sources here has two goals:
+The copied files in this directory should stay close to the matching upstream
+DOLFINx release sources. Apply only the `custom_data`/loop-index deltas and the
+namespace/build adaptations needed to build under
+`dolfinx_custom_data::fem`. Keeping the copied sources here has two goals:
 
 - make the LGPL-3.0-or-later provenance explicit;
 - make future updates from newer DOLFINx versions mechanical and reviewable.
@@ -40,11 +40,12 @@ Initial source reference:
 
 When updating from a newer DOLFINx version:
 
-1. Replace the copied files from the patched DOLFINx branch.
-2. Re-apply only the CutFEMx namespace/build adaptations.
+1. Refresh the copied files from the matching upstream DOLFINx release.
+2. Re-apply only the CutFEMx `custom_data`/loop-index and namespace/build
+   adaptations.
 3. Do not copy unchanged dependency headers; update `forward.h` and upstream
    includes instead.
-4. Keep the `custom_data` and loop-index delta aligned with the DOLFINx patch.
+4. Keep the `custom_data` and loop-index delta isolated and reviewable.
 5. Add future helpers such as form factories or sparsity-pattern builders as
    narrow adapters, not by copying the full DOLFINx `utils.h`.
 6. Re-run the CutFEMx runtime form and assembler tests.

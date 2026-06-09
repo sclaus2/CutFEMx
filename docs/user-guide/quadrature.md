@@ -125,7 +125,6 @@ cut explicitly:
 
 ```python
 from dolfinx import mesh
-from runintgen import dsq
 
 fdim = msh.topology.dim - 1
 exterior_facets = mesh.exterior_facet_indices(msh.topology)
@@ -134,15 +133,16 @@ facet_cut = cutfemx.cut(phi, exterior_facets, fdim)
 negative_facets = cutfemx.locate_entities(facet_cut, "phi<0")
 facet_rules = cutfemx.runtime_quadrature(facet_cut, "phi<0", order=4)
 
-ds_omega = dsq(
-    0,
+ds_omega = ufl.Measure(
+    "ds",
     domain=msh,
-    subdomain_data=[negative_facets, facet_rules],
+    subdomain_id=0,
+    subdomain_data=[negative_facets, facet_rules]
 )
 ```
 
-Here `dsq` is the runintgen runtime exterior-facet measure. In three
-dimensions, `"phi<0"` selects surface patches on boundary facets, while
+The runtime rules are carried directly by the ordinary UFL `ds` measure. In
+three dimensions, `"phi<0"` selects surface patches on boundary facets, while
 `"phi=0"` would select curves on those facets.
 
 ## Interior Facet Cuts
@@ -152,8 +152,6 @@ skeleton terms, and some stabilization terms. First identify the relevant
 interior facets, then cut those facets:
 
 ```python
-from runintgen import dSq
-
 active_cells = cutfemx.locate_entities(cell_cut, "phi<=0")
 skeleton_facets = cutfemx.interior_facets_for_cells(msh, active_cells)
 skeleton_cut = cutfemx.cut(phi, skeleton_facets, fdim)
@@ -161,15 +159,17 @@ skeleton_cut = cutfemx.cut(phi, skeleton_facets, fdim)
 inside_skeleton_facets = cutfemx.locate_entities(skeleton_cut, "phi<0")
 skeleton_rules = cutfemx.runtime_quadrature(skeleton_cut, "phi<0", order=4)
 
-dS_omega = dSq(
-    0,
+dS_omega = ufl.Measure(
+    "dS",
     domain=msh,
+    subdomain_id=0,
     subdomain_data=[inside_skeleton_facets, skeleton_rules],
 )
 ```
 
-The measure `dSq` is the runtime counterpart of UFL `dS`. It represents
-two-sided interior-facet integration on the selected part of each facet.
+The runtime rules are carried directly by the ordinary UFL `dS` measure. It
+represents two-sided interior-facet integration on the selected part of each
+facet.
 
 ```{admonition} Skeleton terms
 :class: formulation

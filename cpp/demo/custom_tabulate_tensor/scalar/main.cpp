@@ -33,7 +33,7 @@ int main(int argc, char* argv[])
     std::int32_t num_cells = cell_imap->size_local() + cell_imap->num_ghosts();
 
     auto x = mesh->geometry().x();
-    auto x_dofmap = mesh->geometry().dofmap();
+    auto x_dofmap = mesh->geometry().dofmaps().front();
 
     std::vector<T> coordinate_dofs(3 * x_dofmap.extent(1));
 

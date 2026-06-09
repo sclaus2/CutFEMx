@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(cutfemx VERSION 0.1.0 LANGUAGES CXX C)
+project(cutfemx VERSION 0.2.0 LANGUAGES CXX C)
 
 include(GNUInstallDirs)
 
@@ -12,7 +12,7 @@ option(BUILD_SHARED_LIBS "Build cutfemx with shared libraries." ON)
 option(CUTFEMX_USE_LOCAL_CUTCELLS
        "Build the sibling CutCells C++ source tree when available." ON)
 option(CUTFEMX_ALLOW_SYSTEM_CUTCELLS
-       "Allow CutFEMx to use a CutCells package from /usr or /usr/local." OFF)
+       "Allow CutFEMx to use a CutCells package from CMake system prefixes." OFF)
 
 set(_cutfemx_conda_prefix "$ENV{CONDA_PREFIX}")
 if(_cutfemx_conda_prefix)
@@ -66,6 +66,42 @@ find_package(nanobind 2.0.0 REQUIRED CONFIG)
 find_package(MPI REQUIRED)
 find_package(OpenMP REQUIRED COMPONENTS CXX)
 
+function(_cutfemx_path_is_system_prefix OUT_VAR CANDIDATE_PATH)
+  set(${OUT_VAR} OFF PARENT_SCOPE)
+  if(NOT CANDIDATE_PATH
+     OR CANDIDATE_PATH MATCHES "^\\$<"
+     OR CANDIDATE_PATH MATCHES "-NOTFOUND$")
+    return()
+  endif()
+
+  get_filename_component(_cutfemx_candidate_abs "${CANDIDATE_PATH}" ABSOLUTE)
+  foreach(_cutfemx_system_prefix IN LISTS CMAKE_SYSTEM_PREFIX_PATH)
+    if(NOT _cutfemx_system_prefix)
+      continue()
+    endif()
+    get_filename_component(_cutfemx_system_prefix_abs
+                           "${_cutfemx_system_prefix}" ABSOLUTE)
+
+    if(_cutfemx_candidate_abs STREQUAL _cutfemx_system_prefix_abs)
+      set(${OUT_VAR} ON PARENT_SCOPE)
+      return()
+    endif()
+
+    string(LENGTH "${_cutfemx_system_prefix_abs}" _cutfemx_prefix_len)
+    string(SUBSTRING "${_cutfemx_candidate_abs}" 0
+                     "${_cutfemx_prefix_len}" _cutfemx_candidate_prefix)
+    if(_cutfemx_candidate_prefix STREQUAL _cutfemx_system_prefix_abs)
+      string(SUBSTRING "${_cutfemx_candidate_abs}" "${_cutfemx_prefix_len}"
+                       1 _cutfemx_candidate_separator)
+      if(_cutfemx_candidate_separator STREQUAL "/"
+         OR _cutfemx_candidate_separator STREQUAL "\\")
+        set(${OUT_VAR} ON PARENT_SCOPE)
+        return()
+      endif()
+    endif()
+  endforeach()
+endfunction()
+
 function(_cutfemx_reject_system_cutcells)
   if(CUTFEMX_ALLOW_SYSTEM_CUTCELLS)
     return()
@@ -102,12 +138,13 @@ function(_cutfemx_reject_system_cutcells)
        OR _cutfemx_cutcells_path MATCHES "-NOTFOUND$")
       continue()
     endif()
-    if(_cutfemx_cutcells_path MATCHES "^/usr/local(/|$)"
-       OR _cutfemx_cutcells_path MATCHES "^/usr(/|$)")
+    _cutfemx_path_is_system_prefix(_cutfemx_is_system_cutcells_path
+                                   "${_cutfemx_cutcells_path}")
+    if(_cutfemx_is_system_cutcells_path)
       message(FATAL_ERROR
         "Refusing to use CutCells from '${_cutfemx_cutcells_path}'. "
         "Use the sibling CutCells source tree, set CutCells_DIR to the "
-        "fenicsx-pr-clean environment, or configure with "
+        "active conda environment, or configure with "
         "-DCUTFEMX_ALLOW_SYSTEM_CUTCELLS=ON if this system install is intentional.")
     endif()
   endforeach()
@@ -115,18 +152,19 @@ endfunction()
 
 function(_cutfemx_find_packaged_cutcells)
   if(DEFINED CutCells_DIR AND NOT CUTFEMX_ALLOW_SYSTEM_CUTCELLS)
-    if(CutCells_DIR MATCHES "^/usr/local(/|$)"
-       OR CutCells_DIR MATCHES "^/usr(/|$)")
+    _cutfemx_path_is_system_prefix(_cutfemx_is_system_cutcells_dir
+                                   "${CutCells_DIR}")
+    if(_cutfemx_is_system_cutcells_dir)
       message(FATAL_ERROR
         "Refusing to use CutCells_DIR='${CutCells_DIR}'. "
         "Use the sibling CutCells source tree, set CutCells_DIR to the "
-        "fenicsx-pr-clean environment, or configure with "
+        "active conda environment, or configure with "
         "-DCUTFEMX_ALLOW_SYSTEM_CUTCELLS=ON if this system install is intentional.")
     endif()
   endif()
 
   if(CUTFEMX_ALLOW_SYSTEM_CUTCELLS)
-    find_package(CutCells REQUIRED CONFIG)
+    find_package(CutCells 0.4.0 REQUIRED CONFIG)
     return()
   endif()
 
@@ -140,7 +178,7 @@ function(_cutfemx_find_packaged_cutcells)
       "${_cutfemx_conda_prefix}/lib/cmake/cutcells")
   endif()
 
-  find_package(CutCells REQUIRED CONFIG
+  find_package(CutCells 0.4.0 REQUIRED CONFIG
     PATHS ${_cutfemx_cutcells_hints}
     NO_DEFAULT_PATH)
 endfunction()

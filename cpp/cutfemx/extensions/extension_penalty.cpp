@@ -67,8 +67,8 @@ std::vector<T> coordinate_dofs(const dolfinx::mesh::Mesh<T>& mesh,
                                std::int32_t cell)
 {
   const int gdim = mesh.geometry().dim();
-  const auto& cmap = mesh.geometry().cmap();
-  const auto x_dofmap = mesh.geometry().dofmap();
+  const auto& cmap = mesh.geometry().cmaps().front();
+  const auto x_dofmap = mesh.geometry().dofmaps().front();
   const std::span<const T> x = mesh.geometry().x();
   const std::size_t num_coordinate_dofs = cmap.dim();
 
@@ -96,7 +96,7 @@ void pull_back_to_cell(const dolfinx::mesh::Mesh<T>& mesh,
 {
   const int gdim = mesh.geometry().dim();
   const int tdim = mesh.topology()->dim();
-  const auto& cmap = mesh.geometry().cmap();
+  const auto& cmap = mesh.geometry().cmaps().front();
   const std::size_t num_coordinate_dofs = cmap.dim();
 
   using mdspan2_t = md::mdspan<T, md::dextents<std::size_t, 2>>;
@@ -420,7 +420,7 @@ ExtensionQuadrature<T> extension_quadrature(
   using cmdspan2_t = md::mdspan<const T, md::dextents<std::size_t, 2>>;
   using cmdspan4_t = md::mdspan<const T, md::dextents<std::size_t, 4>>;
 
-  const auto& cmap = mesh->geometry().cmap();
+  const auto& cmap = mesh->geometry().cmaps().front();
   const std::array<std::size_t, 4> phi_shape
       = cmap.tabulate_shape(1, nq);
   std::vector<T> phi_storage(std::reduce(

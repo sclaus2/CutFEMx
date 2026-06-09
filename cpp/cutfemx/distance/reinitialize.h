@@ -127,7 +127,7 @@ SurfaceMesh<Real> extract_surface_from_levelset(
     surface.X.assign(static_cast<std::size_t>(3 * num_interface_vertices),
                      Real(0));
     const std::span<const Real> x = interface_mesh->geometry().x();
-    auto x_dofmap = interface_mesh->geometry().dofmap();
+    auto x_dofmap = interface_mesh->geometry().dofmaps().front();
     for (std::int32_t c = 0; c < num_interface_cells; ++c) {
         auto cell_vertices = cell_to_vertex->links(c);
         if (cell_vertices.size()

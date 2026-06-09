@@ -383,7 +383,7 @@ $$
 The code uses the same cut volume measure as the variational form:
 
 ```python
-error_form = cutfemx.fem.form((uh - u_exact) ** 2 * dxq)
+error_form = cutfemx.fem.form((uh - u_exact) ** 2 * dx_omega)
 error_sq = cutfemx.fem.assemble_scalar(error_form)
 error = np.sqrt(comm.allreduce(error_sq, op=MPI.SUM))
 ```

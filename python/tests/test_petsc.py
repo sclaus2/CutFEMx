@@ -36,11 +36,11 @@ def test_petsc_runtime_vector_and_matrix_match_matrixcsr():
 
     cutter = cutfemx.cut(level_set)
     rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
-    dxq = ufl.Measure("dx", domain=msh, subdomain_data=rules)
+    dx_runtime = ufl.Measure("dx", domain=msh, subdomain_data=rules)
     u = ufl.TrialFunction(V)
     v = ufl.TestFunction(V)
-    L = cutfemx.fem.form(v * dxq)
-    a = cutfemx.fem.form(u * v * dxq)
+    L = cutfemx.fem.form(v * dx_runtime)
+    a = cutfemx.fem.form(u * v * dx_runtime)
 
     b_ref = cutfemx.fem.assemble_vector(L)
     b_ref.scatter_reverse(la.InsertMode.add)
@@ -77,10 +77,10 @@ def test_petsc_runtime_matrix_accepts_extension_terms():
     cut_data = cutfemx.cut(level_set)
     selector = "phi<0"
     rules = cutfemx.runtime_quadrature(cut_data, selector, order=2)
-    dxq = ufl.Measure("dx", domain=msh, subdomain_data=rules)
+    dx_runtime = ufl.Measure("dx", domain=msh, subdomain_data=rules)
     u = ufl.TrialFunction(V)
     v = ufl.TestFunction(V)
-    a = cutfemx.fem.form(u * v * dxq)
+    a = cutfemx.fem.form(u * v * dx_runtime)
 
     aggregation = cutfemx.extensions.create_cell_aggregation(
         cut_data,
@@ -121,7 +121,7 @@ def test_petsc_runtime_matrix_accepts_mixed_subspace_extension_terms():
     cut_data = cutfemx.cut(level_set)
     selector = "phi<0"
     rules = cutfemx.runtime_quadrature(cut_data, selector, order=2)
-    dxq = ufl.Measure("dx", domain=msh, subdomain_data=rules)
+    dx_runtime = ufl.Measure("dx", domain=msh, subdomain_data=rules)
 
     w = ufl.TrialFunction(W)
     z = ufl.TestFunction(W)
@@ -129,7 +129,7 @@ def test_petsc_runtime_matrix_accepts_mixed_subspace_extension_terms():
     v, q = ufl.split(z)
     a = cutfemx.fem.form(
         (ufl.inner(ufl.grad(u), ufl.grad(v)) - ufl.div(v) * p - ufl.div(u) * q)
-        * dxq
+        * dx_runtime
     )
 
     aggregation = cutfemx.extensions.create_cell_aggregation(

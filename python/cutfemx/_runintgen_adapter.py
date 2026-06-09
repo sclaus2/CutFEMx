@@ -762,7 +762,7 @@ def _compute_physical_points(
 ) -> npt.NDArray[np.float64]:
     """Map parent-cell reference quadrature points to physical points."""
     geometry = mesh.geometry
-    dofmap = geometry.dofmap
+    dofmap = geometry.dofmaps[0]
     x = geometry.x
     gdim = int(getattr(geometry, "dim", x.shape[1]))
     if rules.parent_map is None:
@@ -778,7 +778,7 @@ def _compute_physical_points(
 
     ref_points = _points_as_2d(rules.points, rules.tdim)
     physical_points = np.empty((gdim, rules.total_points), dtype=np.float64)
-    cmap = geometry.cmap()
+    cmap = geometry.cmaps[0]
     if rules.kind == "per_entity":
         if rules.offsets is None:
             raise ValueError("per-entity QuadratureRules require offsets.")

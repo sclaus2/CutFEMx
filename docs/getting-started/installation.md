@@ -1,12 +1,11 @@
 # Installation
 
-This page describes a source-based installation of the current CutFEMx
-development stack:
+This page describes a source-based installation of the current CutFEMx stack:
 
-- FEniCSx development packages: Basix, UFL, FFCx, and DOLFINx
-- `runintgen`
-- CutCells
-- CutFEMx
+- FEniCSx 0.11 release packages: Basix, UFL, FFCx, and DOLFINx
+- `runintgen` 0.1
+- CutCells 0.4
+- CutFEMx 0.2
 
 The commands below assume a Unix-like shell and an activated conda environment.
 They avoid user-specific paths; all installation prefixes are taken from the
@@ -24,9 +23,11 @@ You need:
 
 For a conda-forge environment, create and activate an environment first:
 
+Choose any environment name and keep it active for all install steps:
+
 ```bash
-conda create -n cutfemx-dev -c conda-forge python=3.13
-conda activate cutfemx-dev
+conda create -n <env-name> -c conda-forge python=3.13
+conda activate <env-name>
 ```
 
 Install the common build and runtime dependencies:
@@ -44,24 +45,69 @@ conda install -c conda-forge \
 If you use OpenMPI instead of MPICH, install a consistent MPI/PETSc stack from
 conda-forge and keep the same environment active for every build step.
 
+Before building packages from source, keep CMake and Python discovery tied to
+the active environment:
+
+```bash
+export CONDA_PREFIX="${CONDA_PREFIX:?activate the conda environment first}"
+export CMAKE_PREFIX_PATH="$CONDA_PREFIX"
+export PYTHONNOUSERSITE=1
+export CC="$CONDA_PREFIX/bin/clang"
+export CXX="$CONDA_PREFIX/bin/clang++"
+```
+
+On macOS with the conda-forge C++ toolchain, DOLFINx 0.11 may also require:
+
+```bash
+export CMAKE_ARGS="-DCMAKE_OSX_DEPLOYMENT_TARGET=13.4"
+export CXXFLAGS="-D_LIBCPP_ENABLE_EXPERIMENTAL -D_LIBCPP_HAS_NO_EXPERIMENTAL_TZDB -D_LIBCPP_HAS_NO_EXPERIMENTAL_SYNCSTREAM -D_LIBCPP_HAS_NO_INCOMPLETE_PSTL"
+```
+
+On Linux, or with a compiler toolchain that does not need these libc++
+workarounds, omit the `CMAKE_ARGS` and `CXXFLAGS` lines. If `clang`/`clang++`
+are not the compiler names in your environment, set `CC` and `CXX` to the
+compiler wrappers installed in the active conda environment.
+
 ## Install FEniCSx
 
-CutFEMx currently targets the FEniCSx development stack:
+CutFEMx currently targets the FEniCSx 0.11 source release stack:
 
-- `fenics-basix >= 0.11.0.dev0`
-- `fenics-ufl >= 2025.3.0.dev0`
-- `fenics-ffcx >= 0.11.0.dev0`
-- `fenics-dolfinx >= 0.11.0.dev0`
+- Basix: `v0.11.0`
+- UFL: `2026.1.0`
+- FFCx: `v0.11.0`
+- DOLFINx: `v0.11.0`
 
-Install the Python packages from the FEniCS `main` branches:
+UFL uses calendar-style release tags; its latest tag is `2026.1.0` rather than
+a `v0.11.0` tag. These versions match the dependency bounds declared by
+DOLFINx and FFCx `v0.11.0`.
+
+Verify the upstream tags if needed:
+
+```bash
+git ls-remote --exit-code --tags https://github.com/FEniCS/basix.git refs/tags/v0.11.0
+git ls-remote --exit-code --tags https://github.com/FEniCS/ufl.git refs/tags/2026.1.0
+git ls-remote --exit-code --tags https://github.com/FEniCS/ffcx.git refs/tags/v0.11.0
+git ls-remote --exit-code --tags https://github.com/FEniCS/dolfinx.git refs/tags/v0.11.0
+```
+
+Fetch the tagged sources:
+
+```bash
+mkdir -p fenicsx-0.11
+cd fenicsx-0.11
+
+git clone --branch v0.11.0 --depth 1 https://github.com/FEniCS/basix.git
+git clone --branch 2026.1.0 --depth 1 https://github.com/FEniCS/ufl.git
+git clone --branch v0.11.0 --depth 1 https://github.com/FEniCS/ffcx.git
+git clone --branch v0.11.0 --depth 1 https://github.com/FEniCS/dolfinx.git
+```
+
+Install Basix, UFL, and FFCx from those checkouts:
 
 ```bash
 python -m pip install --upgrade pip setuptools wheel
 
-python -m pip install --upgrade --force-reinstall --no-deps \
-  "fenics-basix @ git+https://github.com/FEniCS/basix.git@main" \
-  "fenics-ufl @ git+https://github.com/FEniCS/ufl.git@main" \
-  "fenics-ffcx @ git+https://github.com/FEniCS/ffcx.git@main"
+python -m pip install --upgrade --force-reinstall --no-deps ./basix ./ufl ./ffcx
 ```
 
 DOLFINx needs its C++ core and Python interface. Follow the DOLFINx source
@@ -69,7 +115,6 @@ installation workflow for your platform, using the same active environment as
 the install prefix. In a source checkout this has the following shape:
 
 ```bash
-git clone https://github.com/FEniCS/dolfinx.git
 cd dolfinx
 
 cmake -G Ninja -S cpp -B cpp/build \
@@ -82,7 +127,7 @@ cmake --install cpp/build
 python -m pip install --check-build-dependencies --no-build-isolation --no-deps \
   ./python
 
-cd ..
+cd ../..
 ```
 
 Verify the FEniCSx installation:
@@ -168,12 +213,23 @@ the same environment:
 git clone https://github.com/sclaus2/CutFEMx.git
 cd CutFEMx
 
-python -m pip install --no-build-isolation --no-deps --force-reinstall .
+env CONDA_PREFIX="$CONDA_PREFIX" \
+  CMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+  PYTHONNOUSERSITE=1 \
+  CC="$CONDA_PREFIX/bin/clang" \
+  CXX="$CONDA_PREFIX/bin/clang++" \
+  CMAKE_ARGS="-DCMAKE_OSX_DEPLOYMENT_TARGET=13.4" \
+  CXXFLAGS="-D_LIBCPP_ENABLE_EXPERIMENTAL -D_LIBCPP_HAS_NO_EXPERIMENTAL_TZDB -D_LIBCPP_HAS_NO_EXPERIMENTAL_SYNCSTREAM -D_LIBCPP_HAS_NO_INCOMPLETE_PSTL" \
+  python -m pip install --no-build-isolation --no-deps --force-reinstall .
 ```
+
+Use the same active conda environment and `pip` flags for `runintgen`,
+`CutCells/python`, and CutFEMx. If the build variables above are already
+exported, the shorter `python -m pip install ...` form is equivalent.
 
 `--no-build-isolation` is required because CutFEMx must use the active
 FEniCSx/MPI/PETSc/runintgen stack and DOLFINx wrapper headers. `--no-deps`
-prevents `pip` from replacing development FEniCSx packages with incompatible
+prevents `pip` from replacing the pinned FEniCSx packages with incompatible
 release packages.
 
 Verify:
@@ -204,7 +260,7 @@ Build the HTML documentation:
 
 ```bash
 cd docs
-env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 MPLCONFIGDIR=/tmp/cutfemx-mplconfig \
+env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 MPLCONFIGDIR=.matplotlib-cache \
   python -m sphinx -b html . _build/html
 ```
 
@@ -230,7 +286,7 @@ cmake -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" ...
 ### `pip` tries to replace FEniCSx packages
 
 Use `--no-deps` when installing runintgen, CutCells, and CutFEMx from source.
-The FEniCSx packages must stay on the same development stack.
+The FEniCSx packages must stay on the same tagged stack.
 
 ### Build isolation cannot find MPI or DOLFINx headers
 

@@ -299,11 +299,11 @@ def test_matrixcsr_runtime_matrix_accepts_extension_terms():
     cut_data = cutfemx.cut(phi)
     selector = "phi < 0"
     rules = cutfemx.runtime_quadrature(cut_data, selector, order=2)
-    dxq = ufl.Measure("dx", domain=msh, subdomain_data=rules)
+    dx_runtime = ufl.Measure("dx", domain=msh, subdomain_data=rules)
     V = fem.functionspace(msh, ("Lagrange", 1))
     u = ufl.TrialFunction(V)
     v = ufl.TestFunction(V)
-    a = cutfemx.fem.form(u * v * dxq)
+    a = cutfemx.fem.form(u * v * dx_runtime)
 
     aggregation = cutfemx.extensions.create_cell_aggregation(
         cut_data,
@@ -332,7 +332,7 @@ def test_matrixcsr_runtime_matrix_accepts_mixed_subspace_extension_terms():
     cut_data = cutfemx.cut(phi)
     selector = "phi < 0"
     rules = cutfemx.runtime_quadrature(cut_data, selector, order=2)
-    dxq = ufl.Measure("dx", domain=msh, subdomain_data=rules)
+    dx_runtime = ufl.Measure("dx", domain=msh, subdomain_data=rules)
 
     velocity_element = basix.ufl.element(
         "Lagrange", msh.basix_cell(), 2, shape=(msh.geometry.dim,)
@@ -347,7 +347,7 @@ def test_matrixcsr_runtime_matrix_accepts_mixed_subspace_extension_terms():
     v, q = ufl.split(z)
     a = cutfemx.fem.form(
         (ufl.inner(ufl.grad(u), ufl.grad(v)) - ufl.div(v) * p - ufl.div(u) * q)
-        * dxq
+        * dx_runtime
     )
 
     aggregation = cutfemx.extensions.create_cell_aggregation(

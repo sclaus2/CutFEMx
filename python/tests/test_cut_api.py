@@ -9,7 +9,6 @@ from mpi4py import MPI
 import cutfemx
 import numpy as np
 import pytest
-from runintgen import dSq, dsq
 
 import ufl
 from dolfinx import fem, la, mesh
@@ -370,7 +369,8 @@ def test_cutfemx_form_assembles_runtime_exterior_facet_scalar():
     rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
     one = fem.Constant(msh, np.float64(1.0))
 
-    cut_form = cutfemx.fem.form(one * dsq(domain=msh, quadrature_provider=rules))
+    ds_runtime = ufl.Measure("ds", domain=msh, subdomain_data=rules)
+    cut_form = cutfemx.fem.form(one * ds_runtime)
     value = cutfemx.fem.assemble_scalar(cut_form)
     value = msh.comm.allreduce(value, op=MPI.SUM)
 
@@ -402,11 +402,15 @@ def test_cutfemx_form_assembles_mixed_exterior_facet_scalar():
     ds_standard = ufl.Measure("ds", domain=msh, subdomain_data=tags)
     standard_value = fem.assemble_scalar(fem.form(one * ds_standard(1)))
 
-    runtime_form = cutfemx.fem.form(one * dsq(domain=msh, quadrature_provider=rules))
+    ds_runtime = ufl.Measure("ds", domain=msh, subdomain_data=rules)
+    runtime_form = cutfemx.fem.form(one * ds_runtime)
     runtime_value = cutfemx.fem.assemble_scalar(runtime_form)
 
     mixed_form = cutfemx.fem.form(
-        one * dsq(0, domain=msh, subdomain_data=[standard_facets, rules])
+        one
+        * ufl.Measure(
+            "ds", domain=msh, subdomain_id=0, subdomain_data=[standard_facets, rules]
+        )
     )
     mixed_value = cutfemx.fem.assemble_scalar(mixed_form)
 
@@ -424,7 +428,8 @@ def test_cutfemx_form_assembles_runtime_interior_facet_scalar():
     rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
     one = fem.Constant(msh, np.float64(1.0))
 
-    cut_form = cutfemx.fem.form(one * dSq(domain=msh, quadrature_provider=rules))
+    dS_runtime = ufl.Measure("dS", domain=msh, subdomain_data=rules)
+    cut_form = cutfemx.fem.form(one * dS_runtime)
     value = cutfemx.fem.assemble_scalar(cut_form)
     value = msh.comm.allreduce(value, op=MPI.SUM)
 
@@ -454,11 +459,15 @@ def test_cutfemx_form_assembles_mixed_interior_facet_scalar():
     dS_standard = ufl.Measure("dS", domain=msh, subdomain_data=tags)
     standard_value = fem.assemble_scalar(fem.form(one * dS_standard(1)))
 
-    runtime_form = cutfemx.fem.form(one * dSq(domain=msh, quadrature_provider=rules))
+    dS_runtime = ufl.Measure("dS", domain=msh, subdomain_data=rules)
+    runtime_form = cutfemx.fem.form(one * dS_runtime)
     runtime_value = cutfemx.fem.assemble_scalar(runtime_form)
 
     mixed_form = cutfemx.fem.form(
-        one * dSq(0, domain=msh, subdomain_data=[standard_facets, rules])
+        one
+        * ufl.Measure(
+            "dS", domain=msh, subdomain_id=0, subdomain_data=[standard_facets, rules]
+        )
     )
     mixed_value = cutfemx.fem.assemble_scalar(mixed_form)
 
@@ -510,7 +519,7 @@ def test_cutfemx_form_assembles_runtime_interior_facet_jump_matrix():
     jump_u = u("+") - u("-")
     jump_v = v("+") - v("-")
     cut_form = cutfemx.fem.form(
-        jump_u * jump_v * dSq(domain=msh, quadrature_provider=rules)
+        jump_u * jump_v * ufl.Measure("dS", domain=msh, subdomain_data=rules)
     )
     A = cutfemx.fem.assemble_matrix(cut_form)
     A.scatter_reverse()
@@ -629,9 +638,9 @@ def test_cutfemx_form_compiles_runtime_quadrature_measure():
     V = fem.functionspace(msh, ("Lagrange", 1))
     u = ufl.TrialFunction(V)
     v = ufl.TestFunction(V)
-    dxq = ufl.Measure("dx", domain=msh, subdomain_data=rules)
+    dx_runtime = ufl.Measure("dx", domain=msh, subdomain_data=rules)
 
-    cut_form = cutfemx.fem.form(ufl.inner(ufl.grad(u), ufl.grad(v)) * dxq)
+    cut_form = cutfemx.fem.form(ufl.inner(ufl.grad(u), ufl.grad(v)) * dx_runtime)
 
     assert cut_form.needs_runtime_data
     assert cut_form._cpp_object.rank == 2
@@ -646,10 +655,10 @@ def test_cutfemx_form_assembles_runtime_scalar():
 
     cutter = cutfemx.cut(level_set)
     rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
-    dxq = ufl.Measure("dx", domain=msh, subdomain_data=rules)
+    dx_runtime = ufl.Measure("dx", domain=msh, subdomain_data=rules)
     one = fem.Constant(msh, np.float64(1.0))
 
-    cut_form = cutfemx.fem.form(one * dxq)
+    cut_form = cutfemx.fem.form(one * dx_runtime)
     value = cutfemx.fem.assemble_scalar(cut_form)
 
     assert cut_form.needs_runtime_data

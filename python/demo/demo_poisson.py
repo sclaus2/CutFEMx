@@ -348,8 +348,8 @@ def main(
     ghost_facets = cutfemx.ghost_penalty_facets(cut_data, "phi<0")
 
     # The unknown is represented in a standard background finite element
-    # space. The custom measures restrict integration to the cut volume and
-    # embedded boundary quadrature rules.
+    # space. The measures restrict integration to the cut volume and embedded
+    # boundary quadrature rules through subdomain_data.
     V = fem.functionspace(msh, ("Lagrange", 1))
     u = ufl.TrialFunction(V)
     v = ufl.TestFunction(V)
@@ -361,13 +361,13 @@ def main(
     h = ufl.CellDiameter(msh)
     h_avg = ufl.avg(h)
 
-    dxq = ufl.Measure(
+    dx_omega = ufl.Measure(
         "dx",
         domain=msh,
         subdomain_id=0,
         subdomain_data=[inside_cells, cut_quadrature],
     )
-    dsq = ufl.Measure(
+    dx_gamma = ufl.Measure(
         "dx",
         domain=msh,
         subdomain_id=1,
@@ -383,10 +383,10 @@ def main(
     # The bilinear form contains the Poisson stiffness, symmetric Nitsche
     # enforcement of the manufactured Dirichlet data on the embedded boundary,
     # and a standard ghost penalty on the cut-cell stabilization band.
-    a_cut = ufl.inner(ufl.grad(u), ufl.grad(v)) * dxq
+    a_cut = ufl.inner(ufl.grad(u), ufl.grad(v)) * dx_omega
     a_cut += (
         -ufl.dot(ufl.grad(u), n_gamma) * v - ufl.dot(ufl.grad(v), n_gamma) * u + gamma / h * u * v
-    ) * dsq
+    ) * dx_gamma
     if ghost_facets.size > 0:
         a_cut += (
             gamma_g
@@ -398,8 +398,10 @@ def main(
             * dS_ghost
         )
 
-    L_cut = f * v * dxq
-    L_cut += (-ufl.dot(ufl.grad(v), n_gamma) * u_exact + gamma / h * u_exact * v) * dsq
+    L_cut = f * v * dx_omega
+    L_cut += (
+        -ufl.dot(ufl.grad(v), n_gamma) * u_exact + gamma / h * u_exact * v
+    ) * dx_gamma
 
     # The UFL forms are compiled as CutFEMx forms, preserving the runtime
     # quadrature domains introduced above.
@@ -412,7 +414,7 @@ def main(
     uh = solve_runtime_system(a_cut, L_cut, V, solver)
     u_cut = cutfemx.fem.cut_function(uh, cut_mesh)
 
-    error_form = cutfemx.fem.form((uh - u_exact) ** 2 * dxq)
+    error_form = cutfemx.fem.form((uh - u_exact) ** 2 * dx_omega)
     error_sq = cutfemx.fem.assemble_scalar(error_form)
     error = np.sqrt(comm.allreduce(error_sq, op=MPI.SUM))
     if comm.rank == 0:

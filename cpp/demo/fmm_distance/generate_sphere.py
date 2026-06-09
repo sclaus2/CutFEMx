@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Generate a sphere STL file for the FMM distance demo."""
 import numpy as np
 

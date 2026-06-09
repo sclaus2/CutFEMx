@@ -286,13 +286,13 @@ def _assemble_case(
     h = ufl.CellDiameter(msh)
     h_avg = ufl.avg(h)
 
-    dxq = ufl.Measure(
+    dx_omega = ufl.Measure(
         "dx",
         domain=msh,
         subdomain_id=0,
         subdomain_data=[inside_cells, cut_quadrature],
     )
-    dsq = ufl.Measure(
+    dx_gamma = ufl.Measure(
         "dx",
         domain=msh,
         subdomain_id=1,
@@ -305,12 +305,12 @@ def _assemble_case(
         subdomain_data=ghost_facets,
     )
 
-    a = ufl.inner(ufl.grad(u), ufl.grad(v)) * dxq
+    a = ufl.inner(ufl.grad(u), ufl.grad(v)) * dx_omega
     a += (
         -ufl.dot(ufl.grad(u), n_gamma) * v
         - ufl.dot(ufl.grad(v), n_gamma) * u
         + nitsche_gamma / h * u * v
-    ) * dsq
+    ) * dx_gamma
     if mode == "ghost" and ghost_facets.size > 0 and ghost_gamma != 0.0:
         a += (
             ghost_gamma
@@ -322,8 +322,11 @@ def _assemble_case(
             * dS_ghost
         )
 
-    L = f * v * dxq
-    L += (-ufl.dot(ufl.grad(v), n_gamma) * u_exact + nitsche_gamma / h * u_exact * v) * dsq
+    L = f * v * dx_omega
+    L += (
+        -ufl.dot(ufl.grad(v), n_gamma) * u_exact
+        + nitsche_gamma / h * u_exact * v
+    ) * dx_gamma
 
     a_form = cutfemx.fem.form(a)
     L_form = cutfemx.fem.form(L)
@@ -366,22 +369,22 @@ def _assemble_case(
     condition, lambda_min, lambda_max = _active_condition_number(A_scipy, active_dofs)
     uh = _solve_active_system(A_scipy, b.array, V, active_dofs)
 
-    error_form = cutfemx.fem.form((uh - u_exact) ** 2 * dxq)
+    error_form = cutfemx.fem.form((uh - u_exact) ** 2 * dx_omega)
     error_sq = cutfemx.fem.assemble_scalar(error_form)
     l2_error = float(np.sqrt(max(msh.comm.allreduce(error_sq, op=MPI.SUM), 0.0)))
 
     h1_error_form = cutfemx.fem.form(
-        ufl.inner(ufl.grad(uh - u_exact), ufl.grad(uh - u_exact)) * dxq
+        ufl.inner(ufl.grad(uh - u_exact), ufl.grad(uh - u_exact)) * dx_omega
     )
     h1_error_sq = cutfemx.fem.assemble_scalar(h1_error_form)
     h1_error = float(np.sqrt(max(msh.comm.allreduce(h1_error_sq, op=MPI.SUM), 0.0)))
 
-    boundary_error_form = cutfemx.fem.form((uh - u_exact) ** 2 * dsq)
+    boundary_error_form = cutfemx.fem.form((uh - u_exact) ** 2 * dx_gamma)
     boundary_error_sq = cutfemx.fem.assemble_scalar(boundary_error_form)
     boundary_l2_error = float(
         np.sqrt(max(msh.comm.allreduce(boundary_error_sq, op=MPI.SUM), 0.0))
     )
-    boundary_measure_form = cutfemx.fem.form(1.0 * dsq)
+    boundary_measure_form = cutfemx.fem.form(1.0 * dx_gamma)
     boundary_measure = float(
         msh.comm.allreduce(cutfemx.fem.assemble_scalar(boundary_measure_form), op=MPI.SUM)
     )

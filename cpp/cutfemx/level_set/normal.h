@@ -71,8 +71,9 @@ std::vector<double> evaluate_normals(
   auto dofmap = V->dofmap();
   const std::span<const T>& level_set_values = level_set->x()->array();
 
-  const dolfinx::fem::CoordinateElement<U>& cmap = mesh->geometry().cmap();
-  auto x_dofmap = mesh->geometry().dofmap();
+  const dolfinx::fem::CoordinateElement<U>& cmap
+      = mesh->geometry().cmaps().front();
+  auto x_dofmap = mesh->geometry().dofmaps().front();
   const std::size_t num_geometry_dofs = cmap.dim();
   std::span<const U> x = mesh->geometry().x();
 
