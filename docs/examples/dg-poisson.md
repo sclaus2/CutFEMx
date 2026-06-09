@@ -94,7 +94,7 @@ should then be integrated over $F\cap\Omega$, not over the whole background
 facet $F$. This is a lower-dimensional analogue of cut-cell quadrature:
 
 $$
-\int_{{\mathcal F}_h^\Omega} H\,ds
+\int_{\mathcal{F}_h^\Omega} H\,ds
 =
 \sum_{F\in{\mathcal F}_h^\Omega}
 \int_{F\cap\Omega}H\,ds .
@@ -168,15 +168,15 @@ $$
 \begin{aligned}
 a_{\mathrm{SIPG}}(u_h,v_h)
 &=
--\int_{{\mathcal F}_h^\Omega}
+-\int_{\mathcal{F}_h^\Omega}
 \{\!\{\nabla u_h\}\!\}\cdot
 \left[\!\left[v_h n\right]\!\right]\,ds\\
 &\quad
--\int_{{\mathcal F}_h^\Omega}
+-\int_{\mathcal{F}_h^\Omega}
 \{\!\{\nabla v_h\}\!\}\cdot
 \left[\!\left[u_h n\right]\!\right]\,ds\\
 &\quad
-+\int_{{\mathcal F}_h^\Omega}
++\int_{\mathcal{F}_h^\Omega}
 \frac{\sigma}{\{h\}}
 \left[\!\left[u_h n\right]\!\right]\cdot
 \left[\!\left[v_h n\right]\!\right]\,ds .
