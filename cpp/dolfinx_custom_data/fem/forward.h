@@ -13,6 +13,7 @@
 #include <functional>
 #include <dolfinx/common/types.h>
 #include <dolfinx/fem/traits.h>
+#include <type_traits>
 
 namespace dolfinx::common
 {
@@ -111,8 +112,10 @@ using FunctionSpace = dolfinx::fem::FunctionSpace<T>;
 template <class U, class T>
 concept DofTransformKernel = dolfinx::fem::DofTransformKernel<U, T>;
 
-template <class U, class T>
-concept FEkernel = dolfinx::fem::FEkernel<U, T>;
+template <class Kernel, class T, class U = scalar_value_t<T>>
+concept FEkernel
+    = std::is_invocable_v<Kernel, T*, const T*, const T*, const U*,
+                          const int*, const std::uint8_t*, void*>;
 
 template <class T>
 concept MDSpan2 = dolfinx::fem::MDSpan2<T>;

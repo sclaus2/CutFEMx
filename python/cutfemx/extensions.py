@@ -170,6 +170,62 @@ def _geometry_type_name(V) -> str:
     return "float32" if dtype.name == "float32" else "float64"
 
 
+def _scalar_type_name(dtype: Any) -> str:
+    dtype = np.dtype(dtype)
+    if dtype == np.dtype(np.float32):
+        return "float32"
+    if dtype == np.dtype(np.float64):
+        return "float64"
+    if dtype == np.dtype(np.complex64):
+        return "complex64"
+    if dtype == np.dtype(np.complex128):
+        return "complex128"
+    raise NotImplementedError(f"Unsupported extension penalty scalar dtype {dtype}.")
+
+
+def _matrix_scalar_dtype(A: Any) -> np.dtype:
+    type_name = type(A._cpp_object).__name__
+    if "complex64" in type_name:
+        return np.dtype(np.complex64)
+    if "complex128" in type_name:
+        return np.dtype(np.complex128)
+    if "float32" in type_name:
+        return np.dtype(np.float32)
+    if "float64" in type_name:
+        return np.dtype(np.float64)
+    raise TypeError(f"Unsupported MatrixCSR scalar type {type_name!r}.")
+
+
+def _extension_suffix(scalar_type: str, geometry_type: str) -> str:
+    return (
+        geometry_type
+        if scalar_type == geometry_type
+        else f"{scalar_type}_{geometry_type}"
+    )
+
+
+def _extension_function(base: str, scalar_dtype: Any, V: Any) -> Any:
+    scalar_type = _scalar_type_name(scalar_dtype)
+    geometry_type = _geometry_type_name(V)
+    attr = f"{base}_{_extension_suffix(scalar_type, geometry_type)}"
+    if not hasattr(_cpp.extensions, attr):
+        raise RuntimeError(
+            "CutFEMx was built without extension penalty support for "
+            f"{scalar_type} matrices on {geometry_type} geometry."
+        )
+    return getattr(_cpp.extensions, attr)
+
+
+def _beta_scalar_dtype(beta: Any, mesh) -> np.dtype:
+    if isinstance(beta, np.ndarray):
+        return np.dtype(beta.dtype)
+    if isinstance(beta, numbers.Number):
+        return np.dtype(np.asarray(beta).dtype)
+    if hasattr(beta, "x") and hasattr(beta.x, "array"):
+        return np.dtype(beta.x.array.dtype)
+    return np.dtype(mesh.geometry.x.dtype)
+
+
 def _cellwise_values(beta: Any, mesh, dtype: np.dtype) -> npt.NDArray:
     if isinstance(beta, np.ndarray):
         values = np.asarray(beta, dtype=dtype)
@@ -200,7 +256,12 @@ def _cellwise_values(beta: Any, mesh, dtype: np.dtype) -> npt.NDArray:
     return np.ascontiguousarray(values)
 
 
-def create_extension_penalty_matrix(V, cut_data: CutData, aggregation: CellAggregation):
+def create_extension_penalty_matrix(
+    V,
+    cut_data: CutData,
+    aggregation: CellAggregation,
+    dtype: Any | None = None,
+):
     """Create a MatrixCSR with sparsity for bad/root extension penalty pairs."""
     if isinstance(V, ExtensionPenaltyTerm):
         V = V.V
@@ -208,10 +269,10 @@ def create_extension_penalty_matrix(V, cut_data: CutData, aggregation: CellAggre
         raise TypeError("create_extension_penalty_matrix expects a cutfemx.CutData object")
     if not isinstance(aggregation, CellAggregation):
         raise TypeError("create_extension_penalty_matrix expects a CellAggregation object")
-    type_name = _geometry_type_name(V)
-    return getattr(
-        _cpp.extensions, f"create_extension_penalty_matrix_{type_name}"
-    )(V._cpp_object, cut_data._cpp_object, aggregation._cpp_object)
+    scalar_dtype = V.mesh.geometry.x.dtype if dtype is None else np.dtype(dtype)
+    return _extension_function("create_extension_penalty_matrix", scalar_dtype, V)(
+        V._cpp_object, cut_data._cpp_object, aggregation._cpp_object
+    )
 
 
 def extension_quadrature(
@@ -267,19 +328,19 @@ def assemble_extension_penalty(
     if beta is None or quadrature_degree is None:
         raise TypeError("assemble_extension_penalty requires beta and quadrature_degree")
 
-    type_name = _geometry_type_name(V)
-    if isinstance(beta, numbers.Real):
-        getattr(_cpp.extensions, f"assemble_extension_penalty_scalar_{type_name}")(
+    scalar_dtype = _matrix_scalar_dtype(A)
+    if isinstance(beta, numbers.Number):
+        _extension_function("assemble_extension_penalty_scalar", scalar_dtype, V)(
             A._cpp_object,
             V._cpp_object,
             cut_data._cpp_object,
             aggregation._cpp_object,
-            beta,
+            scalar_dtype.type(beta),
             quadrature_degree,
         )
     else:
-        values = _cellwise_values(beta, V.mesh, V.mesh.geometry.x.dtype)
-        getattr(_cpp.extensions, f"assemble_extension_penalty_cellwise_{type_name}")(
+        values = _cellwise_values(beta, V.mesh, scalar_dtype)
+        _extension_function("assemble_extension_penalty_cellwise", scalar_dtype, V)(
             A._cpp_object,
             V._cpp_object,
             cut_data._cpp_object,
@@ -312,18 +373,18 @@ def extension_penalty_matrix(
     if beta is None or quadrature_degree is None:
         raise TypeError("extension_penalty_matrix requires beta and quadrature_degree")
 
-    type_name = _geometry_type_name(V)
-    if isinstance(beta, numbers.Real):
-        return getattr(_cpp.extensions, f"extension_penalty_matrix_scalar_{type_name}")(
+    scalar_dtype = _beta_scalar_dtype(beta, V.mesh)
+    if isinstance(beta, numbers.Number):
+        return _extension_function("extension_penalty_matrix_scalar", scalar_dtype, V)(
             V._cpp_object,
             cut_data._cpp_object,
             aggregation._cpp_object,
-            beta,
+            scalar_dtype.type(beta),
             quadrature_degree,
         )
 
-    values = _cellwise_values(beta, V.mesh, V.mesh.geometry.x.dtype)
-    return getattr(_cpp.extensions, f"extension_penalty_matrix_cellwise_{type_name}")(
+    values = _cellwise_values(beta, V.mesh, scalar_dtype)
+    return _extension_function("extension_penalty_matrix_cellwise", scalar_dtype, V)(
         V._cpp_object,
         cut_data._cpp_object,
         aggregation._cpp_object,

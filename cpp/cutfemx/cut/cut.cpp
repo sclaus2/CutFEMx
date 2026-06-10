@@ -356,6 +356,22 @@ std::vector<T> physical_points_for_host_mesh(
 } // namespace
 
 template <std::floating_point T>
+std::vector<T> cell_reference_points(
+    const dolfinx::fem::FiniteElement<T>& element, int entity_dim,
+    int mesh_tdim, int expected_dofs)
+{
+  if (entity_dim != mesh_tdim)
+    return {};
+
+  auto [points, shape] = element.interpolation_points();
+  if (shape[1] != static_cast<std::size_t>(entity_dim))
+    return {};
+  if (shape[0] != static_cast<std::size_t>(expected_dofs))
+    return {};
+  return points;
+}
+
+template <std::floating_point T>
 void validate_level_set(const dolfinx::fem::Function<T>& level_set)
 {
   const auto element = level_set.function_space()->element();
@@ -537,6 +553,8 @@ build_level_set_function(const CutData<T>& cut_data,
               dofmap_view.data_handle(), dofmap_view.extent(0) * dofmap_width),
           cut_data.num_local_cells, static_cast<std::int32_t>(dofmap_width),
           static_cast<std::int32_t>(dofmap_width));
+  level_set_mesh_data.cell_reference_points = cell_reference_points<T>(
+      *element, cut_data.tdim, cut_data.tdim, static_cast<int>(dofmap_width));
   level_set_mesh_data.uniform_cell_type = cut_data.mesh_view.uniform_cell_type;
   level_set_mesh_data.has_uniform_cell_type = true;
   level_set_mesh_data.owner = dofmap_owner;
@@ -937,13 +955,21 @@ build_entity_level_sets(const CutData<T>& cut_data,
                               dofmap, entity_dofs);
 
     auto [flat_dofs, offsets] = flatten_entity_dofs(entity_dofs);
+    std::vector<T> reference_points;
+    if (!entity_dofs.empty())
+    {
+      reference_points = cell_reference_points<T>(
+          *function_space->element(), entity_dim, cut_data.tdim,
+          static_cast<int>(entity_dofs.front().size()));
+    }
     auto mesh_data = cutcells::create_level_set_mesh_data<T, std::int32_t>(
         cut_data.gdim, entity_dim, function_space->element()->basix_element().degree(),
         compact_dof_coordinates(cut_data, *level_set_owner),
         std::span<const std::int32_t>(flat_dofs.data(), flat_dofs.size()),
         std::span<const std::int32_t>(offsets.data(), offsets.size()),
         std::span<const cutcells::cell::type>(cell_types.data(),
-                                              cell_types.size()));
+                                              cell_types.size()),
+        std::span<const T>(reference_points.data(), reference_points.size()));
 
     level_sets.push_back(cutcells::create_level_set_function<T, std::int32_t>(
         std::move(mesh_data), level_set_owner->x()->array(),

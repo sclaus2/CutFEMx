@@ -272,6 +272,11 @@ _cutfemx_python_query(
   "petsc4py include directory"
   "import petsc4py; print(petsc4py.get_include())"
   FALSE)
+_cutfemx_python_query(
+  CUTFEMX_PYTHON_PREFIX
+  "Python prefix"
+  "import sys; print(sys.prefix)"
+  TRUE)
 
 set(WRAPPER_SOURCES
   python/cutfemx/wrappers/cutfemx.cpp
@@ -327,12 +332,26 @@ target_link_libraries(cutfemx_cpp PRIVATE
 
 if(APPLE)
   set(_cutfemx_runtime_rpath "@loader_path")
+  list(APPEND _cutfemx_runtime_rpath
+    "@loader_path/../basix/lib"
+    "@loader_path/../dolfinx/lib"
+    "@loader_path/../fenics_basix.libs"
+    "@loader_path/../fenics_dolfinx.libs")
 else()
   set(_cutfemx_runtime_rpath "$ORIGIN")
+  list(APPEND _cutfemx_runtime_rpath
+    "$ORIGIN/../basix/lib"
+    "$ORIGIN/../dolfinx/lib"
+    "$ORIGIN/../fenics_basix.libs"
+    "$ORIGIN/../fenics_dolfinx.libs")
 endif()
-if(DEFINED ENV{CONDA_PREFIX})
+if(CUTFEMX_PYTHON_PREFIX)
+  list(APPEND _cutfemx_runtime_rpath "${CUTFEMX_PYTHON_PREFIX}/lib")
+endif()
+if(DEFINED ENV{CONDA_PREFIX} AND NOT "$ENV{CONDA_PREFIX}" STREQUAL "")
   list(APPEND _cutfemx_runtime_rpath "$ENV{CONDA_PREFIX}/lib")
 endif()
+list(REMOVE_DUPLICATES _cutfemx_runtime_rpath)
 
 set_target_properties(cutfemx_cpp PROPERTIES
   BUILD_RPATH "${_cutfemx_runtime_rpath}"

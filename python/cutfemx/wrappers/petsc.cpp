@@ -7,6 +7,7 @@
 #if defined(HAS_PETSC) && defined(HAS_PETSC4PY)
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/complex.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
@@ -34,6 +35,8 @@
 
 #include <cassert>
 #include <cmath>
+#include <complex>
+#include <concepts>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -264,10 +267,9 @@ std::vector<std::vector<std::int32_t>> zero_petsc_block_rows(
   return rows;
 }
 
-template <typename T>
+template <typename T, std::floating_point U>
 void declare_runtime_petsc(nb::module_& m, std::string type)
 {
-  using U = typename dolfinx::scalar_value_t<T>;
   using Form = dolfinx_custom_data::fem::Form<T, U>;
   using FunctionSpace = dolfinx::fem::FunctionSpace<U>;
   using DirichletBC = dolfinx::fem::DirichletBC<T, U>;
@@ -404,7 +406,7 @@ void declare_runtime_petsc(nb::module_& m, std::string type)
           throw std::runtime_error("Received a null function space.");
         std::function<int(std::span<const std::int32_t>,
                           std::span<const std::int32_t>,
-                          std::span<const U>)>
+                          std::span<const T>)>
             mat_add = dolfinx::la::petsc::Matrix::set_fn(A, ADD_VALUES);
         cutfemx::extensions::assemble_extension_penalty(
             mat_add, *V, cut_data, aggregation, beta, quadrature_degree);
@@ -418,18 +420,18 @@ void declare_runtime_petsc(nb::module_& m, std::string type)
       ("assemble_extension_penalty_cellwise_" + type).c_str(),
       [](Mat A, std::shared_ptr<const FunctionSpace> V,
          const CutData& cut_data, const CellAggregation& aggregation,
-         nb::ndarray<const U, nb::ndim<1>, nb::c_contig> beta_cell_values,
+         nb::ndarray<const T, nb::ndim<1>, nb::c_contig> beta_cell_values,
          int quadrature_degree)
       {
         if (!V)
           throw std::runtime_error("Received a null function space.");
         std::function<int(std::span<const std::int32_t>,
                           std::span<const std::int32_t>,
-                          std::span<const U>)>
+                          std::span<const T>)>
             mat_add = dolfinx::la::petsc::Matrix::set_fn(A, ADD_VALUES);
         cutfemx::extensions::assemble_extension_penalty(
             mat_add, *V, cut_data, aggregation,
-            std::span<const U>(beta_cell_values.data(),
+            std::span<const T>(beta_cell_values.data(),
                                beta_cell_values.size()),
             quadrature_degree);
       },
@@ -574,7 +576,25 @@ void petsc_runtime(nb::module_& m)
 {
   nb::module_ petsc_mod
       = m.def_submodule("petsc", "PETSc-specific runtime FEM module");
-  declare_runtime_petsc<double>(petsc_mod, "float64");
+#if defined(PETSC_USE_COMPLEX)
+#if defined(PETSC_USE_REAL_SINGLE)
+  declare_runtime_petsc<std::complex<float>, float>(petsc_mod, "complex64");
+  declare_runtime_petsc<std::complex<float>, double>(petsc_mod,
+                                                     "complex64_float64");
+#else
+  declare_runtime_petsc<std::complex<double>, float>(petsc_mod,
+                                                     "complex128_float32");
+  declare_runtime_petsc<std::complex<double>, double>(petsc_mod, "complex128");
+#endif
+#else
+#if defined(PETSC_USE_REAL_SINGLE)
+  declare_runtime_petsc<float, float>(petsc_mod, "float32");
+  declare_runtime_petsc<float, double>(petsc_mod, "float32_float64");
+#else
+  declare_runtime_petsc<double, float>(petsc_mod, "float64_float32");
+  declare_runtime_petsc<double, double>(petsc_mod, "float64");
+#endif
+#endif
 }
 } // namespace cutfemx_wrappers
 

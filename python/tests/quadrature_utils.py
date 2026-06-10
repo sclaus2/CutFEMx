@@ -5,9 +5,6 @@ from runintgen import QuadratureRules
 
 def runtime_quadrature_mesh(mesh, order: int) -> QuadratureRules:
     """Create full-cell runtime quadrature for tests."""
-    if mesh.geometry.x.dtype != np.float64:
-        raise NotImplementedError("Test runtime quadrature currently supports float64")
-
     tdim = mesh.topology.dim
     gdim = mesh.geometry.dim
     points_ref, weights_ref = basix.make_quadrature(

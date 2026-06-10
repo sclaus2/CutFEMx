@@ -38,6 +38,7 @@ class CompiledRunintForm:
     module: Any
     code: tuple[str | None, str | None]
     dtype: npt.DTypeLike
+    geometry_dtype: npt.DTypeLike
     jit_info: JITFormInfo
 
 
@@ -217,10 +218,15 @@ def compile_form(
 ) -> CompiledRunintForm:
     """Compile a UFL form without binding DOLFINx functions/domains."""
     import ffcx
+    from ffcx.codegeneration.utils import dtype_to_scalar_dtype
 
     if form_compiler_options is None:
         form_compiler_options = {}
     p_ffcx = ffcx.get_options(form_compiler_options)
+    scalar_dtype = np.dtype(p_ffcx["scalar_type"])
+    geometry_dtype = np.dtype(
+        p_ffcx.get("geometry_type", dtype_to_scalar_dtype(scalar_dtype))
+    )
     ufcx_form, module, code = jit(
         comm,
         form,
@@ -233,7 +239,8 @@ def compile_form(
         ufcx_form=ufcx_form,
         module=module,
         code=code,
-        dtype=np.dtype(p_ffcx["scalar_type"]),
+        dtype=scalar_dtype,
+        geometry_dtype=geometry_dtype,
         jit_info=sidecar,
     )
 

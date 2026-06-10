@@ -45,6 +45,77 @@ conda install -c conda-forge \
 If you use OpenMPI instead of MPICH, install a consistent MPI/PETSc stack from
 conda-forge and keep the same environment active for every build step.
 
+## Real and complex scalar builds
+
+The CutFEMx MatrixCSR/runtime assembly path is templated for all supported PDE
+scalar types (`float32`, `float64`, `complex64`, `complex128`) on either
+`float32` or `float64` mesh geometry. PETSc is different: a PETSc installation
+is built for exactly one scalar mode and one real precision. PETSc-backed
+assembly and solvers therefore require an environment whose `petsc`, `petsc4py`,
+DOLFINx, and CutFEMx builds all use the PETSc scalar type you want to solve
+with.
+
+The commands above install the usual real-valued, double-precision PETSc stack.
+For a `complex128` PETSc setup, create a separate environment and request the
+complex PETSc and petsc4py variants before building DOLFINx:
+
+```bash
+conda create -n <complex-env-name> -c conda-forge python=3.13
+conda activate <complex-env-name>
+
+conda install -c conda-forge \
+  c-compiler cxx-compiler cmake ninja pkg-config pip \
+  mpi mpich mpi4py "petsc=*=complex*" "petsc4py=*=complex*" \
+  hdf5 libadios2 pugixml spdlog boost-cpp \
+  parmetis libscotch ptscotch kahip \
+  numpy scipy matplotlib pyvista pytest \
+  scikit-build-core nanobind cffi
+```
+
+If the solver cannot find a matching `petsc4py` build with the wildcard above,
+query conda-forge for the available build strings and select the build that is
+compiled against complex PETSc:
+
+```bash
+conda search -c conda-forge petsc petsc4py
+```
+
+Verify the scalar mode before building any FEniCSx component from source:
+
+```bash
+python - <<'PY'
+import numpy as np
+from petsc4py import PETSc
+
+print("PETSc scalar:", PETSc.ScalarType)
+assert np.issubdtype(np.dtype(PETSc.ScalarType), np.complexfloating)
+assert np.dtype(PETSc.RealType) == np.dtype(np.float64)
+PY
+```
+
+For a `complex64` PETSc setup, PETSc must be configured for complex scalars and
+single real precision, and DOLFINx/petsc4py must be built against that same
+PETSc. If conda-forge does not provide a matching single-precision complex
+variant for your platform, build PETSc, petsc4py, DOLFINx, and CutFEMx from
+source in one environment. Verify it with:
+
+```bash
+python - <<'PY'
+import numpy as np
+from petsc4py import PETSc
+
+print("PETSc scalar:", PETSc.ScalarType)
+print("PETSc real:", PETSc.RealType)
+assert np.dtype(PETSc.ScalarType) == np.dtype(np.complex64)
+assert np.dtype(PETSc.RealType) == np.dtype(np.float32)
+PY
+```
+
+Then follow the same source build steps below. Build DOLFINx, runintgen,
+CutCells, and CutFEMx in this complex environment. Reusing DOLFINx or CutFEMx
+artifacts built against a different PETSc scalar or precision environment is
+not supported.
+
 Before building packages from source, keep CMake and Python discovery tied to
 the active environment:
 

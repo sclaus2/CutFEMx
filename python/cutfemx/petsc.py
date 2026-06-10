@@ -11,6 +11,7 @@ import functools
 import numbers
 from typing import Any
 
+import numpy as np
 from petsc4py import PETSc
 
 from dolfinx.fem import petsc as _dolfinx_petsc
@@ -36,6 +37,62 @@ def _runtime_petsc_module() -> Any:
     if not hasattr(_cpp, "fem") or not hasattr(_cpp.fem, "petsc"):
         raise RuntimeError("CutFEMx was built without runtime PETSc support.")
     return _cpp.fem.petsc
+
+
+_RUNTIME_TYPE_NAMES = {
+    np.dtype(np.float32): "float32",
+    np.dtype(np.float64): "float64",
+    np.dtype(np.complex64): "complex64",
+    np.dtype(np.complex128): "complex128",
+}
+
+
+def _runtime_type_name(dtype: Any) -> str:
+    dtype = np.dtype(dtype)
+    if dtype not in _RUNTIME_TYPE_NAMES:
+        supported = ", ".join(item.name for item in _RUNTIME_TYPE_NAMES)
+        raise NotImplementedError(
+            f"CutFEMx PETSc runtime forms currently support {supported}."
+        )
+    return _RUNTIME_TYPE_NAMES[dtype]
+
+
+def _runtime_petsc_function_by_type_name(name: str, type_name: str) -> Any:
+    petsc_mod = _runtime_petsc_module()
+    attr = f"{name}_{type_name}"
+    if not hasattr(petsc_mod, attr):
+        raise RuntimeError(
+            f"CutFEMx was built without runtime PETSc support for {type_name}. "
+            "Use a matching PETSc scalar/precision build for PETSc assembly."
+        )
+    return getattr(petsc_mod, attr)
+
+
+def _runtime_petsc_function(name: str, dtype: Any) -> Any:
+    type_name = _runtime_type_name(dtype)
+    return _runtime_petsc_function_by_type_name(name, type_name)
+
+
+def _active_domain_dtype(active_domains: Sequence[ActiveDomain]) -> np.dtype:
+    dtypes = {domain.dtype for domain in active_domains}
+    if not dtypes:
+        raise ValueError("At least one ActiveDomain is required.")
+    dtype = dtypes.pop()
+    if dtypes:
+        raise ValueError("All ActiveDomain objects must share a dtype.")
+    return dtype
+
+
+def _active_domain_type_name(active_domains: Sequence[ActiveDomain]) -> str:
+    type_names = {domain.type_name for domain in active_domains}
+    if not type_names:
+        raise ValueError("At least one ActiveDomain is required.")
+    type_name = type_names.pop()
+    if type_names:
+        raise ValueError(
+            "All ActiveDomain objects must share a scalar and geometry dtype."
+        )
+    return type_name
 
 
 def _unsupported_packed_data(constants: Any | None, coeffs: Any | None) -> None:
@@ -76,12 +133,14 @@ def _normalise_extension_terms(extension_terms: Sequence[Any] | None) -> list[An
     return terms
 
 
-def _assemble_extension_terms(A: PETSc.Mat, terms: Sequence[Any]) -> None:
-    petsc_mod = _runtime_petsc_module()
+def _assemble_extension_terms(
+    A: PETSc.Mat, terms: Sequence[Any], dtype: Any, type_name: str
+) -> None:
     for term in terms:
-        type_name = _extensions._geometry_type_name(term.V)
-        if isinstance(term.beta, numbers.Real):
-            getattr(petsc_mod, f"assemble_extension_penalty_scalar_{type_name}")(
+        if isinstance(term.beta, numbers.Number):
+            _runtime_petsc_function_by_type_name(
+                "assemble_extension_penalty_scalar", type_name
+            )(
                 A,
                 term.V._cpp_object,
                 term.cut_data._cpp_object,
@@ -91,9 +150,11 @@ def _assemble_extension_terms(A: PETSc.Mat, terms: Sequence[Any]) -> None:
             )
         else:
             values = _extensions._cellwise_values(
-                term.beta, term.V.mesh, term.V.mesh.geometry.x.dtype
+                term.beta, term.V.mesh, np.dtype(dtype)
             )
-            getattr(petsc_mod, f"assemble_extension_penalty_cellwise_{type_name}")(
+            _runtime_petsc_function_by_type_name(
+                "assemble_extension_penalty_cellwise", type_name
+            )(
                 A,
                 term.V._cpp_object,
                 term.cut_data._cpp_object,
@@ -117,8 +178,14 @@ def create_matrix(
     if isinstance(a, CutForm):
         terms = _normalise_extension_terms(extension_terms)
         if not terms:
-            return _runtime_petsc_module().create_matrix_float64(a._cpp_object, kind)
-        return _runtime_petsc_module().create_matrix_with_extension_sparsity_float64(
+            return _runtime_petsc_function_by_type_name(
+                "create_matrix", a.type_name
+            )(
+                a._cpp_object, kind
+            )
+        return _runtime_petsc_function_by_type_name(
+            "create_matrix_with_extension_sparsity", a.type_name
+        )(
             a._cpp_object,
             [term.V._cpp_object for term in terms],
             [term.aggregation._cpp_object for term in terms],
@@ -163,7 +230,9 @@ def _(
     """Assemble a linear CutFEMx or DOLFINx form into an existing PETSc vector."""
     if isinstance(L, CutForm):
         _unsupported_packed_data(constants, coeffs)
-        _runtime_petsc_module().assemble_vector_float64(b, L._cpp_object)
+        _runtime_petsc_function_by_type_name("assemble_vector", L.type_name)(
+            b, L._cpp_object
+        )
         return b
     return _dolfinx_petsc.assemble_vector(b, L, constants, coeffs)
 
@@ -208,11 +277,12 @@ def _(
         _unsupported_packed_data(constants, coeffs)
         terms = _normalise_extension_terms(extension_terms)
         cpp_bcs = [] if bcs is None else [bc._cpp_object for bc in bcs]
-        petsc_mod = _runtime_petsc_module()
-        petsc_mod.assemble_matrix_float64(A, a._cpp_object, cpp_bcs)
-        _assemble_extension_terms(A, terms)
+        _runtime_petsc_function_by_type_name("assemble_matrix", a.type_name)(
+            A, a._cpp_object, cpp_bcs
+        )
+        _assemble_extension_terms(A, terms, a.dtype, a.type_name)
         if a.function_spaces[0] is a.function_spaces[1]:
-            petsc_mod.insert_diagonal_float64(
+            _runtime_petsc_function_by_type_name("insert_diagonal", a.type_name)(
                 A,
                 a._cpp_object.function_spaces[0],
                 cpp_bcs,
@@ -234,12 +304,11 @@ def deactivate_outside(
     rhs_value: float = 0.0,
 ) -> ActiveDomain:
     """Deactivate PETSc matrix rows outside a form-derived active domain."""
-    petsc_mod = _runtime_petsc_module()
     if isinstance(b_or_active_domain, ActiveDomain):
         if active_domain_or_none is not None:
             raise TypeError("deactivate_outside(A, active_domain) takes no RHS vector")
         domain = b_or_active_domain
-        petsc_mod.deactivate_outside_float64(
+        _runtime_petsc_function_by_type_name("deactivate_outside", domain.type_name)(
             A,
             domain._cpp_object,
             PETSc.ScalarType(diagonal),
@@ -250,7 +319,9 @@ def deactivate_outside(
         raise TypeError("deactivate_outside(A, b, active_domain) requires active_domain")
     b = b_or_active_domain
     domain = active_domain_or_none
-    petsc_mod.deactivate_outside_matrix_vector_float64(
+    _runtime_petsc_function_by_type_name(
+        "deactivate_outside_matrix_vector", domain.type_name
+    )(
         A, b, domain._cpp_object, PETSc.ScalarType(diagonal), PETSc.ScalarType(rhs_value)
     )
     return domain
@@ -280,20 +351,23 @@ def deactivate_outside_blocks(
     rhs_value: float = 0.0,
 ) -> list[ActiveDomain]:
     """Deactivate PETSc block rows from per-row active-domain support."""
-    petsc_mod = _runtime_petsc_module()
     domains = list(active_domains)
+    dtype = _active_domain_dtype(domains)
+    type_name = _active_domain_type_name(domains)
     cpp_domains = [domain._cpp_object for domain in domains]
     mat_blocks = _petsc_matrix_block_rows(A_blocks)
 
     if b_blocks is None:
-        petsc_mod.deactivate_outside_blocks_float64(
+        _runtime_petsc_function_by_type_name("deactivate_outside_blocks", type_name)(
             mat_blocks,
             cpp_domains,
             PETSc.ScalarType(diagonal),
         )
         return domains
 
-    petsc_mod.deactivate_outside_blocks_matrix_vector_float64(
+    _runtime_petsc_function_by_type_name(
+        "deactivate_outside_blocks_matrix_vector", type_name
+    )(
         mat_blocks,
         list(b_blocks),
         cpp_domains,
@@ -305,14 +379,16 @@ def deactivate_outside_blocks(
 
 def zero_rows(A: PETSc.Mat, tol: float = 0.0) -> list[int]:
     """Return owned local PETSc rows whose assembled entries are zero."""
-    return list(_runtime_petsc_module().zero_rows_float64(A, float(tol)))
+    return list(
+        _runtime_petsc_function("zero_rows", PETSc.ScalarType)(A, float(tol))
+    )
 
 
 def zero_block_rows(A_blocks: Any, tol: float = 0.0) -> list[list[int]]:
     """Return zero rows for each row of a PETSc block system."""
     return [
         list(rows)
-        for rows in _runtime_petsc_module().zero_block_rows_float64(
+        for rows in _runtime_petsc_function("zero_block_rows", PETSc.ScalarType)(
             _petsc_matrix_block_rows(A_blocks), float(tol)
         )
     ]

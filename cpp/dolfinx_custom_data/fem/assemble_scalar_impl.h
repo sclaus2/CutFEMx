@@ -23,15 +23,15 @@
 namespace dolfinx_custom_data::fem::impl
 {
 /// Assemble functional over cells
-template <dolfinx::scalar T>
+template <dolfinx::scalar T, std::floating_point U>
 T assemble_cells(mdspan2_t x_dofmap,
-                 md::mdspan<const scalar_value_t<T>,
+                 md::mdspan<const U,
                             md::extents<std::size_t, md::dynamic_extent, 3>>
                      x,
-                 std::span<const std::int32_t> cells, FEkernel<T> auto fn,
+                 std::span<const std::int32_t> cells, FEkernel<T, U> auto fn,
                  std::span<const T> constants,
                  md::mdspan<const T, md::dextents<std::size_t, 2>> coeffs,
-                 std::span<scalar_value_t<T>> cdofs_b,
+                 std::span<U> cdofs_b,
                  std::optional<void*> custom_data = std::nullopt)
 {
   T value(0);
@@ -68,19 +68,19 @@ T assemble_cells(mdspan2_t x_dofmap,
 /// However, entities may be attached to more than one cell. This function
 /// therefore computes 'one-sided' integrals, i.e. evaluates integrals as seen
 /// from cell used to define the entity.
-template <dolfinx::scalar T>
+template <dolfinx::scalar T, std::floating_point U>
 T assemble_entities(
     mdspan2_t x_dofmap,
-    md::mdspan<const scalar_value_t<T>,
+    md::mdspan<const U,
                md::extents<std::size_t, md::dynamic_extent, 3>>
         x,
     md::mdspan<const std::int32_t,
                md::extents<std::size_t, md::dynamic_extent, 2>>
         entities,
-    FEkernel<T> auto fn, std::span<const T> constants,
+    FEkernel<T, U> auto fn, std::span<const T> constants,
     md::mdspan<const T, md::dextents<std::size_t, 2>> coeffs,
     md::mdspan<const std::uint8_t, md::dextents<std::size_t, 2>> perms,
-    std::span<scalar_value_t<T>> cdofs_b,
+    std::span<U> cdofs_b,
     std::optional<void*> custom_data = std::nullopt)
 {
   T value(0);
@@ -112,21 +112,21 @@ T assemble_entities(
 }
 
 /// Assemble functional over interior facets
-template <dolfinx::scalar T>
+template <dolfinx::scalar T, std::floating_point U>
 T assemble_interior_facets(
     mdspan2_t x_dofmap,
-    md::mdspan<const scalar_value_t<T>,
+    md::mdspan<const U,
                md::extents<std::size_t, md::dynamic_extent, 3>>
         x,
     md::mdspan<const std::int32_t,
                md::extents<std::size_t, md::dynamic_extent, 2, 2>>
         facets,
-    FEkernel<T> auto fn, std::span<const T> constants,
+    FEkernel<T, U> auto fn, std::span<const T> constants,
     md::mdspan<const T, md::extents<std::size_t, md::dynamic_extent, 2,
                                     md::dynamic_extent>>
         coeffs,
     md::mdspan<const std::uint8_t, md::dextents<std::size_t, 2>> perms,
-    std::span<scalar_value_t<T>> cdofs_b,
+    std::span<U> cdofs_b,
     std::optional<void*> custom_data = std::nullopt)
 {
   T value(0);
@@ -169,7 +169,7 @@ T assemble_interior_facets(
 template <dolfinx::scalar T, std::floating_point U>
 T assemble_scalar(
     const fem::Form<T, U>& M, mdspan2_t x_dofmap,
-    md::mdspan<const scalar_value_t<T>,
+    md::mdspan<const U,
                md::extents<std::size_t, md::dynamic_extent, 3>>
         x,
     std::span<const T> constants,
@@ -180,7 +180,7 @@ T assemble_scalar(
   std::shared_ptr<const mesh::Mesh<U>> mesh = M.mesh();
   assert(mesh);
 
-  std::vector<scalar_value_t<T>> cdofs_b(2 * 3 * x_dofmap.extent(1));
+  std::vector<U> cdofs_b(2 * 3 * x_dofmap.extent(1));
 
   T value = 0;
   for (int i = 0; i < M.num_integrals(IntegralType::cell, cell_type_idx); ++i)
@@ -193,7 +193,7 @@ T assemble_scalar(
     std::span<const std::int32_t> cells
         = M.domain(IntegralType::cell, i, cell_type_idx);
     assert(cells.size() * cstride == coeffs.size());
-    value += impl::assemble_cells(
+    value += impl::assemble_cells<T, U>(
         x_dofmap, x, cells, fn, constants,
         md::mdspan(coeffs.data(), cells.size(), cstride), cdofs_b, custom_data);
   }
@@ -228,7 +228,7 @@ T assemble_scalar(
     constexpr std::size_t shape1 = 2 * num_adjacent_cells;
 
     assert((facets.size() / shape1) * 2 * cstride == coeffs.size());
-    value += impl::assemble_interior_facets(
+    value += impl::assemble_interior_facets<T, U>(
         x_dofmap, x,
         md::mdspan<const std::int32_t,
                    md::extents<std::size_t, md::dynamic_extent, 2, 2>>(
@@ -260,7 +260,7 @@ T assemble_scalar(
 
       // Two values per each adj. cell (cell index and local entity index).
       assert((entities.size() / 2) * cstride == coeffs.size());
-      value += impl::assemble_entities(
+      value += impl::assemble_entities<T, U>(
           x_dofmap, x,
           md::mdspan<const std::int32_t,
                      md::extents<std::size_t, md::dynamic_extent, 2>>(

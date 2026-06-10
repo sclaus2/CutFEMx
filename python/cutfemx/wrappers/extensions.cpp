@@ -6,9 +6,11 @@
 
 #include <array.h>
 
+#include <complex>
 #include <cstdint>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/complex.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
@@ -230,7 +232,7 @@ void declare_extensions(nb::module_& m, const std::string& type)
       {
         if (!V)
           throw std::runtime_error("Received a null function space.");
-        return cutfemx::extensions::create_extension_penalty_matrix(
+        return cutfemx::extensions::create_extension_penalty_matrix<T, T>(
             *V, cut_data, aggregation);
       },
       nb::arg("V"), nb::arg("cut_data"), nb::arg("aggregation"),
@@ -306,6 +308,98 @@ void declare_extensions(nb::module_& m, const std::string& type)
       nb::arg("quadrature_degree"),
       "Create and assemble a cellwise-coefficient extension penalty MatrixCSR.");
 }
+
+template <typename Scalar, typename Geometry>
+void declare_extension_matrices(nb::module_& m, const std::string& type)
+{
+  using CellAggregation = cutfemx::extensions::CellAggregation<Geometry>;
+  using CutData = cutfemx::CutData<Geometry>;
+  using FunctionSpace = dolfinx::fem::FunctionSpace<Geometry>;
+  using MatrixCSR = dolfinx::la::MatrixCSR<Scalar>;
+
+  m.def(
+      ("create_extension_penalty_matrix_" + type).c_str(),
+      [](std::shared_ptr<const FunctionSpace> V, const CutData& cut_data,
+         const CellAggregation& aggregation)
+      {
+        if (!V)
+          throw std::runtime_error("Received a null function space.");
+        return cutfemx::extensions::create_extension_penalty_matrix<Scalar, Geometry>(
+            *V, cut_data, aggregation);
+      },
+      nb::arg("V"), nb::arg("cut_data"), nb::arg("aggregation"),
+      "Create a MatrixCSR with extension-penalty sparsity.");
+
+  m.def(
+      ("assemble_extension_penalty_scalar_" + type).c_str(),
+      [](MatrixCSR& A, std::shared_ptr<const FunctionSpace> V,
+         const CutData& cut_data, const CellAggregation& aggregation,
+         Scalar beta, int quadrature_degree)
+      {
+        if (!V)
+          throw std::runtime_error("Received a null function space.");
+        cutfemx::extensions::assemble_extension_penalty(
+            A, *V, cut_data, aggregation, beta, quadrature_degree);
+      },
+      nb::arg("A"), nb::arg("V"), nb::arg("cut_data"),
+      nb::arg("aggregation"), nb::arg("beta"),
+      nb::arg("quadrature_degree"),
+      "Assemble scalar-coefficient extension penalty into MatrixCSR.");
+
+  m.def(
+      ("assemble_extension_penalty_cellwise_" + type).c_str(),
+      [](MatrixCSR& A, std::shared_ptr<const FunctionSpace> V,
+         const CutData& cut_data, const CellAggregation& aggregation,
+         nb::ndarray<const Scalar, nb::ndim<1>, nb::c_contig> beta_cell_values,
+         int quadrature_degree)
+      {
+        if (!V)
+          throw std::runtime_error("Received a null function space.");
+        cutfemx::extensions::assemble_extension_penalty(
+            A, *V, cut_data, aggregation,
+            std::span<const Scalar>(beta_cell_values.data(),
+                                    beta_cell_values.size()),
+            quadrature_degree);
+      },
+      nb::arg("A"), nb::arg("V"), nb::arg("cut_data"),
+      nb::arg("aggregation"), nb::arg("beta_cell_values"),
+      nb::arg("quadrature_degree"),
+      "Assemble cellwise-coefficient extension penalty into MatrixCSR.");
+
+  m.def(
+      ("extension_penalty_matrix_scalar_" + type).c_str(),
+      [](std::shared_ptr<const FunctionSpace> V, const CutData& cut_data,
+         const CellAggregation& aggregation, Scalar beta, int quadrature_degree)
+      {
+        if (!V)
+          throw std::runtime_error("Received a null function space.");
+        return cutfemx::extensions::extension_penalty_matrix(
+            *V, cut_data, aggregation, beta, quadrature_degree);
+      },
+      nb::arg("V"), nb::arg("cut_data"), nb::arg("aggregation"),
+      nb::arg("beta"), nb::arg("quadrature_degree"),
+      "Create and assemble a scalar-coefficient MatrixCSR.");
+
+  m.def(
+      ("extension_penalty_matrix_cellwise_" + type).c_str(),
+      [](std::shared_ptr<const FunctionSpace> V, const CutData& cut_data,
+         const CellAggregation& aggregation,
+         nb::ndarray<const Scalar, nb::ndim<1>, nb::c_contig> beta_cell_values,
+         int quadrature_degree)
+      {
+        if (!V)
+          throw std::runtime_error("Received a null function space.");
+        return cutfemx::extensions::extension_penalty_matrix(
+            *V, cut_data, aggregation,
+            std::span<const Scalar>(beta_cell_values.data(),
+                                    beta_cell_values.size()),
+            quadrature_degree);
+      },
+      nb::arg("V"), nb::arg("cut_data"), nb::arg("aggregation"),
+      nb::arg("beta_cell_values"),
+      nb::arg("quadrature_degree"),
+      "Create and assemble a cellwise-coefficient MatrixCSR.");
+}
 } // namespace
 
 namespace cutfemx_wrappers
@@ -314,5 +408,15 @@ void extensions(nb::module_& m)
 {
   declare_extensions<float>(m, "float32");
   declare_extensions<double>(m, "float64");
+  declare_extension_matrices<float, double>(m, "float32_float64");
+  declare_extension_matrices<double, float>(m, "float64_float32");
+  declare_extension_matrices<std::complex<float>, float>(
+      m, "complex64_float32");
+  declare_extension_matrices<std::complex<float>, double>(
+      m, "complex64_float64");
+  declare_extension_matrices<std::complex<double>, float>(
+      m, "complex128_float32");
+  declare_extension_matrices<std::complex<double>, double>(
+      m, "complex128_float64");
 }
 } // namespace cutfemx_wrappers

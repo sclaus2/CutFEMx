@@ -6,11 +6,14 @@
 
 #include <cstdint>
 #include <array>
+#include <complex>
+#include <concepts>
 #include <functional>
 #include <map>
 #include <memory>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/complex.h>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
@@ -46,31 +49,29 @@ namespace nb = nanobind;
 
 namespace
 {
-template <typename T>
+template <typename T, std::floating_point U>
 using kernel_fn_t
-    = void (*)(T*, const T*, const T*, const typename dolfinx::scalar_value_t<T>*,
-               const int*, const std::uint8_t*, void*);
+    = void (*)(T*, const T*, const T*, const U*, const int*,
+               const std::uint8_t*, void*);
 
-template <typename T>
-std::function<void(T*, const T*, const T*, const dolfinx::scalar_value_t<T>*,
-                   const int*, const std::uint8_t*, void*)>
+template <typename T, std::floating_point U>
+std::function<void(T*, const T*, const T*, const U*, const int*,
+                   const std::uint8_t*, void*)>
 kernel_from_pointer(std::uintptr_t kernel_ptr)
 {
   if (kernel_ptr == 0)
     throw std::runtime_error("Cannot create CutFEMx Form with a null kernel.");
 
-  auto fn = reinterpret_cast<kernel_fn_t<T>>(kernel_ptr);
+  auto fn = reinterpret_cast<kernel_fn_t<T, U>>(kernel_ptr);
   return [fn](T* A, const T* w, const T* c,
-              const dolfinx::scalar_value_t<T>* coordinate_dofs,
-              const int* entity_local_index, const std::uint8_t* permutation,
-              void* custom_data)
+              const U* coordinate_dofs, const int* entity_local_index,
+              const std::uint8_t* permutation, void* custom_data)
   { fn(A, w, c, coordinate_dofs, entity_local_index, permutation, custom_data); };
 }
 
-template <typename T>
+template <typename T, std::floating_point U>
 void declare_runtime_fem(nb::module_& m, std::string type)
 {
-  using U = typename dolfinx::scalar_value_t<T>;
   using Form = dolfinx_custom_data::fem::Form<T, U>;
   using FunctionSpace = dolfinx::fem::FunctionSpace<U>;
   using Function = dolfinx::fem::Function<T, U>;
@@ -153,9 +154,9 @@ void declare_runtime_fem(nb::module_& m, std::string type)
 
           integrals.emplace(
               std::make_tuple(static_cast<dolfinx_custom_data::fem::IntegralType>(type_index),
-                              subdomain_id, kernel_index),
+              subdomain_id, kernel_index),
               dolfinx_custom_data::fem::integral_data<T, U>(
-                  kernel_from_pointer<T>(kernel_ptr), std::move(entities),
+                  kernel_from_pointer<T, U>(kernel_ptr), std::move(entities),
                   active_coeffs, custom_data));
         }
 
@@ -488,6 +489,13 @@ namespace cutfemx_wrappers
 {
 void fem_runtime(nb::module_& m)
 {
-  declare_runtime_fem<double>(m, "float64");
+  declare_runtime_fem<float, float>(m, "float32");
+  declare_runtime_fem<float, double>(m, "float32_float64");
+  declare_runtime_fem<double, float>(m, "float64_float32");
+  declare_runtime_fem<double, double>(m, "float64");
+  declare_runtime_fem<std::complex<float>, float>(m, "complex64");
+  declare_runtime_fem<std::complex<float>, double>(m, "complex64_float64");
+  declare_runtime_fem<std::complex<double>, float>(m, "complex128_float32");
+  declare_runtime_fem<std::complex<double>, double>(m, "complex128");
 }
 } // namespace cutfemx_wrappers

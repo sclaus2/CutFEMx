@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <dolfinx/fem/FunctionSpace.h>
+#include <dolfinx/common/types.h>
 #include <dolfinx/la/MatrixCSR.h>
 #include <dolfinx/la/SparsityPattern.h>
 
@@ -52,28 +53,28 @@ ExtensionQuadrature<T> extension_quadrature(
     const CutData<T>& cut_data, const CellAggregation<T>& aggregation,
     int quadrature_degree);
 
-template <std::floating_point T>
-dolfinx::la::MatrixCSR<T> create_extension_penalty_matrix(
+template <dolfinx::scalar S, std::floating_point T>
+dolfinx::la::MatrixCSR<S> create_extension_penalty_matrix(
     const dolfinx::fem::FunctionSpace<T>& V,
     const CutData<T>& cut_data, const CellAggregation<T>& aggregation);
 
-template <std::floating_point T>
+template <dolfinx::scalar S, std::floating_point T>
 void assemble_extension_penalty(
     std::function<int(std::span<const std::int32_t>,
-                      std::span<const std::int32_t>, std::span<const T>)>
+                      std::span<const std::int32_t>, std::span<const S>)>
         mat_add,
     const dolfinx::fem::FunctionSpace<T>& V,
     const CutData<T>& cut_data, const CellAggregation<T>& aggregation,
-    T beta, int quadrature_degree);
+    S beta, int quadrature_degree);
 
-template <std::floating_point T>
+template <dolfinx::scalar S, std::floating_point T>
 void assemble_extension_penalty(
     std::function<int(std::span<const std::int32_t>,
-                      std::span<const std::int32_t>, std::span<const T>)>
+                      std::span<const std::int32_t>, std::span<const S>)>
         mat_add,
     const dolfinx::fem::FunctionSpace<T>& V,
     const CutData<T>& cut_data, const CellAggregation<T>& aggregation,
-    std::span<const T> beta_cell_values, int quadrature_degree);
+    std::span<const S> beta_cell_values, int quadrature_degree);
 
 template <std::floating_point T>
 void insert_extension_penalty_sparsity(
@@ -81,39 +82,39 @@ void insert_extension_penalty_sparsity(
     const dolfinx::fem::FunctionSpace<T>& V,
     const CellAggregation<T>& aggregation);
 
-template <std::floating_point T>
+template <dolfinx::scalar S, std::floating_point T>
 void assemble_extension_penalty(
-    dolfinx::la::MatrixCSR<T>& A, const dolfinx::fem::FunctionSpace<T>& V,
+    dolfinx::la::MatrixCSR<S>& A, const dolfinx::fem::FunctionSpace<T>& V,
     const CutData<T>& cut_data, const CellAggregation<T>& aggregation,
-    T beta, int quadrature_degree);
+    S beta, int quadrature_degree);
 
-template <std::floating_point T>
+template <dolfinx::scalar S, std::floating_point T>
 void assemble_extension_penalty(
-    dolfinx::la::MatrixCSR<T>& A, const dolfinx::fem::FunctionSpace<T>& V,
+    dolfinx::la::MatrixCSR<S>& A, const dolfinx::fem::FunctionSpace<T>& V,
     const CutData<T>& cut_data, const CellAggregation<T>& aggregation,
-    std::span<const T> beta_cell_values, int quadrature_degree);
+    std::span<const S> beta_cell_values, int quadrature_degree);
 
-template <std::floating_point T>
+template <dolfinx::scalar S, std::floating_point T>
 void assemble_extension_penalty(
-    dolfinx::la::MatrixCSR<T>& A, const dolfinx::fem::FunctionSpace<T>& V,
-    const ExtensionQuadrature<T>& quadrature, T beta);
+    dolfinx::la::MatrixCSR<S>& A, const dolfinx::fem::FunctionSpace<T>& V,
+    const ExtensionQuadrature<T>& quadrature, S beta);
 
-template <std::floating_point T>
+template <dolfinx::scalar S, std::floating_point T>
 void assemble_extension_penalty(
-    dolfinx::la::MatrixCSR<T>& A, const dolfinx::fem::FunctionSpace<T>& V,
+    dolfinx::la::MatrixCSR<S>& A, const dolfinx::fem::FunctionSpace<T>& V,
     const ExtensionQuadrature<T>& quadrature,
-    std::span<const T> beta_cell_values);
+    std::span<const S> beta_cell_values);
 
-template <std::floating_point T>
-dolfinx::la::MatrixCSR<T> extension_penalty_matrix(
+template <dolfinx::scalar S, std::floating_point T>
+dolfinx::la::MatrixCSR<S> extension_penalty_matrix(
     const dolfinx::fem::FunctionSpace<T>& V,
     const CutData<T>& cut_data, const CellAggregation<T>& aggregation,
-    T beta, int quadrature_degree);
+    S beta, int quadrature_degree);
 
-template <std::floating_point T>
-dolfinx::la::MatrixCSR<T> extension_penalty_matrix(
+template <dolfinx::scalar S, std::floating_point T>
+dolfinx::la::MatrixCSR<S> extension_penalty_matrix(
     const dolfinx::fem::FunctionSpace<T>& V,
     const CutData<T>& cut_data, const CellAggregation<T>& aggregation,
-    std::span<const T> beta_cell_values, int quadrature_degree);
+    std::span<const S> beta_cell_values, int quadrature_degree);
 
 } // namespace cutfemx::extensions

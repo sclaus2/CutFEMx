@@ -59,18 +59,18 @@ using mdspan2_t = md::mdspan<const std::int32_t, md::dextents<std::size_t, 2>>;
 /// function mesh.
 /// @param[in] custom_data Optional pointer to user-supplied data passed to
 /// the kernel at runtime.
-template <int _bs = -1, typename V,
+template <int _bs = -1, typename V, std::floating_point U,
           dolfinx::scalar T = typename std::remove_cvref_t<V>::value_type>
   requires std::is_same_v<typename std::remove_cvref_t<V>::value_type, T>
 
 void assemble_cells(
     fem::DofTransformKernel<T> auto P0, V&& b, mdspan2_t x_dofmap,
-    md::mdspan<const scalar_value_t<T>,
+    md::mdspan<const U,
                md::extents<std::size_t, md::dynamic_extent, 3>>
         x,
     std::span<const std::int32_t> cells,
     std::tuple<mdspan2_t, int, std::span<const std::int32_t>> dofmap,
-    FEkernel<T> auto kernel, std::span<const T> constants,
+    FEkernel<T, U> auto kernel, std::span<const T> constants,
     md::mdspan<const T, md::dextents<std::size_t, 2>> coeffs,
     std::span<const std::uint32_t> cell_info0,
     std::optional<void*> custom_data = std::nullopt)
@@ -82,7 +82,7 @@ void assemble_cells(
   assert(_bs < 0 or _bs == bs);
 
   // Create data structures used in assembly
-  std::vector<scalar_value_t<T>> cdofs(3 * x_dofmap.extent(1));
+  std::vector<U> cdofs(3 * x_dofmap.extent(1));
   std::vector<T> be(bs * dmap.extent(1));
 
   // Iterate over active cells
@@ -156,12 +156,12 @@ void assemble_cells(
 /// permutations are not required.
 /// @param[in] custom_data Optional pointer to user-supplied data passed to
 /// the kernel at runtime.
-template <int _bs = -1, typename V,
+template <int _bs = -1, typename V, std::floating_point U,
           dolfinx::scalar T = typename std::remove_cvref_t<V>::value_type>
   requires std::is_same_v<typename std::remove_cvref_t<V>::value_type, T>
 void assemble_entities(
     fem::DofTransformKernel<T> auto P0, V&& b, mdspan2_t x_dofmap,
-    md::mdspan<const scalar_value_t<T>,
+    md::mdspan<const U,
                md::extents<std::size_t, md::dynamic_extent, 3>>
         x,
     md::mdspan<const std::int32_t,
@@ -171,7 +171,7 @@ void assemble_entities(
                md::mdspan<const std::int32_t,
                           std::extents<std::size_t, md::dynamic_extent, 2>>>
         dofmap,
-    FEkernel<T> auto kernel, std::span<const T> constants,
+    FEkernel<T, U> auto kernel, std::span<const T> constants,
     md::mdspan<const T, md::dextents<std::size_t, 2>> coeffs,
     std::span<const std::uint32_t> cell_info0,
     md::mdspan<const std::uint8_t, md::dextents<std::size_t, 2>> perms,
@@ -185,7 +185,7 @@ void assemble_entities(
 
   // Create data structures used in assembly
   const int num_dofs = dmap.extent(1);
-  std::vector<scalar_value_t<T>> cdofs(3 * x_dofmap.extent(1));
+  std::vector<U> cdofs(3 * x_dofmap.extent(1));
   std::vector<T> be(bs * num_dofs);
   assert(entities0.size() == entities.size());
   for (std::size_t f = 0; f < entities.extent(0); ++f)
@@ -256,12 +256,12 @@ void assemble_entities(
 /// permutations are not required.
 /// @param[in] custom_data Optional pointer to user-supplied data passed to
 /// the kernel at runtime.
-template <int _bs = -1, typename V,
+template <int _bs = -1, typename V, std::floating_point U,
           dolfinx::scalar T = typename std::remove_cvref_t<V>::value_type>
   requires std::is_same_v<typename std::remove_cvref_t<V>::value_type, T>
 void assemble_interior_facets(
     fem::DofTransformKernel<T> auto P0, V&& b, mdspan2_t x_dofmap,
-    md::mdspan<const scalar_value_t<T>,
+    md::mdspan<const U,
                md::extents<std::size_t, md::dynamic_extent, 3>>
         x,
     md::mdspan<const std::int32_t,
@@ -271,7 +271,7 @@ void assemble_interior_facets(
                md::mdspan<const std::int32_t,
                           std::extents<std::size_t, md::dynamic_extent, 2, 2>>>
         dofmap,
-    FEkernel<T> auto kernel, std::span<const T> constants,
+    FEkernel<T, U> auto kernel, std::span<const T> constants,
     md::mdspan<const T, md::extents<std::size_t, md::dynamic_extent, 2,
                                     md::dynamic_extent>>
         coeffs,
@@ -279,7 +279,7 @@ void assemble_interior_facets(
     md::mdspan<const std::uint8_t, md::dextents<std::size_t, 2>> perms,
     std::optional<void*> custom_data = std::nullopt)
 {
-  using X = scalar_value_t<T>;
+  using X = U;
 
   if (facets.empty())
     return;
@@ -575,7 +575,7 @@ template <typename V, std::floating_point U,
   requires std::is_same_v<typename std::remove_cvref_t<V>::value_type, T>
 void assemble_vector(
     V&& b, const Form<T, U>& L,
-    md::mdspan<const scalar_value_t<T>,
+    md::mdspan<const U,
                md::extents<std::size_t, md::dynamic_extent, 3>>
         x,
     std::span<const T> constants,
@@ -781,22 +781,13 @@ void assemble_vector(
                    std::pair<std::span<const T>, int>>& coefficients)
 {
   using mdspanx3_t
-      = md::mdspan<const scalar_value_t<T>,
+      = md::mdspan<const U,
                    md::extents<std::size_t, md::dynamic_extent, 3>>;
 
   std::shared_ptr<const mesh::Mesh<U>> mesh = L.mesh();
   assert(mesh);
   auto x = mesh->geometry().x();
-  if constexpr (std::is_same_v<U, scalar_value_t<T>>)
-  {
-    impl::assemble_vector(b, L, mdspanx3_t(x.data(), x.size() / 3, 3),
-                          constants, coefficients);
-  }
-  else
-  {
-    std::vector<scalar_value_t<T>> _x(x.begin(), x.end());
-    impl::assemble_vector(b, L, mdspanx3_t(_x.data(), _x.size() / 3, 3),
-                          constants, coefficients);
-  }
+  impl::assemble_vector(b, L, mdspanx3_t(x.data(), x.size() / 3, 3),
+                        constants, coefficients);
 }
 } // namespace dolfinx_custom_data::fem::impl

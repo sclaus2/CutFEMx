@@ -236,6 +236,9 @@ The `python/demo` directory contains examples illustrating the usage of CutFEMx:
   runtime quadrature on cells and the active interior skeleton.
 - **Interface Poisson** (`demo_interface_poisson.py`): solve an interface
   problem across level-set-defined subdomains.
+- **Quad/hex cut Poisson** (`demo_quad_hex_cuts.py`): cut quadrilateral and
+  hexahedral meshes with flower/popcorn level sets, solve a manufactured
+  Poisson problem, and optionally write PyVista screenshots.
 - **Moving domain** (`demo_moving_poisson.py`): update quadrature rules and
   integration domains as the interface moves.
 - **Exterior-facet runtime quadrature** (`demo_boundary_sphere_perimeter.py`):
