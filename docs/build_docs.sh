@@ -10,6 +10,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 DOCS_CONDA_ENV="${CUTFEMX_DOCS_CONDA_ENV:-${CONDA_DEFAULT_ENV:-}}"
+export LC_ALL=C
+export LANG=C
 
 # Function to print colored output
 print_status() {
@@ -99,9 +101,23 @@ clean_build() {
 # Function to build documentation
 build_docs() {
     activate_env
+    if [ "${CUTFEMX_DOCS_GENERATE_VISUALS:-0}" = "1" ]; then
+        generate_visuals
+    fi
     print_status "Building documentation..."
     sphinx-build -b html . _build/html
     print_success "Documentation built successfully"
+}
+
+# Function to generate PyVista tutorial screenshots
+generate_visuals() {
+    activate_env
+    print_status "Generating PyVista tutorial screenshots..."
+    export MPLCONFIGDIR="${TMPDIR:-/tmp}/cutfemx-docs-matplotlib"
+    export XDG_CACHE_HOME="${TMPDIR:-/tmp}/cutfemx-docs-cache"
+    mkdir -p "$MPLCONFIGDIR" "$XDG_CACHE_HOME"
+    python tutorials/make_pyvista_scenes.py
+    print_success "Tutorial screenshots generated"
 }
 
 # Function to serve documentation locally
@@ -173,6 +189,7 @@ show_help() {
     echo "Commands:"
     echo "  install     Install documentation dependencies (uses active/configured env)"
     echo "  clean       Clean build directory"
+    echo "  visuals     Generate PyVista tutorial screenshots"
     echo "  build       Build documentation (uses active/configured env)"
     echo "  serve       Serve documentation locally (after building)"
     echo "  live        Build and serve with live reload (uses active/configured env)"
@@ -187,6 +204,7 @@ show_help() {
     echo
     echo "Examples:"
     echo "  $0 install     # Install dependencies in the active or configured environment"
+    echo "  $0 visuals     # Generate PyVista screenshots for tutorials"
     echo "  $0 build       # Build documentation"
     echo "  $0 live        # Start live development server"
     echo "  $0 all         # Full build and serve"
@@ -199,6 +217,9 @@ case "${1:-help}" in
         ;;
     clean)
         clean_build
+        ;;
+    visuals)
+        generate_visuals
         ;;
     build)
         build_docs

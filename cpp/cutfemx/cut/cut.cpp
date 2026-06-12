@@ -27,6 +27,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 #include <cutcells/cell_types.h>
@@ -164,6 +165,75 @@ void validate_quadrature_order(int order)
 {
   if (order < 0)
     throw std::invalid_argument("Quadrature order must be non-negative");
+}
+
+std::string cutcells_cell_type_name(cutcells::cell::type cell_type)
+{
+  switch (cell_type)
+  {
+  case cutcells::cell::type::point:
+    return "point";
+  case cutcells::cell::type::interval:
+    return "interval";
+  case cutcells::cell::type::triangle:
+    return "triangle";
+  case cutcells::cell::type::tetrahedron:
+    return "tetrahedron";
+  case cutcells::cell::type::quadrilateral:
+    return "quadrilateral";
+  case cutcells::cell::type::hexahedron:
+    return "hexahedron";
+  case cutcells::cell::type::prism:
+    return "prism";
+  case cutcells::cell::type::pyramid:
+    return "pyramid";
+  }
+  return "unknown";
+}
+
+bool is_algoim_backend(cutcells::output::QuadratureBackend backend)
+{
+  return backend == cutcells::output::QuadratureBackend::AlgoimBernstein
+         || backend == cutcells::output::QuadratureBackend::AlgoimGeneral;
+}
+
+bool is_algoim_supported_host_cell(cutcells::cell::type cell_type)
+{
+  return cell_type == cutcells::cell::type::interval
+         || cell_type == cutcells::cell::type::quadrilateral
+         || cell_type == cutcells::cell::type::hexahedron;
+}
+
+template <std::floating_point T>
+void validate_algoim_backend_support(
+    const CutData<T>& cut_data, cutcells::output::QuadratureBackend backend)
+{
+  if (!is_algoim_backend(backend))
+    return;
+
+  if (!cut_data.mesh_view.has_uniform_cell_type)
+  {
+    throw std::invalid_argument(
+        "Algoim quadrature backends require a uniform host cell type");
+  }
+
+  const cutcells::cell::type host_cell_type =
+      cut_data.mesh_view.uniform_cell_type;
+  if (!is_algoim_supported_host_cell(host_cell_type))
+  {
+    throw std::invalid_argument(
+        "Algoim quadrature backends require interval, quadrilateral, or "
+        "hexahedron host cells; got "
+        + cutcells_cell_type_name(host_cell_type) + ".");
+  }
+
+  if (cut_data.gdim < cut_data.tdim)
+  {
+    throw std::invalid_argument(
+        "Algoim quadrature backends require host cells with "
+        "gdim >= tdim; got gdim=" + std::to_string(cut_data.gdim)
+        + " and tdim=" + std::to_string(cut_data.tdim) + ".");
+  }
 }
 
 std::vector<std::int32_t>
@@ -1083,7 +1153,10 @@ mesh::CutMesh<T> dolfinx_cut_mesh_from_cutcells_mesh(
           throw std::runtime_error(
               "CutCells quadrilateral visualisation cell has invalid arity");
         }
-        const std::array<int, 6> triangle_vertices{0, 1, 2, 0, 2, 3};
+        // CutCells stores quadrilateral vertices in Basix order
+        // (0, 1, 2, 3), while the usual VTK split assumes (0, 1, 3, 2).
+        // Split the Basix-ordered quad along the corresponding diagonal.
+        const std::array<int, 6> triangle_vertices{0, 1, 3, 0, 3, 2};
         for (const int local : triangle_vertices)
         {
           cells.push_back(static_cast<std::int64_t>(
@@ -1163,26 +1236,159 @@ mesh::CutMesh<T> create_cut_mesh(const CutData<T>& cut_data,
 }
 
 template <std::floating_point T>
+RuntimeQuadrature<T> runtime_quadrature_from_rules(
+    const CutData<T>& cut_data,
+    cutcells::quadrature::QuadratureRules<T>&& rules,
+    RuntimeSurfaceProvenance&& surface_provenance = {});
+
+namespace
+{
+int single_equality_level_set_index(const cutcells::SelectionExpr& expr)
+{
+  if (expr.terms.size() != 1)
+    return -1;
+  const auto& term = expr.terms.front();
+  if (term.clauses.size() != 1)
+    return -1;
+  const auto& clause = term.clauses.front();
+  if (clause.relation != cutcells::Relation::EqualTo)
+    return -1;
+  return clause.level_set_index;
+}
+
+template <std::floating_point T>
+RuntimeSurfaceProvenance make_surface_provenance(
+    const cutcells::HOMeshPart<T, std::int32_t>& part,
+    std::string_view selector, std::size_t num_rules)
+{
+  RuntimeSurfaceProvenance provenance;
+  provenance.selector = std::string(selector);
+  provenance.level_set_index = single_equality_level_set_index(part.expr);
+  if (provenance.level_set_index < 0)
+    return provenance;
+  if (part.dim != part.mesh->tdim - 1)
+    return provenance;
+
+  const std::vector<cutcells::output::SelectedZeroEntityInfo> infos
+      = cutcells::output::selected_zero_entity_infos(part);
+  if (infos.size() != num_rules)
+  {
+    throw std::runtime_error(
+        "Surface-normal provenance is not aligned with runtime quadrature "
+        "rules. This is only supported for straight codimension-one cut "
+        "quadrature in the first pass.");
+  }
+
+  provenance.cut_cell_ids.reserve(infos.size());
+  provenance.parent_cell_ids.reserve(infos.size());
+  provenance.local_zero_entity_ids.reserve(infos.size());
+  provenance.dimensions.reserve(infos.size());
+  for (const auto& info : infos)
+  {
+    provenance.cut_cell_ids.push_back(info.cut_cell_id);
+    provenance.parent_cell_ids.push_back(info.parent_cell_id);
+    provenance.local_zero_entity_ids.push_back(info.local_zero_entity_id);
+    provenance.dimensions.push_back(info.dimension);
+  }
+  return provenance;
+}
+} // namespace
+
+template <std::floating_point T>
 RuntimeQuadrature<T> runtime_quadrature(const CutData<T>& cut_data,
-                                        std::string_view ls_part, int order)
+                                        std::string_view ls_part, int order,
+                                        std::string_view backend)
 {
   validate_quadrature_order(order);
+
+  const auto parsed_backend
+      = cutcells::output::quadrature_backend_from_string(backend);
+  validate_algoim_backend_support(cut_data, parsed_backend);
 
   auto part = select_mesh_part(cut_data.mesh_view, cut_data.cut_cells,
                                cut_data.parent_cells, ls_part);
   cutcells::quadrature::QuadratureRules<T> rules
       = cutcells::output::quadrature_rules<T, std::int32_t>(
-          part, order, /*include_uncut_cells=*/false);
+          part, order, /*include_uncut_cells=*/false, parsed_backend);
+  RuntimeSurfaceProvenance surface_provenance;
+  if (parsed_backend == cutcells::output::QuadratureBackend::Straight)
+  {
+    surface_provenance
+        = make_surface_provenance(part, ls_part, rules._parent_map.size());
+  }
+  return runtime_quadrature_from_rules(
+      cut_data, std::move(rules), std::move(surface_provenance));
+}
+
+template <std::floating_point T>
+RuntimeQuadrature<T> runtime_quadrature_from_rules(
+    const CutData<T>& cut_data,
+    cutcells::quadrature::QuadratureRules<T>&& rules,
+    RuntimeSurfaceProvenance&& surface_provenance)
+{
   std::optional<std::vector<T>> physical_points;
   if (!cut_data.parent_entities.empty())
     physical_points = physical_points_for_host_mesh(rules, cut_data);
   remap_parent_map_to_background_entities(rules._parent_map, cut_data);
   if (physical_points)
   {
-    return RuntimeQuadrature<T>(std::move(rules), cut_data.mesh_owner,
-                                std::move(*physical_points), cut_data.gdim);
+    return RuntimeQuadrature<T>(
+        std::move(rules), cut_data.mesh_owner, std::move(*physical_points),
+        cut_data.gdim, std::move(surface_provenance));
   }
-  return RuntimeQuadrature<T>(std::move(rules), cut_data.mesh_owner);
+  return RuntimeQuadrature<T>(
+      std::move(rules), cut_data.mesh_owner, std::move(surface_provenance));
+}
+
+template <std::floating_point T>
+std::vector<std::pair<std::string, RuntimeQuadrature<T>>> runtime_quadratures(
+    const CutData<T>& cut_data, std::span<const std::string> ls_parts,
+    int order, std::string_view backend)
+{
+  validate_quadrature_order(order);
+
+  const auto parsed_backend
+      = cutcells::output::quadrature_backend_from_string(backend);
+  validate_algoim_backend_support(cut_data, parsed_backend);
+
+  std::vector<std::pair<std::string, cutcells::HOMeshPart<T, std::int32_t>>>
+      parts;
+  parts.reserve(ls_parts.size());
+  for (const std::string& ls_part : ls_parts)
+  {
+    parts.emplace_back(
+        ls_part,
+        select_mesh_part(cut_data.mesh_view, cut_data.cut_cells,
+                         cut_data.parent_cells, ls_part));
+  }
+
+  auto named_rules = cutcells::output::paired_quadrature_rules<T, std::int32_t>(
+      parts, order, /*include_uncut_cells=*/false, parsed_backend);
+
+  std::vector<std::pair<std::string, RuntimeQuadrature<T>>> out;
+  out.reserve(named_rules.size());
+  std::unordered_map<std::string, const cutcells::HOMeshPart<T, std::int32_t>*>
+      part_by_name;
+  for (const auto& [name, part] : parts)
+    part_by_name.emplace(name, &part);
+  for (auto& [name, rules] : named_rules)
+  {
+    RuntimeSurfaceProvenance surface_provenance;
+    if (parsed_backend == cutcells::output::QuadratureBackend::Straight)
+    {
+      auto it = part_by_name.find(name);
+      if (it != part_by_name.end())
+      {
+        surface_provenance = make_surface_provenance(
+            *it->second, name, rules._parent_map.size());
+      }
+    }
+    out.emplace_back(
+        std::move(name),
+        runtime_quadrature_from_rules(
+            cut_data, std::move(rules), std::move(surface_provenance)));
+  }
+  return out;
 }
 
 template CutData<double> cut(
@@ -1253,8 +1459,17 @@ template mesh::CutMesh<float> create_cut_mesh(
     const CutData<float>&, std::string_view, std::string_view);
 
 template RuntimeQuadrature<double> runtime_quadrature(
-    const CutData<double>&, std::string_view, int);
+    const CutData<double>&, std::string_view, int, std::string_view);
 template RuntimeQuadrature<float> runtime_quadrature(
-    const CutData<float>&, std::string_view, int);
+    const CutData<float>&, std::string_view, int, std::string_view);
+
+template std::vector<std::pair<std::string, RuntimeQuadrature<double>>>
+runtime_quadratures(
+    const CutData<double>&, std::span<const std::string>, int,
+    std::string_view);
+template std::vector<std::pair<std::string, RuntimeQuadrature<float>>>
+runtime_quadratures(
+    const CutData<float>&, std::span<const std::string>, int,
+    std::string_view);
 
 } // namespace cutfemx

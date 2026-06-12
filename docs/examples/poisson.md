@@ -9,12 +9,17 @@ defined on a fixed background mesh.
 ```{admonition} Problem statement
 :class: formulation
 
-Let $\Omega_0 = [-1,1]^2$ be the background domain and define
+Let $\Omega_0 = [-1,1]^2$ be the background domain. With
+$\rho=\sqrt{x^2+y^2}$ and $\theta=\operatorname{atan2}(y,x)$, define the
+six-petal flower level set
 
 $$
-\phi(x,y) = \sqrt{x^2+y^2} - R,
-\qquad R = 0.5.
+r_\Gamma(\theta)=R_0+A\cos(m\theta),
+\qquad
+\phi(x,y)=\rho-r_\Gamma(\theta),
 $$
+
+where $R_0=0.46$, $A=0.15$, and $m=6$.
 
 The physical domain and embedded boundary are
 
@@ -48,7 +53,9 @@ $$
 Let $\mathcal T_h$ be a triangulation of the background domain
 $\Omega_0$. The computational mesh does not conform to $\Gamma$; instead,
 CutFEMx classifies mesh entities according to the sign of the level-set field.
-The level-set field is represented as an ordinary finite element function:
+The level-set field is represented as an ordinary finite element function. The
+demo uses a linear level-set field on triangles, matching the currently
+reliable quadrature path.
 
 ```python
 msh = mesh.create_rectangle(
@@ -58,9 +65,15 @@ msh = mesh.create_rectangle(
     cell_type=mesh.CellType.triangle,
 )
 
-V_phi = fem.functionspace(msh, ("Lagrange", 2))
+V_phi = fem.functionspace(msh, ("Lagrange", 1))
 phi = fem.Function(V_phi, name="phi")
-phi.interpolate(lambda x: np.sqrt(x[0] ** 2 + x[1] ** 2) - 0.5)
+
+def flower_level_set(x):
+    theta = np.arctan2(x[1], x[0])
+    boundary_radius = 0.46 + 0.15 * np.cos(6 * theta)
+    return np.sqrt(x[0] ** 2 + x[1] ** 2) - boundary_radius
+
+phi.interpolate(flower_level_set)
 ```
 
 The call to `cutfemx.cut` constructs the geometric information required to
@@ -156,7 +169,8 @@ dx_gamma = ufl.Measure(
 )
 ```
 
-The measure named `dx_omega` represents volume integration over the disk.
+The measure named `dx_omega` represents volume integration over the flower
+domain.
 The measure named `dx_gamma` is written as a UFL `"dx"` measure because the
 interface quadrature is hosted by cut cells, but geometrically it represents
 integration over the curve $\Gamma$.
@@ -263,8 +277,8 @@ L += (
 ) * dx_gamma
 ```
 
-The sign of the normal is determined by the level set. For
-$\phi(x)=|x|-R$, the normal points from the disk to the exterior:
+The sign of the normal is determined by the level set. For this flower level
+set, the same expression gives the outward normal of the negative phase:
 
 $$
 n_\Gamma = \frac{\nabla\phi}{|\nabla\phi|}.
@@ -372,7 +386,7 @@ uh = solve_runtime_system(a_cut, L_cut, V, solver)
 
 ## Error And Visualization
 
-The $L^2$ error is evaluated on the physical disk:
+The $L^2$ error is evaluated on the physical flower domain:
 
 $$
 \|u_h-u_{\mathrm{ex}}\|_{L^2(\Omega)}^2

@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import prod
 from types import MethodType
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import cffi
@@ -698,8 +699,9 @@ def _runtime_domain_and_custom_data(
     integral_type: str,
     subdomain_id: int,
     kernel_idx: int,
+    kernel: Any | None = None,
     custom_data: int | dict[tuple[Any, ...], int | Any | None] | Any | None,
-    cache: dict[tuple[int, str, int], Any],
+    cache: dict[tuple[int, str, int, tuple[int, ...]], Any],
 ) -> tuple[npt.NDArray[np.int32], int | None, Any | None]:
     """Return runtime entity domain and custom-data pointer for one integral."""
     from runintgen.basix_runtime import CustomData
@@ -742,7 +744,11 @@ def _runtime_domain_and_custom_data(
     )
     owner = None
     if data_ptr is None:
-        cache_key = (id(provider), integral_type, subdomain_id)
+        q_slots = tuple(
+            int(slot)
+            for slot in (getattr(kernel, "quadrature_function_slots", None) or ())
+        )
+        cache_key = (id(provider), integral_type, subdomain_id, q_slots)
         owner = cache.get(cache_key)
         if owner is None:
             quadrature = _quadrature_for_custom_data(
@@ -750,8 +756,15 @@ def _runtime_domain_and_custom_data(
                 compiled.jit_info.module,
                 quadrature_provider,
             )
+            metadata_or_module = compiled.jit_info.module
+            if kernel is not None:
+                metadata_or_module = SimpleNamespace(
+                    form_metadata=compiled.jit_info.module.form_metadata,
+                    quadrature_functions=compiled.jit_info.module.quadrature_functions,
+                    quadrature_function_slots=list(q_slots),
+                )
             owner = CustomData(
-                compiled.jit_info.module,
+                metadata_or_module,
                 quadrature=quadrature,
                 quadrature_function_evaluator=(
                     _evaluate_background_quadrature_function

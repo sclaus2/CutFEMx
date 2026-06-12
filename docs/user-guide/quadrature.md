@@ -54,6 +54,32 @@ omega_rules = cutfemx.runtime_quadrature(cell_cut, "phi<0", order=4)
 gamma_rules = cutfemx.runtime_quadrature(cell_cut, "phi=0", order=4)
 ```
 
+For quadrilateral and hexahedral cuts, pass `backend="algoim"` to use the
+Algoim Bernstein-polynomial quadrature backend. The older Algoim callback path
+remains available as `backend="algoim_general"`. The selector interface is the
+same for all backends:
+
+```python
+omega_rules = cutfemx.runtime_quadrature(
+    cell_cut, "phi<0", order=4, backend="algoim"
+)
+exterior_rules = cutfemx.runtime_quadrature(
+    cell_cut, "phi>0", order=4, backend="algoim"
+)
+gamma_rules = cutfemx.runtime_quadrature(
+    cell_cut, "phi=0", order=4, backend="algoim"
+)
+```
+
+When several Algoim Bernstein rules are needed for the same level set,
+`runtime_quadratures` can avoid some repeated work and returns a dictionary
+keyed by the same selector strings. It is an optional optimization; using
+`runtime_quadrature` one rule at a time is the canonical interface.
+
+The Algoim backends are only valid for quadrilateral and hexahedral host cells,
+with refinements that preserve those tensor-product shapes. Triangle and
+tetrahedron meshes should use the default `backend="straight"` CutCells rules.
+
 A provider stores the parent entity map, offsets into the point and weight
 arrays, and the reference coordinates used by the runtime kernels. Physical
 coordinates are computed lazily when they are needed for plotting or

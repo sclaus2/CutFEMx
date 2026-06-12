@@ -289,7 +289,7 @@ def _create_cpp_form(
         tuple[int, np.ndarray, list[int], int | None],
     ] = {}
     owners: list[Any] = []
-    owner_cache: dict[tuple[int, str, int], Any] = {}
+    owner_cache: dict[tuple[int, str, int, tuple[int, ...]], Any] = {}
     ffi_obj = compiled.module.ffi
 
     for type_index, integral_type_name in enumerate(integral_type_names):
@@ -320,6 +320,7 @@ def _create_cpp_form(
                     integral_type=info.integral_type,
                     subdomain_id=subdomain_id,
                     kernel_idx=0,
+                    kernel=info.kernel,
                     custom_data=custom_data,
                     cache=owner_cache,
                 )

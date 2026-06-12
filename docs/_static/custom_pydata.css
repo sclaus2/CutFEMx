@@ -241,6 +241,45 @@ table {
   display: none;
 }
 
+.tutorial-figure {
+  margin: 1.1rem 0 1.6rem;
+}
+
+.tutorial-frame {
+  width: 100%;
+  height: 520px;
+  min-height: 520px;
+  border: 1px solid var(--pst-color-border);
+  border-radius: 6px;
+  background: #f8fafc;
+  box-shadow: 0 0.35rem 1.1rem rgba(15, 23, 42, 0.08);
+  display: block;
+}
+
+.tutorial-image {
+  width: 100%;
+  border: 1px solid var(--pst-color-border);
+  border-radius: 6px;
+  background: #f8fafc;
+  box-shadow: 0 0.35rem 1.1rem rgba(15, 23, 42, 0.08);
+  display: block;
+}
+
+.tutorial-figure figcaption {
+  color: var(--cutfemx-muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+  margin-top: 0.45rem;
+  text-align: left;
+}
+
+@media (max-width: 768px) {
+  .tutorial-frame {
+    height: 380px;
+    min-height: 380px;
+  }
+}
+
 @media (max-width: 960px) {
   .bd-main .bd-content .bd-article-container {
     max-width: 100%;

@@ -154,6 +154,12 @@ mesh::CutMesh<T> create_cut_mesh(const CutData<T>& cut_data,
 
 template <std::floating_point T>
 RuntimeQuadrature<T> runtime_quadrature(const CutData<T>& cut_data,
-                                        std::string_view ls_part, int order);
+                                        std::string_view ls_part, int order,
+                                        std::string_view backend = "straight");
+
+template <std::floating_point T>
+std::vector<std::pair<std::string, RuntimeQuadrature<T>>> runtime_quadratures(
+    const CutData<T>& cut_data, std::span<const std::string> ls_parts,
+    int order, std::string_view backend = "straight");
 
 } // namespace cutfemx

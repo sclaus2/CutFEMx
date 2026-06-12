@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -296,9 +297,24 @@ void declare_cut_api(nb::module_& m, std::string type)
 
   m.def(
       "runtime_quadrature",
-      [](const CutData& cut_data, const std::string& ls_part, int order)
-      { return cutfemx::runtime_quadrature(cut_data, ls_part, order); },
-      nb::arg("cut"), nb::arg("ls_part"), nb::arg("order"));
+      [](const CutData& cut_data, const std::string& ls_part, int order,
+         const std::string& backend)
+      { return cutfemx::runtime_quadrature(cut_data, ls_part, order, backend); },
+      nb::arg("cut"), nb::arg("ls_part"), nb::arg("order"),
+      nb::arg("backend") = "straight");
+
+  m.def(
+      "runtime_quadratures",
+      [](const CutData& cut_data, std::vector<std::string> ls_parts, int order,
+         const std::string& backend)
+      {
+        return cutfemx::runtime_quadratures<T>(
+            cut_data,
+            std::span<const std::string>(ls_parts.data(), ls_parts.size()),
+            order, backend);
+      },
+      nb::arg("cut"), nb::arg("ls_parts"), nb::arg("order"),
+      nb::arg("backend") = "straight");
 
   m.def(
       ("facet_integration_rows_" + type).c_str(),

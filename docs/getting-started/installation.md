@@ -255,11 +255,13 @@ cd CutCells
 cmake -G Ninja -S cpp -B cpp/build \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" \
-  -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
+  -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+  -DCUTCELLS_WITH_ALGOIM=ON
 cmake --build cpp/build
 cmake --install cpp/build
 
-python -m pip install --no-build-isolation --no-deps --force-reinstall \
+CMAKE_ARGS="${CMAKE_ARGS:-} -DCUTCELLS_WITH_ALGOIM=ON" \
+  python -m pip install --no-build-isolation --no-deps --force-reinstall \
   ./python
 
 cd ..
@@ -289,14 +291,16 @@ env CONDA_PREFIX="$CONDA_PREFIX" \
   PYTHONNOUSERSITE=1 \
   CC="$CONDA_PREFIX/bin/clang" \
   CXX="$CONDA_PREFIX/bin/clang++" \
-  CMAKE_ARGS="-DCMAKE_OSX_DEPLOYMENT_TARGET=13.4" \
+  CMAKE_ARGS="-DCMAKE_OSX_DEPLOYMENT_TARGET=13.4 -DCUTCELLS_WITH_ALGOIM=ON" \
   CXXFLAGS="-D_LIBCPP_ENABLE_EXPERIMENTAL -D_LIBCPP_HAS_NO_EXPERIMENTAL_TZDB -D_LIBCPP_HAS_NO_EXPERIMENTAL_SYNCSTREAM -D_LIBCPP_HAS_NO_INCOMPLETE_PSTL" \
   python -m pip install --no-build-isolation --no-deps --force-reinstall .
 ```
 
 Use the same active conda environment and `pip` flags for `runintgen`,
 `CutCells/python`, and CutFEMx. If the build variables above are already
-exported, the shorter `python -m pip install ...` form is equivalent.
+exported, the shorter `python -m pip install ...` form is equivalent. Omit
+`-DCUTCELLS_WITH_ALGOIM=ON` only if you intentionally want to build without the
+optional Algoim quadrature backend.
 
 `--no-build-isolation` is required because CutFEMx must use the active
 FEniCSx/MPI/PETSc/runintgen stack and DOLFINx wrapper headers. `--no-deps`

@@ -4,6 +4,8 @@
 #
 # SPDX-License-Identifier:    MIT
 
+from collections import Counter
+
 from mpi4py import MPI
 
 import cutfemx
@@ -31,6 +33,40 @@ def _line_level_set():
     return msh, level_set
 
 
+def _quadratic_circle_level_set():
+    center = (0.47, 0.43)
+    radius = 0.31
+    msh = mesh.create_unit_square(MPI.COMM_WORLD, 6, 6)
+    V = fem.functionspace(msh, ("Lagrange", 2))
+    level_set = fem.Function(V)
+    level_set.interpolate(
+        lambda x: (x[0] - center[0]) ** 2
+        + (x[1] - center[1]) ** 2
+        - radius**2
+    )
+    return msh, level_set, center
+
+
+def _quadratic_sphere_level_set():
+    center = (0.47, 0.43, 0.41)
+    radius = 0.31
+    msh = mesh.create_box(
+        MPI.COMM_WORLD,
+        (np.array([0.0, 0.0, 0.0]), np.array([1.0, 1.0, 1.0])),
+        (4, 4, 4),
+        cell_type=mesh.CellType.hexahedron,
+    )
+    V = fem.functionspace(msh, ("Lagrange", 2))
+    level_set = fem.Function(V)
+    level_set.interpolate(
+        lambda x: (x[0] - center[0]) ** 2
+        + (x[1] - center[1]) ** 2
+        + (x[2] - center[2]) ** 2
+        - radius**2
+    )
+    return msh, level_set, center
+
+
 def _interior_facet_indices(msh):
     tdim = msh.topology.dim
     fdim = tdim - 1
@@ -42,6 +78,18 @@ def _interior_facet_indices(msh):
         [facet for facet in range(num_facets) if len(facet_to_cell.links(facet)) == 2],
         dtype=np.int32,
     )
+
+
+def _radial_normal(x, center):
+    radius = ufl.sqrt(sum((x[i] - center[i]) ** 2 for i in range(len(center))))
+    return ufl.as_vector(
+        tuple((x[i] - center[i]) / radius for i in range(len(center)))
+    )
+
+
+def _projected_conormal(background_normal, surface_normal):
+    value = background_normal - ufl.dot(background_normal, surface_normal) * surface_normal
+    return value / ufl.sqrt(ufl.inner(value, value))
 
 
 def test_cut_api_locate_entities_default_cells():
@@ -201,6 +249,80 @@ def test_cut_api_create_cut_mesh_accepts_facet_entities():
     assert cut_mesh.parent_index.size == cut_mesh.is_cut_cell.size
     assert set(cut_mesh.parent_index.tolist()).issubset(set(cut_facets.tolist()))
     assert np.all(cut_mesh.is_cut_cell == 1)
+
+
+def _convex_hull_edges_3d(points, vertices):
+    center = points.mean(axis=0)
+    centered = points - center
+    _, _, vh = np.linalg.svd(centered, full_matrices=False)
+    projected = centered @ vh[:2].T
+    angles = np.arctan2(projected[:, 1], projected[:, 0])
+    order = np.argsort(angles)
+    return {
+        tuple(sorted((int(vertices[order[i]]), int(vertices[order[(i + 1) % 4]]))))
+        for i in range(4)
+    }
+
+
+def test_cut_api_mixed_hex_surface_mesh_splits_basix_quads_on_diagonal():
+    if MPI.COMM_WORLD.size != 1:
+        pytest.skip("cut visualization meshes duplicate partition-boundary vertices")
+
+    msh = mesh.create_box(
+        MPI.COMM_WORLD,
+        (np.array([-1.0, -1.0, -1.0]), np.array([1.0, 1.0, 1.0])),
+        (4, 4, 4),
+        cell_type=mesh.CellType.hexahedron,
+    )
+    V = fem.functionspace(msh, ("Lagrange", 1))
+    level_set = fem.Function(V)
+    level_set.interpolate(lambda x: x[0] ** 2 + x[1] ** 2 + x[2] ** 2 - 0.65**2)
+
+    cutter = cutfemx.cut(level_set)
+    cut_mesh = cutfemx.create_cut_mesh(cutter, "phi=0", mode="cut_only")
+    assert cut_mesh.mesh is not None
+    assert cut_mesh.mesh.topology.cell_type == mesh.CellType.triangle
+
+    surface_mesh = cut_mesh.mesh
+    tdim = surface_mesh.topology.dim
+    surface_mesh.topology.create_connectivity(tdim, 0)
+    cell_to_vertex = surface_mesh.topology.connectivity(tdim, 0)
+    assert cell_to_vertex is not None
+
+    cell_vertices = []
+    parent_indices = []
+    num_cells = surface_mesh.topology.index_map(tdim).size_local
+    for cell in range(num_cells):
+        vertices = [int(v) for v in cell_to_vertex.links(cell)]
+        assert len(vertices) == 3
+        cell_vertices.append(vertices)
+        parent_indices.append(int(cut_mesh.parent_index[cell]))
+
+    checked_split_quads = 0
+    for cell in range(num_cells - 1):
+        if parent_indices[cell] != parent_indices[cell + 1]:
+            continue
+
+        parent_cells = [cell_vertices[cell], cell_vertices[cell + 1]]
+        unique_vertices = sorted(
+            {v for tri_vertices in parent_cells for v in tri_vertices}
+        )
+        if len(unique_vertices) != 4:
+            continue
+
+        edge_counts = Counter()
+        for vertices in parent_cells:
+            for i, j in ((0, 1), (1, 2), (2, 0)):
+                edge_counts[tuple(sorted((vertices[i], vertices[j])))] += 1
+
+        boundary_edges = {edge for edge, count in edge_counts.items() if count == 1}
+        hull_edges = _convex_hull_edges_3d(
+            surface_mesh.geometry.x[unique_vertices], np.asarray(unique_vertices)
+        )
+        assert boundary_edges == hull_edges
+        checked_split_quads += 1
+
+    assert checked_split_quads > 0
 
 
 def test_cut_api_cut_accepts_facet_entities_as_host():
@@ -826,6 +948,192 @@ def test_cutfemx_quadrature_function_normal_assembles_runtime_cell_scalar():
     assert value > 0.0
 
 
+def test_cutfemx_level_set_value_assembles_runtime_cell_scalar():
+    msh, level_set = _line_level_set()
+
+    cutter = cutfemx.cut(level_set)
+    rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
+    assert cutfemx.level_set_value is cutfemx.level_set.level_set_value
+    phi_q = cutfemx.level_set_value(level_set)
+
+    dx_rules = ufl.Measure("dx", domain=msh, subdomain_data=rules)
+    form = cutfemx.fem.form(phi_q * phi_q * dx_rules)
+    value = cutfemx.fem.assemble_scalar(form)
+
+    assert form.needs_runtime_data
+    assert np.isfinite(value)
+    assert value > 0.0
+
+
+def test_cutfemx_surface_normal_assembles_runtime_interface_scalar():
+    msh, level_set = _line_level_set()
+
+    cutter = cutfemx.cut(level_set)
+    rules = cutfemx.runtime_quadrature(cutter, "phi=0", order=2)
+    one = fem.Constant(msh, np.float64(1.0))
+    n_h = cutfemx.surface_normal(cutter, "phi=0")
+
+    dx_gamma = ufl.Measure("dx", domain=msh, subdomain_data=rules)
+    measure_form = cutfemx.fem.form(one * dx_gamma)
+    norm_form = cutfemx.fem.form(ufl.inner(n_h, n_h) * dx_gamma)
+    orientation_form = cutfemx.fem.form(n_h[0] * dx_gamma)
+
+    measure = cutfemx.fem.assemble_scalar(measure_form)
+    norm_value = cutfemx.fem.assemble_scalar(norm_form)
+    orientation = cutfemx.fem.assemble_scalar(orientation_form)
+
+    assert norm_form.needs_runtime_data
+    assert np.isfinite(norm_value)
+    np.testing.assert_allclose(norm_value, measure, rtol=1.0e-12, atol=1.0e-12)
+    np.testing.assert_allclose(orientation, measure, rtol=1.0e-12, atol=1.0e-12)
+
+
+def test_cutfemx_normal_matches_quadratic_circle_radial_normal():
+    msh, level_set, center = _quadratic_circle_level_set()
+
+    cutter = cutfemx.cut(level_set)
+    rules = cutfemx.runtime_quadrature(cutter, "phi=0", order=5)
+    dx_gamma = ufl.Measure("dx", domain=msh, subdomain_data=rules)
+    x = ufl.SpatialCoordinate(msh)
+    n_q = cutfemx.normal(level_set)
+    n_exact = _radial_normal(x, center)
+
+    error_form = cutfemx.fem.form(ufl.inner(n_q - n_exact, n_q - n_exact) * dx_gamma)
+    error = cutfemx.fem.assemble_scalar(error_form)
+
+    assert error_form.needs_runtime_data
+    np.testing.assert_allclose(error, 0.0, atol=1.0e-24)
+
+
+def test_cutfemx_conormal_matches_projected_facet_normal_on_quadratic_circle():
+    msh, level_set, center = _quadratic_circle_level_set()
+
+    cell_cut = cutfemx.cut(level_set)
+    cut_cells = cutfemx.locate_entities(cell_cut, "phi=0")
+    facets = cutfemx.interior_facets_for_cells(msh, cut_cells)
+    facet_cut = cutfemx.cut(level_set, facets, msh.topology.dim - 1)
+    rules = cutfemx.runtime_quadrature(facet_cut, "phi=0", order=5)
+    dS_gamma = ufl.Measure("dS", domain=msh, subdomain_data=rules)
+
+    x = ufl.SpatialCoordinate(msh)
+    n_exact = _radial_normal(x, center)
+    n_facet = ufl.FacetNormal(msh)
+    n_q = cutfemx.normal(level_set)
+    mu = cutfemx.conormal(n_q)
+    mu_exact_p = _projected_conormal(n_facet("+"), n_exact("+"))
+    mu_exact_m = _projected_conormal(n_facet("-"), n_exact("-"))
+
+    plus_form = cutfemx.fem.form(
+        ufl.inner(mu("+") - mu_exact_p, mu("+") - mu_exact_p) * dS_gamma
+    )
+    minus_form = cutfemx.fem.form(
+        ufl.inner(mu("-") - mu_exact_m, mu("-") - mu_exact_m) * dS_gamma
+    )
+    opposing_form = cutfemx.fem.form(
+        ufl.inner(mu("+") + mu("-"), mu("+") + mu("-")) * dS_gamma
+    )
+
+    plus_error = cutfemx.fem.assemble_scalar(plus_form)
+    minus_error = cutfemx.fem.assemble_scalar(minus_form)
+    opposing = cutfemx.fem.assemble_scalar(opposing_form)
+
+    assert plus_form.needs_runtime_data
+    np.testing.assert_allclose(plus_error, 0.0, atol=1.0e-24)
+    np.testing.assert_allclose(minus_error, 0.0, atol=1.0e-24)
+    np.testing.assert_allclose(opposing, 0.0, atol=1.0e-24)
+
+
+def test_cutfemx_conormal_matches_projected_facet_normal_on_quadratic_sphere():
+    msh, level_set, center = _quadratic_sphere_level_set()
+
+    cell_cut = cutfemx.cut(level_set)
+    cut_cells = cutfemx.locate_entities(cell_cut, "phi=0")
+    facets = cutfemx.interior_facets_for_cells(msh, cut_cells)
+    facet_cut = cutfemx.cut(level_set, facets, msh.topology.dim - 1)
+    rules = cutfemx.runtime_quadrature(
+        facet_cut, "phi=0", order=4, backend="algoim"
+    )
+    dS_gamma = ufl.Measure("dS", domain=msh, subdomain_data=rules)
+
+    x = ufl.SpatialCoordinate(msh)
+    n_exact = _radial_normal(x, center)
+    n_facet = ufl.FacetNormal(msh)
+    n_q = cutfemx.normal(level_set)
+    mu = cutfemx.conormal(n_q)
+    mu_exact_p = _projected_conormal(n_facet("+"), n_exact("+"))
+    mu_exact_m = _projected_conormal(n_facet("-"), n_exact("-"))
+
+    plus_form = cutfemx.fem.form(
+        ufl.inner(mu("+") - mu_exact_p, mu("+") - mu_exact_p) * dS_gamma
+    )
+    minus_form = cutfemx.fem.form(
+        ufl.inner(mu("-") - mu_exact_m, mu("-") - mu_exact_m) * dS_gamma
+    )
+    opposing_form = cutfemx.fem.form(
+        ufl.inner(mu("+") + mu("-"), mu("+") + mu("-")) * dS_gamma
+    )
+
+    plus_error = cutfemx.fem.assemble_scalar(plus_form)
+    minus_error = cutfemx.fem.assemble_scalar(minus_form)
+    opposing = cutfemx.fem.assemble_scalar(opposing_form)
+
+    assert plus_form.needs_runtime_data
+    np.testing.assert_allclose(plus_error, 0.0, atol=1.0e-24)
+    np.testing.assert_allclose(minus_error, 0.0, atol=1.0e-24)
+    np.testing.assert_allclose(opposing, 0.0, atol=1.0e-24)
+
+
+def test_cutfemx_correction_distance_zero_on_linear_interface():
+    msh, level_set = _line_level_set()
+
+    cutter = cutfemx.cut(level_set)
+    rules = cutfemx.runtime_quadrature(cutter, "phi=0", order=2)
+    n_h = cutfemx.surface_normal(cutter, "phi=0")
+    rho = cutfemx.correction_distance(
+        level_set,
+        cutter,
+        "phi=0",
+        direction=n_h,
+    )
+
+    dx_gamma = ufl.Measure("dx", domain=msh, subdomain_data=rules)
+    form = cutfemx.fem.form(rho * rho * dx_gamma)
+    value = cutfemx.fem.assemble_scalar(form)
+
+    assert form.needs_runtime_data
+    np.testing.assert_allclose(value, 0.0, atol=1.0e-24)
+
+
+def test_cutfemx_conormal_assembles_runtime_surface_skeleton_scalar():
+    msh, level_set = _line_level_set()
+
+    facets = _interior_facet_indices(msh)
+    facet_cut = cutfemx.cut(level_set, facets, msh.topology.dim - 1)
+    rules = cutfemx.runtime_quadrature(facet_cut, "phi=0", order=2)
+    one = fem.Constant(msh, np.float64(1.0))
+    n_q = cutfemx.normal(level_set)
+    mu = cutfemx.conormal(n_q)
+
+    dS_gamma = ufl.Measure("dS", domain=msh, subdomain_data=rules)
+    measure_form = cutfemx.fem.form(one * dS_gamma)
+    unit_form = cutfemx.fem.form(ufl.inner(mu("+"), mu("+")) * dS_gamma)
+    orthogonal_form = cutfemx.fem.form((ufl.dot(mu("+"), n_q("+")) ** 2) * dS_gamma)
+    opposing_form = cutfemx.fem.form(
+        ufl.inner(mu("+") + mu("-"), mu("+") + mu("-")) * dS_gamma
+    )
+
+    measure = cutfemx.fem.assemble_scalar(measure_form)
+    unit = cutfemx.fem.assemble_scalar(unit_form)
+    orthogonal = cutfemx.fem.assemble_scalar(orthogonal_form)
+    opposing = cutfemx.fem.assemble_scalar(opposing_form)
+
+    assert unit_form.needs_runtime_data
+    assert measure > 0.0
+    np.testing.assert_allclose(unit, measure, rtol=1.0e-12, atol=1.0e-12)
+    np.testing.assert_allclose(orthogonal, 0.0, atol=1.0e-24)
+    np.testing.assert_allclose(opposing, 0.0, atol=1.0e-24)
+
+
 def test_cut_api_ghost_penalty_facets_are_owned_unique_interior_facets():
     msh, level_set = _line_level_set()
 
@@ -969,3 +1277,138 @@ def test_cutfemx_runtime_area_and_perimeter_for_circle():
 
     assert abs(area - np.pi * radius**2) < 1.0e-2
     assert abs(perimeter - 2.0 * np.pi * radius) < 1.0e-2
+
+
+@pytest.mark.parametrize("backend", ["algoim", "algoim_general"])
+def test_cutfemx_runtime_quadrature_algoim_rejects_simplex_hosts(backend):
+    triangle_mesh = mesh.create_unit_square(
+        MPI.COMM_WORLD, 2, 2, cell_type=mesh.CellType.triangle
+    )
+    tetrahedron_mesh = mesh.create_box(
+        MPI.COMM_WORLD,
+        [np.array([0.0, 0.0, 0.0]), np.array([1.0, 1.0, 1.0])],
+        [2, 2, 2],
+        mesh.CellType.tetrahedron,
+    )
+
+    for msh in (triangle_mesh, tetrahedron_mesh):
+        V_phi = fem.functionspace(msh, ("Lagrange", 1))
+        level_set = fem.Function(V_phi)
+        level_set.interpolate(lambda x: x[0] - 0.5)
+        cutter = cutfemx.cut(level_set)
+
+        with pytest.raises(
+            ValueError, match="interval, quadrilateral, or hexahedron"
+        ):
+            cutfemx.runtime_quadrature(
+                cutter, "phi<0", order=4, backend=backend
+            )
+
+        with pytest.raises(
+            ValueError, match="interval, quadrilateral, or hexahedron"
+        ):
+            cutfemx.runtime_quadratures(
+                cutter, ["phi<0", "phi=0"], order=4, backend=backend
+            )
+
+
+def test_cutfemx_runtime_quadratures_algoim_paired_selectors():
+    msh = mesh.create_unit_square(
+        MPI.COMM_WORLD, 4, 4, cell_type=mesh.CellType.quadrilateral
+    )
+    V_phi = fem.functionspace(msh, ("Lagrange", 2))
+    level_set = fem.Function(V_phi)
+    level_set.interpolate(
+        lambda x: (x[0] - 0.5) ** 2 + (x[1] - 0.5) ** 2 - 0.2**2
+    )
+
+    cutter = cutfemx.cut(level_set)
+    try:
+        inside = cutfemx.runtime_quadrature(
+            cutter, "phi<0", order=4, backend="algoim"
+        )
+        interface = cutfemx.runtime_quadrature(
+            cutter, "phi=0", order=4, backend="algoim"
+        )
+        paired = cutfemx.runtime_quadratures(
+            cutter, ["phi<0", "phi>0", "phi=0"], order=4, backend="algoim"
+        )
+    except RuntimeError as exc:
+        if "without Algoim" in str(exc):
+            pytest.skip("CutFEMx was built without Algoim support")
+        raise
+
+    assert set(paired) == {"phi<0", "phi>0", "phi=0"}
+    assert np.sum(paired["phi<0"].weights) == pytest.approx(np.sum(inside.weights))
+    assert np.sum(paired["phi=0"].weights) == pytest.approx(
+        np.sum(interface.weights)
+    )
+    assert len(paired["phi>0"].weights) > 0
+
+
+def test_cutfemx_runtime_quadrature_algoim_interval_interface_on_facets():
+    msh = mesh.create_unit_square(
+        MPI.COMM_WORLD, 4, 4, cell_type=mesh.CellType.quadrilateral
+    )
+    V_phi = fem.functionspace(msh, ("Lagrange", 2))
+    level_set = fem.Function(V_phi)
+    level_set.interpolate(lambda x: (x[0] - 0.37) * (x[0] + 0.5))
+
+    facets = _interior_facet_indices(msh)
+    facet_cut = cutfemx.cut(level_set, facets, msh.topology.dim - 1)
+    try:
+        rules = cutfemx.runtime_quadrature(
+            facet_cut, "phi=0", order=4, backend="algoim"
+        )
+    except RuntimeError as exc:
+        if "without Algoim" in str(exc):
+            pytest.skip("CutFEMx was built without Algoim support")
+        raise
+
+    assert rules.weights.size > 0
+    np.testing.assert_allclose(rules.weights, 1.0, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(
+        rules.physical_points[0],
+        0.37,
+        rtol=1.0e-12,
+        atol=1.0e-12,
+    )
+
+
+def test_cutfemx_runtime_quadrature_algoim_embedded_quad_interface_on_3d_facets():
+    msh = mesh.create_box(
+        MPI.COMM_WORLD,
+        (np.array([0.0, 0.0, 0.0]), np.array([1.0, 1.0, 1.0])),
+        (2, 2, 2),
+        cell_type=mesh.CellType.hexahedron,
+    )
+    V_phi = fem.functionspace(msh, ("Lagrange", 2))
+    level_set = fem.Function(V_phi)
+    level_set.interpolate(lambda x: x[0] - 0.37)
+
+    facets = _interior_facet_indices(msh)
+    facet_cut = cutfemx.cut(level_set, facets, msh.topology.dim - 1)
+    try:
+        rules = cutfemx.runtime_quadrature(
+            facet_cut, "phi=0", order=4, backend="algoim"
+        )
+    except RuntimeError as exc:
+        if "without Algoim" in str(exc):
+            pytest.skip("CutFEMx was built without Algoim support")
+        raise
+
+    assert rules.weights.size > 0
+    assert np.all(rules.weights > 0.0)
+    np.testing.assert_allclose(
+        np.sum(rules.weights),
+        2.0,
+        rtol=1.0e-12,
+        atol=1.0e-12,
+    )
+    rules.with_physical_points()
+    np.testing.assert_allclose(
+        rules.physical_points[0],
+        0.37,
+        rtol=1.0e-12,
+        atol=1.0e-12,
+    )

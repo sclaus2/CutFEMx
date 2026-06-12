@@ -41,13 +41,28 @@ from cutfemx.cut import (
     runtime_quadrature as runtime_quadrature,
 )
 from cutfemx.cut import (
+    runtime_quadratures as runtime_quadratures,
+)
+from cutfemx.cut import (
     update as update,
+)
+from cutfemx.level_set import (
+    conormal as conormal,
+)
+from cutfemx.level_set import (
+    correction_distance as correction_distance,
+)
+from cutfemx.level_set import (
+    level_set_value as level_set_value,
 )
 from cutfemx.level_set import (
     NormalEvaluator as NormalEvaluator,
 )
 from cutfemx.level_set import (
     normal as normal,
+)
+from cutfemx.level_set import (
+    surface_normal as surface_normal,
 )
 
 cut_function = fem.cut_function

@@ -7,6 +7,8 @@ set(CUTFEMX_DIRS
   distance
   extensions
   fem
+  geometry
+  level_set
   mesh)
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.h.in version.h)

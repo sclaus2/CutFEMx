@@ -1,0 +1,4 @@
+set(HEADERS_level_set
+  ${CMAKE_CURRENT_SOURCE_DIR}/normal.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/value.h
+  PARENT_SCOPE)

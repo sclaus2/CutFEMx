@@ -15,6 +15,7 @@
 #include <numeric>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <cutcells/quadrature.h>
@@ -25,6 +26,19 @@
 
 namespace cutfemx
 {
+
+struct RuntimeSurfaceProvenance
+{
+  std::string selector;
+  std::int32_t level_set_index = -1;
+  std::vector<std::int32_t> cut_cell_ids;
+  std::vector<std::int32_t> parent_cell_ids;
+  std::vector<std::int32_t> local_zero_entity_ids;
+  std::vector<std::int32_t> dimensions;
+
+  bool empty() const noexcept { return cut_cell_ids.empty(); }
+  std::size_t size() const noexcept { return cut_cell_ids.size(); }
+};
 
 template <std::floating_point T>
 struct RuntimeQuadrature
@@ -39,9 +53,34 @@ struct RuntimeQuadrature
 
   RuntimeQuadrature(cutcells::quadrature::QuadratureRules<T>&& rules,
                     std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
+                    RuntimeSurfaceProvenance&& provenance)
+      : cutcells_rules(std::move(rules)), surface_provenance(std::move(provenance)),
+        _mesh(std::move(mesh))
+  {
+  }
+
+  RuntimeQuadrature(cutcells::quadrature::QuadratureRules<T>&& rules,
+                    std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
                     std::vector<T>&& physical_points, int gdim)
       : cutcells_rules(std::move(rules)), _mesh(std::move(mesh)),
         _physical_points(std::move(physical_points)),
+        _physical_points_ready(true), _physical_gdim(gdim),
+        _physical_num_points(cutcells_rules._weights.size())
+  {
+    if (_physical_points.size()
+        != static_cast<std::size_t>(gdim) * cutcells_rules._weights.size())
+    {
+      throw std::runtime_error(
+          "RuntimeQuadrature physical-point cache has inconsistent size");
+    }
+  }
+
+  RuntimeQuadrature(cutcells::quadrature::QuadratureRules<T>&& rules,
+                    std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
+                    std::vector<T>&& physical_points, int gdim,
+                    RuntimeSurfaceProvenance&& provenance)
+      : cutcells_rules(std::move(rules)), surface_provenance(std::move(provenance)),
+        _mesh(std::move(mesh)), _physical_points(std::move(physical_points)),
         _physical_points_ready(true), _physical_gdim(gdim),
         _physical_num_points(cutcells_rules._weights.size())
   {
@@ -182,6 +221,7 @@ struct RuntimeQuadrature
   }
 
   cutcells::quadrature::QuadratureRules<T> cutcells_rules;
+  RuntimeSurfaceProvenance surface_provenance;
 
 private:
   std::shared_ptr<const dolfinx::mesh::Mesh<T>> _mesh;

@@ -242,10 +242,17 @@ def runtime_quadrature(
     cut_data: CutData,
     ls_part: str,
     order: int,
+    *,
+    backend: str = "straight",
 ):
     """Create runintgen-compatible runtime quadrature for selected entities."""
-    cpp_rules = _cpp.runtime_quadrature(cut_data._cpp_object, ls_part, order)
+    cpp_rules = _cpp.runtime_quadrature(
+        cut_data._cpp_object, ls_part, order, backend
+    )
+    return _runtime_quadrature_from_cpp(cpp_rules)
 
+
+def _runtime_quadrature_from_cpp(cpp_rules) -> RuntimeQuadratureRules:
     rules = RuntimeQuadratureRules(
         kind=cpp_rules.kind,
         tdim=cpp_rules.tdim,
@@ -256,6 +263,24 @@ def runtime_quadrature(
     )
     rules._cutfemx_owner = cpp_rules
     return rules
+
+
+def runtime_quadratures(
+    cut_data: CutData,
+    ls_parts: Sequence[str],
+    order: int,
+    *,
+    backend: str = "straight",
+) -> dict[str, RuntimeQuadratureRules]:
+    """Create named runtime quadrature rules for several selectors."""
+    names = [str(part) for part in ls_parts]
+    cpp_rules = _cpp.runtime_quadratures(
+        cut_data._cpp_object, names, order, backend
+    )
+    return {
+        name: _runtime_quadrature_from_cpp(rule)
+        for name, rule in cpp_rules
+    }
 
 
 def interior_facets_for_cells(

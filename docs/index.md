@@ -13,6 +13,7 @@ The current Python workflow is centered around `cutfemx.cut(...)`,
 getting-started/index
 user-guide/index
 stl_distance
+tutorials/index
 examples/index
 ```
 
@@ -41,3 +42,8 @@ examples/index
   background degrees of freedom.
 - [Visualization](user-guide/visualization.md): inspect cut meshes and runtime
   quadrature points.
+
+## Tutorials
+
+- [Tutorial book](tutorials/index.md): guided software-demo chapters with
+  embedded interactive views and links to the simplified runnable demo scripts.
