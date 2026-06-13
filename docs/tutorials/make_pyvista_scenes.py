@@ -322,6 +322,16 @@ def _quadrature_points(rules) -> np.ndarray:
     return points
 
 
+def _with_z(points: np.ndarray, z: float) -> np.ndarray:
+    points = np.asarray(points, dtype=np.float64).copy()
+    if points.size == 0:
+        return points
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError("Expected points with shape (npoints, 3).")
+    points[:, 2] = z
+    return points
+
+
 def _solve_runtime_system(
     a: cutfemx.fem.CutForm,
     L: cutfemx.fem.CutForm,
@@ -2928,9 +2938,33 @@ def interface_poisson_quadrature_scene() -> None:
         plotter.add_mesh(_closed_polyline(state["interface_points"], z=0.08), color=INTERFACE, line_width=3)
         _add_points(plotter, _quadrature_points(state["volume_rules"]), color=QUADRATURE, point_size=3.8)
         _add_points(plotter, _quadrature_points(state["outside_rules"]), color="#16a34a", point_size=3.8)
-        _add_points(plotter, _quadrature_points(state["interface_rules"]), color=SURFACE_QUADRATURE, point_size=5.0)
+        _add_points(
+            plotter,
+            _with_z(_quadrature_points(state["interface_rules"]), 0.12),
+            color=SURFACE_QUADRATURE,
+            point_size=6.0,
+        )
 
     _export_scene(OUTPUT_DIR / "interface-poisson-quadrature-scene.png", "Phase and interface quadrature", draw)
+
+
+def _interface_poisson_coupling_scene(
+    path: Path,
+    title: str,
+    ghost_key: str,
+    *,
+    ghost_color: str,
+    ghost_width: float,
+) -> None:
+    state = _interface_state()
+
+    def draw(plotter: pv.Plotter) -> None:
+        _add_background_mesh(plotter, state["mesh"], fill_opacity=0.03, edge_opacity=0.88, line_width=0.74)
+        plotter.add_mesh(_mesh_grid(state["mesh"], state["cut"]), color=CUT, show_edges=True, edge_color="#7c2d12", opacity=0.46)
+        _add_facet_bands(plotter, state["mesh"], state[ghost_key], color=ghost_color, width=ghost_width, opacity=0.82)
+        plotter.add_mesh(_closed_polyline(state["interface_points"], z=0.09), color=INTERFACE, line_width=5)
+
+    _export_scene(path, title, draw)
 
 
 def interface_poisson_coupling_scene() -> None:
@@ -2944,6 +2978,26 @@ def interface_poisson_coupling_scene() -> None:
         plotter.add_mesh(_closed_polyline(state["interface_points"], z=0.09), color=INTERFACE, line_width=5)
 
     _export_scene(OUTPUT_DIR / "interface-poisson-coupling-scene.png", "Nitsche interface and ghost bands", draw)
+
+
+def interface_poisson_u1_ghost_scene() -> None:
+    _interface_poisson_coupling_scene(
+        OUTPUT_DIR / "interface-poisson-u1-ghost-scene.png",
+        "u1 ghost-penalty band",
+        "inside_ghost_facets",
+        ghost_color="#dc2626",
+        ghost_width=0.011,
+    )
+
+
+def interface_poisson_u2_ghost_scene() -> None:
+    _interface_poisson_coupling_scene(
+        OUTPUT_DIR / "interface-poisson-u2-ghost-scene.png",
+        "u2 ghost-penalty band",
+        "outside_ghost_facets",
+        ghost_color="#2563eb",
+        ghost_width=0.011,
+    )
 
 
 def _boundary_perimeter_state() -> dict:
@@ -3245,6 +3299,8 @@ def main() -> None:
     interface_poisson_geometry_scene()
     interface_poisson_quadrature_scene()
     interface_poisson_coupling_scene()
+    interface_poisson_u1_ghost_scene()
+    interface_poisson_u2_ghost_scene()
     boundary_perimeter_scene()
     boundary_perimeter_facets_scene()
     boundary_perimeter_quadrature_scene()

@@ -1,24 +1,19 @@
 # Interface Poisson
 
-This tutorial follows `python/demo/demo_interface_poisson.py` and presents the
-two-domain interface workflow in the same order as the computation: build the
-background mesh, classify both phases, attach runtime quadrature, couple the
-two fields on the embedded interface, stabilize the cut bands, solve the block
-system, and write cut-mesh output.
-The Nitsche coupling over the unfitted interface is related to the CutFEM
+This tutorial follows `python/demo/demo_interface_poisson.py` and presents a multi-domain Poisson problem. The Nitsche coupling over the unfitted interface is related to the CutFEM
 interface literature listed in the related literature below.
 
 ```{raw} html
 <figure class="tutorial-figure">
   <iframe class="tutorial-frame" src="../_static/tutorials/interface-poisson-solution-view.html" title="Interactive warped interface Poisson solution view" loading="lazy" allowfullscreen></iframe>
-  <figcaption>The final scalar fields are shown as a rotatable warped surface on the two physical cut domains computed by the block solve.</figcaption>
+  <figcaption> Multi-domain poisson problem with contrast in diffusivities.</figcaption>
 </figure>
 ```
 
 ## Model Problem
 
-Let $\Omega_0=[-1,1]^2$ be the background box. A circular level set partitions
-the box into two material phases,
+Let $\Omega_0=[-1,1]^2$ be the background domain. A circular level set partitions
+this box into two material phases,
 
 $$
 \Omega_1=\{x:\phi(x)<0\},\qquad
@@ -70,10 +65,7 @@ $$
 
 ## Implementation Order
 
-The demo's `main(...)` follows this order:
-
-1. Validate CLI parameters and build the triangular background mesh plus
-   exterior facet list.
+1. Define level set function.
 2. Interpolate the P1 circular level set and build `cut_data`.
 3. Locate inside/outside cells, create phase/interface runtime quadrature, and
    select separate ghost-facet bands for the two phase fields.
@@ -127,7 +119,7 @@ msh.topology.create_connectivity(fdim, msh.topology.dim)
 exterior_facets = mesh.exterior_facet_indices(msh.topology)
 ```
 
-## Level Set Field
+## Level Set Function
 
 The level set is represented by a standard P1 function on the background mesh.
 The sign of this function determines the two material phases.
@@ -201,9 +193,8 @@ dgamma = ufl.Measure("dx", domain=msh, subdomain_id=3,
                      subdomain_data=interface_rules)
 ```
 
-The interface measure is written as a UFL `"dx"` measure because the
-quadrature provider is hosted by cut cells, but geometrically it represents a
-line integral over $\Gamma$.
+The interface measure is written as a UFL `"dx"` measure because the interface
+quadrature is immersed in volume cells representing a line integral over $\Gamma$.
 
 ## Phase Spaces
 
@@ -219,6 +210,37 @@ W_block = ufl.MixedFunctionSpace(V1, V2)
 u1, u2 = ufl.TrialFunctions(W_block)
 v1, v2 = ufl.TestFunctions(W_block)
 ```
+
+`ufl.MixedFunctionSpace(V1, V2)` is used here to express the coupled weak form
+as a two-field block problem. It does not create one physical mixed finite
+element field for output; instead, it gives UFL a product space with one
+component for the inside phase and one component for the outside phase. The
+trial functions `u1` and `u2` therefore remain associated with the separate
+background spaces `V1` and `V2`, but interface terms can still contain both
+fields in the same expression.
+
+This is what lets the demo write the interface coupling once as a single UFL
+form and then split it into the four matrix blocks
+
+$$
+\begin{pmatrix}
+A_{11} & A_{12}\\
+A_{21} & A_{22}
+\end{pmatrix}
+\begin{pmatrix}
+u_1\\
+u_2
+\end{pmatrix}
+=
+\begin{pmatrix}
+b_1\\
+b_2
+\end{pmatrix}.
+$$
+
+The diagonal blocks are the phase diffusion, boundary, and ghost-penalty terms.
+The off-diagonal blocks come only from the Nitsche interface coupling, where
+the jump $u_1-u_2$ and weighted flux terms involve both phases.
 
 ## Manufactured Fields
 
@@ -253,16 +275,7 @@ L = f1 * v1 * dx1 + f2 * v2 * dx2
 ## Nitsche Interface Coupling
 
 The continuity and flux-balance conditions are imposed weakly on $\Gamma$ with
-a weighted symmetric Nitsche form.
-
-```{raw} html
-<figure class="tutorial-figure">
-  <img class="tutorial-image" src="../_static/tutorials/interface-poisson-coupling-scene.png" alt="PyVista interface Poisson coupling and ghost facets">
-  <figcaption>The teal curve is the Nitsche interface; red and blue bands mark the ghost-penalty facets for the two phase fields.</figcaption>
-</figure>
-```
-
-CutFEMx computes the interface normal from the level-set field:
+a weighted symmetric Nitsche form. CutFEMx computes the interface normal from the level-set field:
 
 ```python
 n_gamma = cutfemx.normal(phi)
@@ -312,6 +325,20 @@ a += (-flux_u * jump_v - flux_v * jump_u
 Both fields need their own ghost-penalty band because each field has a
 different active domain. The inside band stabilizes the $u_1$ block; the
 outside band stabilizes the $u_2$ block.
+
+```{raw} html
+<figure class="tutorial-figure">
+  <img class="tutorial-image" src="../_static/tutorials/interface-poisson-u1-ghost-scene.png" alt="PyVista interface Poisson u1 ghost penalty facets">
+  <figcaption>The red band marks the ghost-penalty facets used to stabilize the inside field $u_1$.</figcaption>
+</figure>
+```
+
+```{raw} html
+<figure class="tutorial-figure">
+  <img class="tutorial-image" src="../_static/tutorials/interface-poisson-u2-ghost-scene.png" alt="PyVista interface Poisson u2 ghost penalty facets">
+  <figcaption>The blue band marks the ghost-penalty facets used to stabilize the outside field $u_2$.</figcaption>
+</figure>
+```
 
 ```python
 ghost_facets_1 = cutfemx.ghost_penalty_facets(cut_data, "phi<0")
@@ -456,8 +483,7 @@ jump_error = cutfemx.fem.assemble_scalar(
 ## Solution Output
 
 The final fields are written on physical cut meshes. As in the scalar cut
-Poisson tutorial, these meshes are visualization/output meshes only; the
-linear system is still assembled on the background mesh.
+Poisson tutorial, these meshes are visualization/output meshes only.
 
 ```python
 inside_mesh = cutfemx.create_cut_mesh(cut_data, "phi<0", mode="full")
@@ -474,16 +500,11 @@ The script writes:
 
 ## Related Literature
 
-- E. Burman, D. Elfverson, P. Hansbo, M. G. Larson, and K. Larsson,
-  ["Hybridized CutFEM for Elliptic Interface Problems"](https://doi.org/10.1137/18m1223836),
-  *SIAM Journal on Scientific Computing* 41(5), A3354-A3380, 2019. This paper
-  analyzes CutFEM coupling over internal unfitted interfaces with Nitsche-type
-  terms.
-- T. Ludescher, S. Gross, and A. Reusken,
-  ["A Multigrid Method for Unfitted Finite Element Discretizations of Elliptic Interface Problems"](https://doi.org/10.1137/18m1203353),
-  *SIAM Journal on Scientific Computing* 42(1), A318-A342, 2020. This gives
-  additional context for unfitted finite element discretizations of elliptic
-  interface problems.
+- E. Burman, S. Claus, P. Hansbo, M. G. Larson, and A. Massing,
+  ["CutFEM: Discretizing Geometry and Partial Differential Equations"](https://doi.org/10.1002/nme.4823),
+  *International Journal for Numerical Methods in Engineering* 104(7),
+  472-501, 2015. This is the main CutFEM reference for the unfitted
+  Nitsche formulation and ghost stabilization used in this example.
 
 ## Run The Demo
 

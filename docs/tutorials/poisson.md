@@ -251,8 +251,8 @@ $$
 a(u, v) \mathrel{+}=
 \int_{\mathcal{F}_{\mathrm{ghost}}}
 \gamma_g h_{\mathrm{avg}}
-\llbracket \nabla u \cdot n_F \rrbracket
-\llbracket \nabla v \cdot n_F \rrbracket
+[\![ \nabla u \cdot n_F ]\!]
+[\![ \nabla v \cdot n_F ]\!]
 \, dS
 $$
 

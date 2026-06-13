@@ -209,8 +209,8 @@ In this demo the stabilization penalizes the normal jump of the gradient:
 $$
 \int_{\mathcal F_\mathrm{ghost}}
 \gamma_g h_\mathrm{avg}
-\llbracket \nabla u \cdot n_F \rrbracket
-\llbracket \nabla v \cdot n_F \rrbracket
+[\![ \nabla u \cdot n_F ]\!]
+[\![ \nabla v \cdot n_F ]\!]
 \,dS .
 $$
 

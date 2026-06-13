@@ -48,7 +48,7 @@
     svg.dragging {
       cursor: grabbing;
     }
-    .mesh-edge, .cut-edge, .interface {
+    .mesh-edge, .cut-edge, .interface, .line-layer {
       vector-effect: non-scaling-stroke;
       fill: none;
     }
@@ -79,6 +79,9 @@
     }
     .q-interface {
       fill: #be185d;
+      opacity: 0.95;
+    }
+    .point-layer {
       opacity: 0.95;
     }
   </style>
@@ -122,6 +125,10 @@
       return edges.map(([a, b]) => `M${points[a][0]},${-points[a][1]}L${points[b][0]},${-points[b][1]}`).join("");
     }
 
+    function pathFromSegments(segments) {
+      return segments.map(([[x0, y0], [x1, y1]]) => `M${x0},${-y0}L${x1},${-y1}`).join("");
+    }
+
     function pathFromPolyline(points) {
       return points.map((p, index) => `${index === 0 ? "M" : "L"}${p[0]},${-p[1]}`).join("") + "Z";
     }
@@ -162,6 +169,22 @@
         class: "mesh-edge",
       });
 
+      if (data.lineLayers) {
+        for (const layer of data.lineLayers) {
+          const attrs = {
+            d: pathFromSegments(layer.segments),
+            class: "line-layer",
+            stroke: layer.color,
+            "stroke-width": layer.width || 1.5,
+            opacity: layer.opacity == null ? 1.0 : layer.opacity,
+          };
+          if (layer.dash) {
+            attrs["stroke-dasharray"] = layer.dash;
+          }
+          add("path", attrs);
+        }
+      }
+
       if (data.interface) {
         add("path", {
           d: pathFromPolyline(data.interface),
@@ -177,6 +200,20 @@
       if (data.interfacePoints) {
         for (const p of data.interfacePoints) {
           add("circle", { cx: p[0], cy: -p[1], r: data.interfacePointRadius, class: "q-interface" });
+        }
+      }
+      if (data.pointLayers) {
+        for (const layer of data.pointLayers) {
+          for (const p of layer.points) {
+            add("circle", {
+              cx: p[0],
+              cy: -p[1],
+              r: layer.radius || data.pointRadius,
+              class: "point-layer",
+              fill: layer.color,
+              opacity: layer.opacity == null ? 0.95 : layer.opacity,
+            });
+          }
         }
       }
     }
