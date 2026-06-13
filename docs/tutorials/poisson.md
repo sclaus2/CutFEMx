@@ -189,9 +189,14 @@ f = 2.0 * np.pi**2 * u_exact
 
 ## Nitsche Boundary Terms
 
-The embedded boundary does not coincide with mesh facets. Therefore, we enforce Dirichlet conditions weakly using Nitsche's method. For Nitsche's method, we need the outside normal to the interface, which can be computed in CutFEMx from the level set function with `cutfemx.normal(phi)`. The weak formulation, we want to implement is 
+The embedded boundary does not coincide with mesh facets. Therefore, we enforce
+Dirichlet conditions weakly using Nitsche's method. For Nitsche's method, we
+need the outside normal to the interface, which can be computed in CutFEMx from
+the level-set function with `cutfemx.normal(phi)`. The weak formulation we want
+to implement is
 
-\[a(u, v)
+$$
+a(u, v)
 = \int_{\Omega} \nabla u \cdot \nabla v \, dx
 + \int_{\Gamma}
 \left(
@@ -199,16 +204,17 @@ The embedded boundary does not coincide with mesh facets. Therefore, we enforce 
 - (\nabla v \cdot n_{\Gamma}) u
 + \frac{\gamma}{h} u v
 \right) \, ds
-\] 
+$$
 
-\[L(v)
+$$
+L(v)
 = \int_{\Omega} f v \, dx
 + \int_{\Gamma}
 \left(
 - (\nabla v \cdot n_{\Gamma}) u_{\mathrm{exact}}
 + \frac{\gamma}{h} u_{\mathrm{exact}} v
 \right) \, ds
-\]
+$$
 
 ```python
 n_gamma = cutfemx.normal(phi)
@@ -241,13 +247,14 @@ Small cuts can make the unstabilized stiffness matrix ill-conditioned. Here, we 
 The ghost penalty terms are 
 
 
-\[a(u, v) \mathrel{+}=
+$$
+a(u, v) \mathrel{+}=
 \int_{\mathcal{F}_{\mathrm{ghost}}}
 \gamma_g h_{\mathrm{avg}}
 \llbracket \nabla u \cdot n_F \rrbracket
 \llbracket \nabla v \cdot n_F \rrbracket
 \, dS
-\] 
+$$
 
 which are implemented as 
 

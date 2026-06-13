@@ -10,7 +10,7 @@ related literature below.
 ```{raw} html
 <figure class="tutorial-figure">
   <img class="tutorial-image" src="../_static/tutorials/surface-poisson-dg-scene.png" alt="PyVista surface Poisson DG overview">
-  <figcaption>The CutFEMx surface mesh is extracted from the zero level set inside the actual hexahedral background mesh.</figcaption>
+  <figcaption>The CutFEMx surface mesh is extracted from the zero level set inside the hexahedral background mesh.</figcaption>
 </figure>
 ```
 
@@ -33,7 +33,7 @@ $$
 
 The demo executes the surface solve in this order:
 
-1. Define squared-distance, serial solve, interpolation, and output helpers.
+1. Define the level set function.
 2. Build the hexahedral background mesh and interpolate a quadratic level set.
 3. Cut cells with `"phi=0"` and create Algoim surface quadrature.
 4. Build the active surface skeleton by cutting interior facets adjacent to
@@ -53,7 +53,7 @@ with the `"phi=0"` predicate.
 ```{raw} html
 <figure class="tutorial-figure">
   <img class="tutorial-image" src="../_static/tutorials/surface-poisson-geometry-scene.png" alt="PyVista surface geometry scene">
-  <figcaption>The visible surface is the generated cut mesh, not an analytic sphere used only for display.</figcaption>
+  <figcaption>The visible surface is the generated cut mesh, not an analytic sphere. The cut mesh is used only for visualisation. Quadrature rules are generated on the quadratic level set surface. </figcaption>
 </figure>
 ```
 
@@ -65,7 +65,7 @@ msh = mesh.create_box(
     cell_type=mesh.CellType.hexahedron,
 )
 
-V_phi = fem.functionspace(msh, ("Lagrange", levelset_degree))
+V_phi = fem.functionspace(msh, ("Lagrange", 2))
 phi = fem.Function(V_phi, name="phi")
 phi.interpolate(lambda x: squared_distance(x, center) - radius**2)
 phi.x.scatter_forward()
@@ -129,8 +129,8 @@ facet_cut = cutfemx.cut(phi, skeleton_facets, facet_dim)
 skeleton_rules = cutfemx.runtime_quadrature(
     facet_cut, "phi=0", quadrature_order, backend="algoim"
 )
-surface_skeleton_facets = cutfemx.locate_entities(facet_cut, "phi=0")
-ghost_facets = surface_skeleton_facets
+ghost_facets = cutfemx.locate_entities(facet_cut, "phi=0")
+
 dS_gamma = ufl.Measure("dS", domain=msh, subdomain_data=skeleton_rules)
 dS_ghost = ufl.Measure("dS", domain=msh, subdomain_id=2, subdomain_data=ghost_facets)
 ```
@@ -153,10 +153,29 @@ a(u,v)=\int_\Gamma (\nabla_\Gamma u\cdot\nabla_\Gamma v+uv)\,d\Gamma
 +a_\mathrm{SIPG}(u,v)+a_\mathrm{ghost}(u,v).
 $$
 
-After the solve, the demo also interpolates the exact solution and error,
-assembles the surface $L^2$ error and the surface measure on `dx_gamma`, then
-writes three outputs: a background XDMF preview, a cut-surface XDMF preview,
-and a DG VTK file on the cut surface.
+The forms are compiled as CutFEMx runtime forms, assembled into a serial sparse
+`MatrixCSR` system, and then deactivated outside the active surface problem
+before the SciPy solve. The computed surface field `uh` still lives on the
+background DG space; the cut-surface output step restricts it to the
+visualization mesh later.
+
+```python
+a_form = cutfemx.fem.form(a)
+L_form = cutfemx.fem.form(L)
+
+A = cutfemx.fem.assemble_matrix(a_form)
+A.scatter_reverse()
+b = cutfemx.fem.assemble_vector(L_form)
+b.scatter_reverse(la.InsertMode.add)
+
+cutfemx.fem.deactivate_outside(A, b, cutfemx.fem.active_domain(a_form))
+
+from scipy.sparse.linalg import spsolve
+
+uh = fem.Function(V, name="u_h")
+uh.x.array[:] = spsolve(A.to_scipy().tocsr(), b.array)
+uh.x.scatter_forward()
+```
 
 ```{raw} html
 <figure class="tutorial-figure">
