@@ -54,17 +54,18 @@ def solve_step(
     msh: mesh.Mesh,
     V: fem.FunctionSpace,
     phi: fem.Function,
+    cut_data: cutfemx.CutData,
     center: tuple[float, float],
     radius: float,
     order: int,
     gamma: float,
     gamma_g: float,
 ) -> tuple[cutfemx.CutData, fem.Function, np.ndarray, np.ndarray, np.ndarray]:
-    """Update the level set, rebuild cut data, and solve one Poisson problem."""
+    """Update the level set and cut data, then solve one Poisson problem."""
     phi.interpolate(circle_level_set(center, radius))
     phi.x.scatter_forward()
+    cutfemx.update(cut_data)
 
-    cut_data = cutfemx.cut(phi)
     inside_cells = cutfemx.locate_entities(cut_data, "phi<0")
     cut_cells = cutfemx.locate_entities(cut_data, "phi=0")
     inside_rules = cutfemx.runtime_quadrature(cut_data, "phi<0", order)
@@ -162,6 +163,9 @@ msh = mesh.create_rectangle(
 )
 V = fem.functionspace(msh, ("Lagrange", 1))
 phi = fem.Function(V, name="phi")
+phi.interpolate(circle_level_set((0.0, 0.0), radius))
+phi.x.scatter_forward()
+cut_data = cutfemx.cut(phi)
 
 for step in range(steps):
     center = (float(step), 0.0)
@@ -169,6 +173,7 @@ for step in range(steps):
         msh,
         V,
         phi,
+        cut_data,
         center,
         radius,
         order,

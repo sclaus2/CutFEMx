@@ -14,7 +14,6 @@ getting-started/index
 user-guide/index
 stl_distance
 tutorials/index
-examples/index
 ```
 
 ## Getting started

@@ -154,8 +154,8 @@ cut_cells = cutfemx.locate_entities(cell_cut, "phi=0")
 facet_dim = msh.topology.dim - 1
 skeleton_facets = cutfemx.interior_facets_for_cells(msh, active_cells)
 skeleton_cut = cutfemx.cut(phi, skeleton_facets, facet_dim)
-inside_skeleton_facets = cutfemx.locate_entities(skeleton_cut, "phi<0")
-skeleton_rules = cutfemx.runtime_quadrature(skeleton_cut, "phi<0", order)
+omega_interior_facets = cutfemx.locate_entities(skeleton_cut, "phi<0")
+omega_cut_facet_rules = cutfemx.runtime_quadrature(skeleton_cut, "phi<0", order)
 cut_skeleton_facets = cutfemx.locate_entities(skeleton_cut, "phi=0")
 ghost_facets = cutfemx.ghost_penalty_facets(cell_cut, "phi<0")
 
@@ -166,7 +166,7 @@ dS_omega = ufl.Measure(
     "dS",
     domain=msh,
     subdomain_id=0,
-    subdomain_data=[inside_skeleton_facets, skeleton_rules],
+    subdomain_data=[omega_interior_facets, omega_cut_facet_rules],
 )
 dx_gamma = ufl.Measure("dx", domain=msh, subdomain_id=1, subdomain_data=interface_rules)
 dS_ghost = ufl.Measure("dS", domain=msh, subdomain_id=2, subdomain_data=ghost_facets)
@@ -231,7 +231,7 @@ if comm.rank == 0:
     print(f"Cut DG Poisson problem on a disk, n={n}, degree={degree}")
     print(f"active cells        = {active_cells.size}")
     print(f"cut cells           = {cut_cells.size}")
-    print(f"skeleton facets     = {inside_skeleton_facets.size}")
+    print(f"interior skeleton facets = {omega_interior_facets.size}")
     print(f"cut skeleton facets = {cut_skeleton_facets.size}")
     print(f"ghost facets        = {ghost_facets.size}")
     print(f"L2 error            = {np.sqrt(max(error_sq, 0.0)):.6e}")

@@ -13,18 +13,18 @@ import ufl
 from dolfinx import default_scalar_type, fem, io, la, mesh
 
 
-def cylinder_level_set(radius: float):
+def cylinder_level_set(center: tuple[float, float], radius: float):
     """Return a level-set function that is positive in the fluid."""
 
     def phi(x: np.ndarray) -> np.ndarray:
-        return np.sqrt(x[0] ** 2 + x[1] ** 2) - radius
+        return np.sqrt((x[0] - center[0]) ** 2 + (x[1] - center[1]) ** 2) - radius
 
     return phi
 
 
-def sigma(u, p, nu, dim: int):
-    """Return the Stokes stress tensor."""
-    return nu * (ufl.grad(u) + ufl.grad(u).T) - p * ufl.Identity(dim)
+def traction(u, p, nu, n):
+    """Return (nu grad(u) - p I) n."""
+    return nu * ufl.dot(ufl.grad(u), n) - p * n
 
 
 def solve_runtime_system_scipy(
@@ -103,6 +103,7 @@ comm = MPI.COMM_WORLD
 
 n = 24
 order = 4
+cylinder_center = (-1.2, 0.0)
 cylinder_radius = 0.3
 gamma_u = 100.0
 gamma_p = 0.1
@@ -116,14 +117,16 @@ msh = mesh.create_rectangle(
     cell_type=mesh.CellType.triangle,
 )
 
-P2 = basix.ufl.element("Lagrange", msh.basix_cell(), 2, shape=(msh.geometry.dim,))
 P1 = basix.ufl.element("Lagrange", msh.basix_cell(), 1)
-W = fem.functionspace(msh, basix.ufl.mixed_element([P2, P1]))
+P1_vec = basix.ufl.element(
+    "Lagrange", msh.basix_cell(), 1, shape=(msh.geometry.dim,)
+)
+W = fem.functionspace(msh, basix.ufl.mixed_element([P1_vec, P1]))
 V, _ = W.sub(0).collapse()
 Q, _ = W.sub(1).collapse()
 
 level_set = fem.Function(Q, name="phi")
-level_set.interpolate(cylinder_level_set(cylinder_radius))
+level_set.interpolate(cylinder_level_set(cylinder_center, cylinder_radius))
 level_set.x.scatter_forward()
 cut_data = cutfemx.cut(level_set)
 
@@ -134,15 +137,15 @@ fluid_rules = cutfemx.runtime_quadrature(cut_data, "phi>0", order)
 interface_rules = cutfemx.runtime_quadrature(cut_data, "phi=0", order)
 ghost_facets = cutfemx.ghost_penalty_facets(cut_data, "phi>0")
 
-interior_cells = np.union1d(fluid_cells, cut_cells)
-interior_facets = cutfemx.interior_facets_for_cells(msh, interior_cells)
+active_cells = np.union1d(fluid_cells, cut_cells)
+pressure_facets = cutfemx.interior_facets_for_cells(msh, active_cells)
 
 dx_omega = ufl.Measure(
     "dx", domain=msh, subdomain_id=0, subdomain_data=[uncut_fluid_cells, fluid_rules]
 )
 dx_gamma = ufl.Measure("dx", domain=msh, subdomain_id=1, subdomain_data=interface_rules)
 dS_ghost = ufl.Measure("dS", domain=msh, subdomain_id=2, subdomain_data=ghost_facets)
-dS_interior = ufl.Measure("dS", domain=msh, subdomain_id=3, subdomain_data=interior_facets)
+dS_pressure = ufl.Measure("dS", domain=msh, subdomain_id=3, subdomain_data=pressure_facets)
 
 w = ufl.TrialFunction(W)
 u, p = ufl.split(w)
@@ -152,13 +155,13 @@ f = fem.Constant(msh, default_scalar_type((0.0, 0.0)))
 n_gamma = -cutfemx.normal(level_set)
 n_facet = ufl.FacetNormal(msh)
 h = ufl.CellDiameter(msh)
-dim = msh.topology.dim
 
-a = ufl.inner(sigma(u, p, nu, dim), ufl.sym(ufl.grad(v))) * dx_omega
+a = nu * ufl.inner(ufl.grad(u), ufl.grad(v)) * dx_omega
+a += -p * ufl.div(v) * dx_omega
 a += ufl.div(u) * q * dx_omega
-a += -ufl.dot(ufl.dot(sigma(u, p, nu, dim), n_gamma), v) * dx_gamma
-a += -ufl.dot(ufl.dot(sigma(v, q, nu, dim), n_gamma), u) * dx_gamma
-a += gamma_u / h * ufl.inner(u, v) * dx_gamma
+a += -ufl.inner(traction(u, p, nu, n_gamma), v) * dx_gamma
+a += -ufl.inner(traction(v, q, nu, n_gamma), u) * dx_gamma
+a += gamma_u * nu / h * ufl.inner(u, v) * dx_gamma
 if ghost_facets.size > 0:
     a += (
         gamma_g
@@ -176,7 +179,7 @@ a += (
         ufl.jump(ufl.grad(p), n_facet),
         ufl.jump(ufl.grad(q), n_facet),
     )
-    * dS_interior
+    * dS_pressure
 )
 L = ufl.inner(f, v) * dx_omega
 
@@ -184,21 +187,20 @@ inflow_u = fem.Function(V)
 inflow_u.interpolate(lambda x: np.stack((1.0 - x[1] ** 2, np.zeros_like(x[0]))))
 walls_u = fem.Function(V)
 walls_u.x.array[:] = 0.0
-p_zero = fem.Function(Q)
-p_zero.x.array[:] = 0.0
 
 facet_dim = msh.topology.dim - 1
-inflow_facets = mesh.locate_entities_boundary(msh, facet_dim, lambda x: np.isclose(x[0], -3.0))
-wall_facets = mesh.locate_entities_boundary(msh, facet_dim, lambda x: np.isclose(np.abs(x[1]), 1.0))
-outflow_facets = mesh.locate_entities_boundary(msh, facet_dim, lambda x: np.isclose(x[0], 5.0))
+inflow_facets = mesh.locate_entities_boundary(
+    msh, facet_dim, lambda x: np.isclose(x[0], -3.0)
+)
+wall_facets = mesh.locate_entities_boundary(
+    msh, facet_dim, lambda x: np.isclose(np.abs(x[1]), 1.0)
+)
 
 inflow_dofs = fem.locate_dofs_topological((W.sub(0), V), facet_dim, inflow_facets)
 wall_dofs = fem.locate_dofs_topological((W.sub(0), V), facet_dim, wall_facets)
-pressure_dofs = fem.locate_dofs_topological((W.sub(1), Q), facet_dim, outflow_facets)
 bcs = [
     fem.dirichletbc(inflow_u, inflow_dofs, W.sub(0)),
     fem.dirichletbc(walls_u, wall_dofs, W.sub(0)),
-    fem.dirichletbc(p_zero, pressure_dofs, W.sub(1)),
 ]
 
 wh = solve_runtime_system_scipy(cutfemx.fem.form(a), cutfemx.fem.form(L), W, bcs)
@@ -217,6 +219,7 @@ if comm.rank == 0:
     print(f"fluid cells   = {fluid_cells.size}")
     print(f"cut cells     = {cut_cells.size}")
     print(f"ghost facets  = {ghost_facets.size}")
+    print(f"pressure facets = {pressure_facets.size}")
     print(f"velocity dofs = {velocity.x.array.size}")
 
 write_xdmf(output_dir, cut_data, velocity_out, pressure)

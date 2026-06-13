@@ -230,12 +230,66 @@ print("CutFEMx:", getattr(cutfemx, "__version__", "installed"))
 PY
 ```
 
+## Building The Documentation
+
+The documentation is a Sphinx/MyST project in `docs/`. Use the same conda
+environment that contains CutFEMx and the FEniCSx stack, especially when
+regenerating tutorial figures.
+
+Install the documentation dependencies once:
+
+```bash
+cd CutFEMx/docs
+python -m pip install -r requirements.txt
+```
+
+Build the HTML documentation:
+
+```bash
+bash build_docs.sh clean
+bash build_docs.sh build
+```
+
+The generated site is written to `docs/_build/html/index.html`. To serve it
+locally:
+
+```bash
+bash build_docs.sh serve --port 8000
+```
+
+Tutorial screenshots and interactive HTML views are generated from the actual
+demo-style CutFEMx solves in `docs/tutorials/make_pyvista_scenes.py`. Regenerate
+them before building when the tutorials or demo visualizations change:
+
+```bash
+bash build_docs.sh visuals
+bash build_docs.sh build
+```
+
+Equivalently, generate visuals as part of the build:
+
+```bash
+CUTFEMX_DOCS_GENERATE_VISUALS=1 bash build_docs.sh build
+```
+
+You can also select a conda environment without activating it first:
+
+```bash
+CUTFEMX_DOCS_CONDA_ENV=<env-name> bash build_docs.sh build
+```
+
+For a direct Sphinx command, run this from `docs/`:
+
+```bash
+make html
+```
+
 ## Available Demos
 
 The `python/demo` directory contains examples illustrating the usage of CutFEMx:
 
 - **Poisson equation** (`demo_poisson.py`): solve a cut Poisson problem on a
-  circular domain with Nitsche terms and ghost-penalty stabilization.
+  flower-shaped domain with Nitsche terms and ghost-penalty stabilization.
 - **Cut DG Poisson** (`demo_dg_poisson.py`): solve a DG Poisson problem with
   runtime quadrature on cells and the active interior skeleton.
 - **Interface Poisson** (`demo_interface_poisson.py`): solve an interface
