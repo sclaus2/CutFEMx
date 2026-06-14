@@ -1,3 +1,9 @@
+// Copyright (c) 2026 ONERA
+// Authors: Susanne Claus
+// This file is part of CutFEMx
+//
+// SPDX-License-Identifier:    MIT
+
 #pragma once
 
 // Robust geometric predicates using geogram MultiPrecision

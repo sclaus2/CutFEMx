@@ -9,45 +9,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(BUILD_SHARED_LIBS "Build cutfemx with shared libraries." ON)
-option(CUTFEMX_USE_LOCAL_CUTCELLS
-       "Build the sibling CutCells C++ source tree when available." ON)
-option(CUTFEMX_ALLOW_SYSTEM_CUTCELLS
-       "Allow CutFEMx to use a CutCells package from CMake system prefixes." OFF)
-
-set(_cutfemx_conda_prefix "$ENV{CONDA_PREFIX}")
-if(_cutfemx_conda_prefix)
-  if(NOT DEFINED Python_ROOT_DIR)
-    set(Python_ROOT_DIR "${_cutfemx_conda_prefix}")
-  endif()
-  if(NOT DEFINED Python_FIND_VIRTUALENV)
-    set(Python_FIND_VIRTUALENV ONLY)
-  endif()
-  if(NOT DEFINED Python_FIND_STRATEGY)
-    set(Python_FIND_STRATEGY LOCATION)
-  endif()
-  if(NOT DEFINED Python_EXECUTABLE)
-    if(WIN32)
-      set(_cutfemx_conda_python "${_cutfemx_conda_prefix}/python.exe")
-    else()
-      set(_cutfemx_conda_python "${_cutfemx_conda_prefix}/bin/python")
-    endif()
-    if(EXISTS "${_cutfemx_conda_python}")
-      set(Python_EXECUTABLE "${_cutfemx_conda_python}")
-    endif()
-  endif()
-
-  list(PREPEND CMAKE_PREFIX_PATH
-    "${_cutfemx_conda_prefix}"
-    "${_cutfemx_conda_prefix}/lib/cmake"
-    "${_cutfemx_conda_prefix}/Library"
-    "${_cutfemx_conda_prefix}/Library/lib/cmake")
-endif()
+option(CUTFEMX_USE_MULTIPRECISION_PSM
+       "Use geogram.psm.MultiPrecision for robust predicates." ON)
 
 find_package(Python 3.10 REQUIRED COMPONENTS Interpreter Development.Module)
 message(STATUS "Using Python executable: ${Python_EXECUTABLE}")
-if(_cutfemx_conda_prefix)
-  message(STATUS "Using active conda prefix: ${_cutfemx_conda_prefix}")
-endif()
 
 execute_process(
   COMMAND "${Python_EXECUTABLE}" -c "import nanobind; print(nanobind.cmake_dir())"
@@ -66,145 +32,9 @@ find_package(nanobind 2.0.0 REQUIRED CONFIG)
 find_package(MPI REQUIRED)
 find_package(OpenMP REQUIRED COMPONENTS CXX)
 
-function(_cutfemx_path_is_system_prefix OUT_VAR CANDIDATE_PATH)
-  set(${OUT_VAR} OFF PARENT_SCOPE)
-  if(NOT CANDIDATE_PATH
-     OR CANDIDATE_PATH MATCHES "^\\$<"
-     OR CANDIDATE_PATH MATCHES "-NOTFOUND$")
-    return()
-  endif()
-
-  get_filename_component(_cutfemx_candidate_abs "${CANDIDATE_PATH}" ABSOLUTE)
-  foreach(_cutfemx_system_prefix IN LISTS CMAKE_SYSTEM_PREFIX_PATH)
-    if(NOT _cutfemx_system_prefix)
-      continue()
-    endif()
-    get_filename_component(_cutfemx_system_prefix_abs
-                           "${_cutfemx_system_prefix}" ABSOLUTE)
-
-    if(_cutfemx_candidate_abs STREQUAL _cutfemx_system_prefix_abs)
-      set(${OUT_VAR} ON PARENT_SCOPE)
-      return()
-    endif()
-
-    string(LENGTH "${_cutfemx_system_prefix_abs}" _cutfemx_prefix_len)
-    string(SUBSTRING "${_cutfemx_candidate_abs}" 0
-                     "${_cutfemx_prefix_len}" _cutfemx_candidate_prefix)
-    if(_cutfemx_candidate_prefix STREQUAL _cutfemx_system_prefix_abs)
-      string(SUBSTRING "${_cutfemx_candidate_abs}" "${_cutfemx_prefix_len}"
-                       1 _cutfemx_candidate_separator)
-      if(_cutfemx_candidate_separator STREQUAL "/"
-         OR _cutfemx_candidate_separator STREQUAL "\\")
-        set(${OUT_VAR} ON PARENT_SCOPE)
-        return()
-      endif()
-    endif()
-  endforeach()
-endfunction()
-
-function(_cutfemx_reject_system_cutcells)
-  if(CUTFEMX_ALLOW_SYSTEM_CUTCELLS)
-    return()
-  endif()
-
-  set(_cutfemx_cutcells_paths)
-  if(DEFINED CutCells_DIR AND NOT TARGET cutcells)
-    list(APPEND _cutfemx_cutcells_paths "${CutCells_DIR}")
-  endif()
-  if(TARGET CUTCELLS::cutcells)
-    get_target_property(_cutfemx_cutcells_includes
-                        CUTCELLS::cutcells INTERFACE_INCLUDE_DIRECTORIES)
-    if(_cutfemx_cutcells_includes)
-      list(APPEND _cutfemx_cutcells_paths ${_cutfemx_cutcells_includes})
-    endif()
-    foreach(_cutfemx_prop
-            IMPORTED_LOCATION
-            IMPORTED_LOCATION_NOCONFIG
-            IMPORTED_LOCATION_RELEASE
-            IMPORTED_LOCATION_DEBUG
-            IMPORTED_LOCATION_RELWITHDEBINFO
-            IMPORTED_LOCATION_MINSIZEREL)
-      get_target_property(_cutfemx_cutcells_location
-                          CUTCELLS::cutcells ${_cutfemx_prop})
-      if(_cutfemx_cutcells_location)
-        list(APPEND _cutfemx_cutcells_paths "${_cutfemx_cutcells_location}")
-      endif()
-    endforeach()
-  endif()
-
-  foreach(_cutfemx_cutcells_path IN LISTS _cutfemx_cutcells_paths)
-    if(NOT _cutfemx_cutcells_path
-       OR _cutfemx_cutcells_path MATCHES "^\\$<"
-       OR _cutfemx_cutcells_path MATCHES "-NOTFOUND$")
-      continue()
-    endif()
-    _cutfemx_path_is_system_prefix(_cutfemx_is_system_cutcells_path
-                                   "${_cutfemx_cutcells_path}")
-    if(_cutfemx_is_system_cutcells_path)
-      message(FATAL_ERROR
-        "Refusing to use CutCells from '${_cutfemx_cutcells_path}'. "
-        "Use the sibling CutCells source tree, set CutCells_DIR to the "
-        "active conda environment, or configure with "
-        "-DCUTFEMX_ALLOW_SYSTEM_CUTCELLS=ON if this system install is intentional.")
-    endif()
-  endforeach()
-endfunction()
-
-function(_cutfemx_find_packaged_cutcells)
-  if(DEFINED CutCells_DIR AND NOT CUTFEMX_ALLOW_SYSTEM_CUTCELLS)
-    _cutfemx_path_is_system_prefix(_cutfemx_is_system_cutcells_dir
-                                   "${CutCells_DIR}")
-    if(_cutfemx_is_system_cutcells_dir)
-      message(FATAL_ERROR
-        "Refusing to use CutCells_DIR='${CutCells_DIR}'. "
-        "Use the sibling CutCells source tree, set CutCells_DIR to the "
-        "active conda environment, or configure with "
-        "-DCUTFEMX_ALLOW_SYSTEM_CUTCELLS=ON if this system install is intentional.")
-    endif()
-  endif()
-
-  if(CUTFEMX_ALLOW_SYSTEM_CUTCELLS)
-    find_package(CutCells 0.4.0 REQUIRED CONFIG)
-    return()
-  endif()
-
-  set(_cutfemx_cutcells_hints)
-  if(DEFINED CutCells_DIR)
-    list(APPEND _cutfemx_cutcells_hints "${CutCells_DIR}")
-  endif()
-  if(_cutfemx_conda_prefix)
-    list(APPEND _cutfemx_cutcells_hints
-      "${_cutfemx_conda_prefix}"
-      "${_cutfemx_conda_prefix}/lib/cmake/cutcells")
-  endif()
-
-  find_package(CutCells 0.4.0 REQUIRED CONFIG
-    PATHS ${_cutfemx_cutcells_hints}
-    NO_DEFAULT_PATH)
-endfunction()
-
-set(CUTFEMX_LOCAL_CUTCELLS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../CutCells/cpp")
-if(CUTFEMX_USE_LOCAL_CUTCELLS
-   AND EXISTS "${CUTFEMX_LOCAL_CUTCELLS_DIR}/CMakeLists.txt"
-   AND NOT TARGET CUTCELLS::cutcells
-   AND NOT TARGET cutcells)
-  message(STATUS "Using sibling CutCells source: ${CUTFEMX_LOCAL_CUTCELLS_DIR}")
-  add_subdirectory("${CUTFEMX_LOCAL_CUTCELLS_DIR}"
-                   "${CMAKE_CURRENT_BINARY_DIR}/_deps/cutcells"
-                   EXCLUDE_FROM_ALL)
+if(NOT TARGET CUTCELLS::cutcells)
+  find_package(CutCells 0.4.0 REQUIRED CONFIG)
 endif()
-if(TARGET cutcells)
-  if(NOT TARGET CUTCELLS::cutcells)
-    add_library(CUTCELLS::cutcells ALIAS cutcells)
-  endif()
-  if(APPLE)
-    set_target_properties(cutcells PROPERTIES
-      INSTALL_NAME_DIR "@loader_path")
-  endif()
-elseif(NOT TARGET CUTCELLS::cutcells)
-  _cutfemx_find_packaged_cutcells()
-endif()
-_cutfemx_reject_system_cutcells()
 find_package(DOLFINX REQUIRED CONFIG)
 find_package(spdlog REQUIRED CONFIG)
 
@@ -331,35 +161,34 @@ target_link_libraries(cutfemx_cpp PRIVATE
 )
 
 if(APPLE)
-  set(_cutfemx_runtime_rpath "@loader_path")
-  list(APPEND _cutfemx_runtime_rpath
+  set(_cutfemx_install_rpath "@loader_path")
+  list(APPEND _cutfemx_install_rpath
     "@loader_path/../basix/lib"
     "@loader_path/../dolfinx/lib"
     "@loader_path/../fenics_basix.libs"
     "@loader_path/../fenics_dolfinx.libs")
 else()
-  set(_cutfemx_runtime_rpath "$ORIGIN")
-  list(APPEND _cutfemx_runtime_rpath
+  set(_cutfemx_install_rpath "$ORIGIN")
+  list(APPEND _cutfemx_install_rpath
     "$ORIGIN/../basix/lib"
     "$ORIGIN/../dolfinx/lib"
     "$ORIGIN/../fenics_basix.libs"
     "$ORIGIN/../fenics_dolfinx.libs")
 endif()
+set(_cutfemx_build_rpath ${_cutfemx_install_rpath})
 if(CUTFEMX_PYTHON_PREFIX)
-  list(APPEND _cutfemx_runtime_rpath "${CUTFEMX_PYTHON_PREFIX}/lib")
+  list(APPEND _cutfemx_build_rpath "${CUTFEMX_PYTHON_PREFIX}/lib")
 endif()
-if(DEFINED ENV{CONDA_PREFIX} AND NOT "$ENV{CONDA_PREFIX}" STREQUAL "")
-  list(APPEND _cutfemx_runtime_rpath "$ENV{CONDA_PREFIX}/lib")
-endif()
-list(REMOVE_DUPLICATES _cutfemx_runtime_rpath)
+list(REMOVE_DUPLICATES _cutfemx_build_rpath)
+list(REMOVE_DUPLICATES _cutfemx_install_rpath)
 
 set_target_properties(cutfemx_cpp PROPERTIES
-  BUILD_RPATH "${_cutfemx_runtime_rpath}"
-  INSTALL_RPATH "${_cutfemx_runtime_rpath}"
+  BUILD_RPATH "${_cutfemx_build_rpath}"
+  INSTALL_RPATH "${_cutfemx_install_rpath}"
   INSTALL_RPATH_USE_LINK_PATH FALSE)
 set_target_properties(cutfemx PROPERTIES
-  BUILD_RPATH "${_cutfemx_runtime_rpath}"
-  INSTALL_RPATH "${_cutfemx_runtime_rpath}"
+  BUILD_RPATH "${_cutfemx_build_rpath}"
+  INSTALL_RPATH "${_cutfemx_install_rpath}"
   INSTALL_RPATH_USE_LINK_PATH FALSE)
 if(APPLE)
   set_target_properties(cutfemx PROPERTIES
@@ -378,9 +207,3 @@ install(DIRECTORY cpp/dolfinx_custom_data/
   FILES_MATCHING
     PATTERN "*.h"
     PATTERN "README.md")
-if(TARGET cutcells)
-  install(TARGETS cutcells
-    RUNTIME DESTINATION cutfemx
-    LIBRARY DESTINATION cutfemx
-    ARCHIVE DESTINATION cutfemx)
-endif()

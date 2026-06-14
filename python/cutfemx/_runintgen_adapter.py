@@ -1,3 +1,9 @@
+# Copyright (c) 2026 ONERA
+# Authors: Susanne Claus
+# This file is part of CutFEMx
+#
+# SPDX-License-Identifier:    MIT
+
 """CutFEMx-owned DOLFINx adapter for runintgen forms.
 
 runintgen stays backend-neutral. This module is the DOLFINx binding layer used

@@ -7,7 +7,7 @@ level-set input used by the cut-integration demos.
 
 ```{raw} html
 <figure class="tutorial-figure">
-  <img class="tutorial-image" src="../_static/tutorials/stl-distance-scene.png" alt="PyVista Dino STL surface">
+  <img class="tutorial-image" src="../_static/tutorials/stl-distance-scene.png" alt="PyVista demo STL surface">
   <figcaption>The input is the actual triangulated STL surface used by the demo.</figcaption>
 </figure>
 ```
@@ -16,7 +16,7 @@ level-set input used by the cut-integration demos.
 
 The demo is a preprocessing script, so its execution order is:
 
-1. Resolve `python/demo/Dino.stl` and read its bounding box on rank 0.
+1. Resolve `python/demo/demo_surface.stl` and read its bounding box on rank 0.
 2. Broadcast the STL bounds and build a padded tetrahedral background box.
 3. Refine that mesh around the STL triangles with `adapt_mesh_to_stl`.
 4. Compute `dist = from_stl(refined_mesh, stl_path, sign_mode=...)`.

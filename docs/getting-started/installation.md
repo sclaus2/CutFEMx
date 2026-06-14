@@ -244,9 +244,8 @@ PY
 ## Install CutCells
 
 CutCells provides the geometric cutting backend used by CutFEMx. The Python
-build can build the bundled C++ core, but building and installing the C++ core
-explicitly is useful when developing or when CMake needs to discover the
-CutCells package.
+wrapper builds against an installed CutCells C++ CMake package, so install the
+C++ core into the active environment before building the Python package.
 
 ```bash
 git clone https://github.com/sclaus2/cutcells.git CutCells
@@ -260,8 +259,7 @@ cmake -G Ninja -S cpp -B cpp/build \
 cmake --build cpp/build
 cmake --install cpp/build
 
-CMAKE_ARGS="${CMAKE_ARGS:-} -DCUTCELLS_WITH_ALGOIM=ON" \
-  python -m pip install --no-build-isolation --no-deps --force-reinstall \
+python -m pip install --no-build-isolation --no-deps --force-reinstall \
   ./python
 
 cd ..

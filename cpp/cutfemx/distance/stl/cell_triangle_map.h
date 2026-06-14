@@ -1,3 +1,9 @@
+// Copyright (c) 2026 ONERA
+// Authors: Susanne Claus
+// This file is part of CutFEMx
+//
+// SPDX-License-Identifier:    MIT
+
 #pragma once
 
 // Cell-Triangle Map: for each local mesh cell, find all surface triangles that intersect it

@@ -1,3 +1,9 @@
+// Copyright (c) 2026 ONERA
+// Authors: Susanne Claus
+// This file is part of CutFEMx
+//
+// SPDX-License-Identifier:    MIT
+
 // CutFEMx Documentation Custom JavaScript
 
 // Immediately hide "More" button to prevent flash

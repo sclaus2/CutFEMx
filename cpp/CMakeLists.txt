@@ -12,148 +12,15 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Options
 option(BUILD_SHARED_LIBS "Build cutfemx with shared libraries." ON)
 option(CUTFEMX_USE_MULTIPRECISION_PSM "Use MultiPrecision_psm library for high precision arithmetic." ON)
-option(CUTFEMX_USE_LOCAL_CUTCELLS "Build the sibling CutCells C++ source tree when available." ON)
-option(CUTFEMX_ALLOW_SYSTEM_CUTCELLS "Allow CutFEMx to use a CutCells package from CMake system prefixes." OFF)
-#add_feature_info(BUILD_SHARED_LIBS BUILD_SHARED_LIBS "Build cutfemx with shared libraries.")
-
-include(FeatureSummary)
-
-set(_cutfemx_conda_prefix "$ENV{CONDA_PREFIX}")
 
 # Find DOLFINx config file
 if(NOT TARGET OpenMP::OpenMP_CXX)
   find_package(OpenMP REQUIRED COMPONENTS CXX)
 endif()
 
-function(_cutfemx_path_is_system_prefix OUT_VAR CANDIDATE_PATH)
-  set(${OUT_VAR} OFF PARENT_SCOPE)
-  if(NOT CANDIDATE_PATH
-     OR CANDIDATE_PATH MATCHES "^\\$<"
-     OR CANDIDATE_PATH MATCHES "-NOTFOUND$")
-    return()
-  endif()
-
-  get_filename_component(_cutfemx_candidate_abs "${CANDIDATE_PATH}" ABSOLUTE)
-  foreach(_cutfemx_system_prefix IN LISTS CMAKE_SYSTEM_PREFIX_PATH)
-    if(NOT _cutfemx_system_prefix)
-      continue()
-    endif()
-    get_filename_component(_cutfemx_system_prefix_abs
-                           "${_cutfemx_system_prefix}" ABSOLUTE)
-
-    if(_cutfemx_candidate_abs STREQUAL _cutfemx_system_prefix_abs)
-      set(${OUT_VAR} ON PARENT_SCOPE)
-      return()
-    endif()
-
-    string(LENGTH "${_cutfemx_system_prefix_abs}" _cutfemx_prefix_len)
-    string(SUBSTRING "${_cutfemx_candidate_abs}" 0
-                     "${_cutfemx_prefix_len}" _cutfemx_candidate_prefix)
-    if(_cutfemx_candidate_prefix STREQUAL _cutfemx_system_prefix_abs)
-      string(SUBSTRING "${_cutfemx_candidate_abs}" "${_cutfemx_prefix_len}"
-                       1 _cutfemx_candidate_separator)
-      if(_cutfemx_candidate_separator STREQUAL "/"
-         OR _cutfemx_candidate_separator STREQUAL "\\")
-        set(${OUT_VAR} ON PARENT_SCOPE)
-        return()
-      endif()
-    endif()
-  endforeach()
-endfunction()
-
-function(_cutfemx_reject_system_cutcells)
-  if(CUTFEMX_ALLOW_SYSTEM_CUTCELLS)
-    return()
-  endif()
-
-  set(_cutfemx_cutcells_paths)
-  if(DEFINED CutCells_DIR AND NOT TARGET cutcells)
-    list(APPEND _cutfemx_cutcells_paths "${CutCells_DIR}")
-  endif()
-  if(TARGET CUTCELLS::cutcells)
-    get_target_property(_cutfemx_cutcells_includes CUTCELLS::cutcells INTERFACE_INCLUDE_DIRECTORIES)
-    if(_cutfemx_cutcells_includes)
-      list(APPEND _cutfemx_cutcells_paths ${_cutfemx_cutcells_includes})
-    endif()
-    foreach(_cutfemx_prop
-            IMPORTED_LOCATION
-            IMPORTED_LOCATION_NOCONFIG
-            IMPORTED_LOCATION_RELEASE
-            IMPORTED_LOCATION_DEBUG
-            IMPORTED_LOCATION_RELWITHDEBINFO
-            IMPORTED_LOCATION_MINSIZEREL)
-      get_target_property(_cutfemx_cutcells_location CUTCELLS::cutcells ${_cutfemx_prop})
-      if(_cutfemx_cutcells_location)
-        list(APPEND _cutfemx_cutcells_paths "${_cutfemx_cutcells_location}")
-      endif()
-    endforeach()
-  endif()
-
-  foreach(_cutfemx_cutcells_path IN LISTS _cutfemx_cutcells_paths)
-    if(NOT _cutfemx_cutcells_path
-       OR _cutfemx_cutcells_path MATCHES "^\\$<"
-       OR _cutfemx_cutcells_path MATCHES "-NOTFOUND$")
-      continue()
-    endif()
-    _cutfemx_path_is_system_prefix(_cutfemx_is_system_cutcells_path
-                                   "${_cutfemx_cutcells_path}")
-    if(_cutfemx_is_system_cutcells_path)
-      message(FATAL_ERROR
-        "Refusing to use CutCells from '${_cutfemx_cutcells_path}'. "
-        "Use the sibling CutCells source tree, set CutCells_DIR to the "
-        "active conda environment, or configure with "
-        "-DCUTFEMX_ALLOW_SYSTEM_CUTCELLS=ON if this system install is intentional.")
-    endif()
-  endforeach()
-endfunction()
-
-function(_cutfemx_find_packaged_cutcells)
-  if(DEFINED CutCells_DIR AND NOT CUTFEMX_ALLOW_SYSTEM_CUTCELLS)
-    _cutfemx_path_is_system_prefix(_cutfemx_is_system_cutcells_dir
-                                   "${CutCells_DIR}")
-    if(_cutfemx_is_system_cutcells_dir)
-      message(FATAL_ERROR
-        "Refusing to use CutCells_DIR='${CutCells_DIR}'. "
-        "Use the sibling CutCells source tree, set CutCells_DIR to the "
-        "active conda environment, or configure with "
-        "-DCUTFEMX_ALLOW_SYSTEM_CUTCELLS=ON if this system install is intentional.")
-    endif()
-  endif()
-
-  if(CUTFEMX_ALLOW_SYSTEM_CUTCELLS)
-    find_package(CutCells 0.4.0 REQUIRED CONFIG)
-    return()
-  endif()
-
-  set(_cutfemx_cutcells_hints)
-  if(DEFINED CutCells_DIR)
-    list(APPEND _cutfemx_cutcells_hints "${CutCells_DIR}")
-  endif()
-  if(_cutfemx_conda_prefix)
-    list(APPEND _cutfemx_cutcells_hints
-      "${_cutfemx_conda_prefix}"
-      "${_cutfemx_conda_prefix}/lib/cmake/cutcells")
-  endif()
-
-  find_package(CutCells 0.4.0 REQUIRED CONFIG
-    PATHS ${_cutfemx_cutcells_hints}
-    NO_DEFAULT_PATH)
-endfunction()
-
 if(NOT TARGET CUTCELLS::cutcells)
-  set(CUTFEMX_LOCAL_CUTCELLS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../CutCells/cpp")
-  if(CUTFEMX_USE_LOCAL_CUTCELLS
-     AND EXISTS "${CUTFEMX_LOCAL_CUTCELLS_DIR}/CMakeLists.txt")
-    message(STATUS "Using sibling CutCells source: ${CUTFEMX_LOCAL_CUTCELLS_DIR}")
-    add_subdirectory("${CUTFEMX_LOCAL_CUTCELLS_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/_deps/cutcells" EXCLUDE_FROM_ALL)
-    if(NOT TARGET CUTCELLS::cutcells)
-      add_library(CUTCELLS::cutcells ALIAS cutcells)
-    endif()
-  else()
-    _cutfemx_find_packaged_cutcells()
-  endif()
+  find_package(CutCells 0.4.0 REQUIRED CONFIG)
 endif()
-_cutfemx_reject_system_cutcells()
 if(NOT TARGET dolfinx)
   find_package(DOLFINX REQUIRED)
 endif()

@@ -272,3 +272,8 @@ copybutton_remove_prompts = True
 numpydoc_show_class_members = False
 numpydoc_show_inherited_class_members = True
 numpydoc_class_members_toctree = False
+# Copyright (c) 2026 ONERA
+# Authors: Susanne Claus
+# This file is part of CutFEMx
+#
+# SPDX-License-Identifier:    MIT

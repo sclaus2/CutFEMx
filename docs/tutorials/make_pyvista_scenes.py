@@ -1,3 +1,9 @@
+# Copyright (c) 2026 ONERA
+# Authors: Susanne Claus
+# This file is part of CutFEMx
+#
+# SPDX-License-Identifier:    MIT
+
 """Generate PyVista screenshots for the tutorial pages.
 
 The scenes use the same DOLFINx mesh construction and CutFEMx classification
@@ -3164,8 +3170,8 @@ def boundary_perimeter_quadrature_scene() -> None:
     _export_scene(OUTPUT_DIR / "boundary-perimeter-quadrature-scene.png", "Patch and curve quadrature", draw, flat=False, camera_distance=4.5, camera_zoom=0.72)
 
 
-def _dino_surface() -> pv.PolyData:
-    surface = pv.read((ROOT.parent / "python" / "demo" / "Dino.stl").as_posix())
+def _demo_stl_surface() -> pv.PolyData:
+    surface = pv.read((ROOT.parent / "python" / "demo" / "demo_surface.stl").as_posix())
     return surface.triangulate().clean()
 
 
@@ -3184,8 +3190,8 @@ def _stl_distance_state(*, compute_distance: bool = False) -> dict:
 
     from cutfemx.distance import adapt_mesh_to_stl, compute_stl_bbox
 
-    stl_path = ROOT.parent / "python" / "demo" / "Dino.stl"
-    surface = _dino_surface()
+    stl_path = ROOT.parent / "python" / "demo" / "demo_surface.stl"
+    surface = _demo_stl_surface()
     comm = MPI.COMM_WORLD
     min_pt_stl = np.zeros(3, dtype=np.float64)
     max_pt_stl = np.zeros(3, dtype=np.float64)
@@ -3250,7 +3256,7 @@ def _stl_distance_state(*, compute_distance: bool = False) -> dict:
 
 
 def stl_distance_scene() -> None:
-    surface = _dino_surface()
+    surface = _demo_stl_surface()
 
     def draw(plotter: pv.Plotter) -> None:
         plotter.add_mesh(surface, color="#94a3b8", show_edges=True, edge_color="#334155", line_width=0.15, opacity=0.95)
@@ -3259,7 +3265,7 @@ def stl_distance_scene() -> None:
 
 
 def stl_distance_bbox_scene() -> None:
-    surface = _dino_surface()
+    surface = _demo_stl_surface()
     bounds = _padded_bounds(surface)
 
     def draw(plotter: pv.Plotter) -> None:

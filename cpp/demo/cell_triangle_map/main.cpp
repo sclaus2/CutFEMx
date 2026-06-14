@@ -1,3 +1,9 @@
+// Copyright (c) 2026 ONERA
+// Authors: Susanne Claus
+// This file is part of CutFEMx
+//
+// SPDX-License-Identifier:    MIT
+
 /// Demo: Cell-Triangle Map Visualization
 /// 
 /// This example demonstrates the robust cell-triangle intersection detection

@@ -1,3 +1,8 @@
+# Copyright (c) 2026 ONERA
+# Authors: Susanne Claus
+# This file is part of CutFEMx
+#
+# SPDX-License-Identifier:    MIT
 
 import numpy as np
 import os
@@ -14,12 +19,12 @@ def demo_stl_distance():
     rank = comm.Get_rank()
     
     # Path to STL file
-    stl_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "Dino.stl"))
+    stl_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "demo_surface.stl"))
     
     if rank == 0:
         print(f"Computing distance to STL: {stl_path}")
         if not os.path.exists(stl_path):
-            print("Error: Dino.stl not found in root directory!")
+            print("Error: demo_surface.stl not found in the demo directory!")
             return
 
     # 1. Get bbox of STL to define background mesh

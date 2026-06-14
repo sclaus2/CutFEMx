@@ -1,3 +1,9 @@
+# Copyright (c) 2026 ONERA
+# Authors: Susanne Claus
+# This file is part of CutFEMx
+#
+# SPDX-License-Identifier:    MIT
+
 """Stokes flow in a channel with an unfitted circular obstacle."""
 
 from __future__ import annotations

@@ -27,9 +27,11 @@ CutCells 0.4.
 
 ## License
 
-CutFEMx is licensed under the MIT License except for DOLFINx-derived form and
-assembler sources under `cpp/dolfinx_custom_data`, which are licensed under
-LGPL-3.0-or-later. See `THIRD_PARTY_NOTICES.md` for provenance and details.
+CutFEMx is licensed under the MIT License except for files that carry different
+SPDX identifiers. DOLFINx-derived form and assembler sources under
+`cpp/dolfinx_custom_data` are licensed under LGPL-3.0-or-later, and the bundled
+geogram.psm.MultiPrecision source is BSD-3-Clause. See
+`THIRD_PARTY_NOTICES.md` for provenance and details.
 
 ![SVG Image](img/quadrature.svg)
 
@@ -51,33 +53,25 @@ The documentation is available at
 
 ## Installation
 
-These instructions assume a Unix-like shell and an activated conda-forge
-environment. They intentionally avoid user-specific paths; all CMake installs
-use the active environment prefix through `$CONDA_PREFIX`.
+These instructions install the FEniCSx 0.11 stack from conda-forge, then build
+runintgen, CutCells, and CutFEMx from source into the same environment.
 
-### 1. Create an environment
-
-Choose any environment name and keep it active for all install steps:
+### 1. Create a FEniCSx 0.11 environment
 
 ```bash
-conda create -n <env-name> -c conda-forge python=3.13
-conda activate <env-name>
-
-conda install -c conda-forge \
-  c-compiler cxx-compiler cmake ninja pkg-config pip \
-  mpi mpich mpi4py petsc petsc4py \
-  hdf5 libadios2 pugixml spdlog boost-cpp \
-  parmetis libscotch ptscotch kahip \
-  numpy scipy matplotlib pyvista pytest \
-  scikit-build-core nanobind cffi
+conda create -n cutfemx -c conda-forge \
+  python=3.12 \
+  fenics-dolfinx=0.11.0 fenics-basix=0.11.0 \
+  fenics-ffcx=0.11.0 fenics-ufl=2026.1.0 \
+  mpi4py petsc4py \
+  cmake ninja pkg-config compilers \
+  scikit-build-core nanobind cffi \
+  numpy scipy matplotlib pytest
+conda activate cutfemx
 ```
 
-Use one consistent MPI/PETSc stack for every build step. If you use OpenMPI
-instead of MPICH, install matching MPI, PETSc, `mpi4py`, and `petsc4py`
-packages from conda-forge.
-
-Before building packages from source, keep CMake and Python discovery tied to
-the active environment:
+Tie CMake, Python, and the compiler to the active environment before building
+any of the source packages:
 
 ```bash
 export CONDA_PREFIX="${CONDA_PREFIX:?activate the conda environment first}"
@@ -87,7 +81,7 @@ export CC="$CONDA_PREFIX/bin/clang"
 export CXX="$CONDA_PREFIX/bin/clang++"
 ```
 
-On macOS with the conda-forge C++ toolchain, DOLFINx 0.11 may also require:
+On macOS with the conda-forge C++ toolchain and DOLFINx 0.11 headers, also use:
 
 ```bash
 export CMAKE_ARGS="-DCMAKE_OSX_DEPLOYMENT_TARGET=13.4"
@@ -95,78 +89,46 @@ export CXXFLAGS="-D_LIBCPP_ENABLE_EXPERIMENTAL -D_LIBCPP_HAS_NO_EXPERIMENTAL_TZD
 ```
 
 On Linux, or with a compiler toolchain that does not need these libc++
-workarounds, omit the `CMAKE_ARGS` and `CXXFLAGS` lines. If `clang`/`clang++`
-are not the compiler names in your environment, set `CC` and `CXX` to the
-compiler wrappers installed in the active conda environment.
+workarounds, omit the `CMAKE_ARGS` and `CXXFLAGS` lines. If `clang` and
+`clang++` are not the compiler names in your environment, set `CC` and `CXX` to
+the compiler wrappers installed by conda-forge.
 
-### 2. Install the FEniCSx 0.11 release stack
-
-CutFEMx currently targets the FEniCSx 0.11 source release stack:
-
-- Basix: `v0.11.0`
-- UFL: `2026.1.0`
-- FFCx: `v0.11.0`
-- DOLFINx: `v0.11.0`
-
-Verify the upstream tags if needed:
+Verify that the conda packages are the expected FEniCSx versions:
 
 ```bash
-git ls-remote --exit-code --tags https://github.com/FEniCS/basix.git refs/tags/v0.11.0
-git ls-remote --exit-code --tags https://github.com/FEniCS/ufl.git refs/tags/2026.1.0
-git ls-remote --exit-code --tags https://github.com/FEniCS/ffcx.git refs/tags/v0.11.0
-git ls-remote --exit-code --tags https://github.com/FEniCS/dolfinx.git refs/tags/v0.11.0
+python - <<'PY'
+import importlib.metadata as m
+
+for name in ["fenics-basix", "fenics-dolfinx", "fenics-ffcx", "fenics-ufl"]:
+    print(name, m.version(name))
+PY
 ```
 
-Fetch the tagged sources:
+### 2. Install runintgen
 
-```bash
-mkdir -p fenicsx-0.11
-cd fenicsx-0.11
-
-git clone --branch v0.11.0 --depth 1 https://github.com/FEniCS/basix.git
-git clone --branch 2026.1.0 --depth 1 https://github.com/FEniCS/ufl.git
-git clone --branch v0.11.0 --depth 1 https://github.com/FEniCS/ffcx.git
-git clone --branch v0.11.0 --depth 1 https://github.com/FEniCS/dolfinx.git
-```
-
-Install Basix, UFL, and FFCx from those checkouts:
-
-```bash
-python -m pip install --upgrade pip setuptools wheel
-
-python -m pip install --upgrade --force-reinstall --no-deps ./basix ./ufl ./ffcx
-```
-
-Build and install DOLFINx from source into the same environment:
-
-```bash
-cd dolfinx
-
-cmake -G Ninja -S cpp -B cpp/build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" \
-  -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
-cmake --build cpp/build
-cmake --install cpp/build
-
-python -m pip install --check-build-dependencies --no-build-isolation --no-deps \
-  ./python
-
-cd ../..
-```
-
-### 3. Install runintgen
+runintgen is independent of CutCells and can be installed first:
 
 ```bash
 git clone https://github.com/sclaus2/runintgen.git
-cd runintgen
-
-python -m pip install --no-build-isolation --no-deps --force-reinstall .
-
-cd ..
+python -m pip install --no-build-isolation --no-deps --force-reinstall \
+  ./runintgen
 ```
 
-### 4. Install CutCells
+Check the install:
+
+```bash
+python - <<'PY'
+import importlib.metadata as m
+import runintgen
+
+print("runintgen", m.version("runintgen"))
+PY
+```
+
+### 3. Install CutCells
+
+CutCells is independent of runintgen. Install the C++ library into the active
+conda prefix, then build the Python wrapper against that installed library:
 
 ```bash
 git clone https://github.com/sclaus2/cutcells.git CutCells
@@ -176,57 +138,62 @@ cmake -G Ninja -S cpp -B cpp/build \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" \
   -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=13.4 \
   -DCUTCELLS_WITH_ALGOIM=ON
 cmake --build cpp/build
 cmake --install cpp/build
 
-CMAKE_ARGS="${CMAKE_ARGS:-} -DCUTCELLS_WITH_ALGOIM=ON" \
-  python -m pip install --no-build-isolation --no-deps --force-reinstall \
+python -m pip install --no-build-isolation --no-deps --force-reinstall \
   ./python
 
 cd ..
 ```
 
-### 5. Install CutFEMx
+On Linux, omit the `-DCMAKE_OSX_DEPLOYMENT_TARGET=13.4` line from the direct
+CutCells CMake configure command.
 
-```bash
-git clone https://github.com/sclaus2/CutFEMx.git
-cd CutFEMx
+When Algoim support is enabled, the CutCells CMake configuration looks for
+BLAS/LAPACK in `CMAKE_PREFIX_PATH` before falling back to system locations. If
+you need to override that choice, set `CUTCELLS_ALGOIM_LAPACK_LIBRARIES`.
 
-env CONDA_PREFIX="$CONDA_PREFIX" \
-  CMAKE_PREFIX_PATH="$CONDA_PREFIX" \
-  PYTHONNOUSERSITE=1 \
-  CC="$CONDA_PREFIX/bin/clang" \
-  CXX="$CONDA_PREFIX/bin/clang++" \
-  CMAKE_ARGS="-DCMAKE_OSX_DEPLOYMENT_TARGET=13.4 -DCUTCELLS_WITH_ALGOIM=ON" \
-  CXXFLAGS="-D_LIBCPP_ENABLE_EXPERIMENTAL -D_LIBCPP_HAS_NO_EXPERIMENTAL_TZDB -D_LIBCPP_HAS_NO_EXPERIMENTAL_SYNCSTREAM -D_LIBCPP_HAS_NO_INCOMPLETE_PSTL" \
-  python -m pip install --no-build-isolation --no-deps --force-reinstall .
-```
-
-Use the same active conda environment and `pip` flags for `runintgen`,
-`CutCells/python`, and CutFEMx. If the build variables above are already
-exported, the shorter `python -m pip install ...` form is equivalent. Omit
-`-DCUTCELLS_WITH_ALGOIM=ON` only if you intentionally want to build without the
-optional Algoim quadrature backend.
-
-`--no-build-isolation` is required because CutFEMx must use the active
-FEniCSx/MPI/PETSc/runintgen stack and DOLFINx wrapper headers. `--no-deps`
-prevents `pip` from replacing the pinned FEniCSx packages with incompatible
-release packages.
-
-Verify the installation:
+Check the install:
 
 ```bash
 python - <<'PY'
+import importlib.metadata as m
+import cutcells
+
+print("cutcells", m.version("cutcells"))
+PY
+```
+
+### 4. Install CutFEMx
+
+CutFEMx depends on both runintgen and the installed CutCells C++/Python
+packages:
+
+```bash
+git clone https://github.com/sclaus2/CutFEMx.git
+python -m pip install --no-build-isolation --no-deps --force-reinstall \
+  ./CutFEMx
+```
+
+`--no-build-isolation` is required because the build must use the active conda
+environment's FEniCSx, MPI/PETSc, runintgen, and CutCells installations.
+`--no-deps` prevents `pip` from replacing that tested stack.
+
+Verify the complete stack:
+
+```bash
+python - <<'PY'
+import importlib.metadata as m
 import cutcells
 import cutfemx
 import dolfinx
 import runintgen
 
-print("DOLFINx:", dolfinx.__version__)
-print("runintgen:", getattr(runintgen, "__version__", "installed"))
-print("CutCells:", getattr(cutcells, "__version__", "installed"))
-print("CutFEMx:", getattr(cutfemx, "__version__", "installed"))
+for name in ["runintgen", "cutcells", "cutfemx", "fenics-dolfinx"]:
+    print(name, m.version(name))
 PY
 ```
 
@@ -294,9 +261,6 @@ The `python/demo` directory contains examples illustrating the usage of CutFEMx:
   runtime quadrature on cells and the active interior skeleton.
 - **Interface Poisson** (`demo_interface_poisson.py`): solve an interface
   problem across level-set-defined subdomains.
-- **Quad/hex cut Poisson** (`demo_quad_hex_cuts.py`): cut quadrilateral and
-  hexahedral meshes with flower/popcorn level sets, solve a manufactured
-  Poisson problem, and optionally write PyVista screenshots.
 - **Moving domain** (`demo_moving_poisson.py`): update quadrature rules and
   integration domains as the interface moves.
 - **Exterior-facet runtime quadrature** (`demo_boundary_sphere_perimeter.py`):
@@ -313,9 +277,5 @@ functions. The library can generate distance fields from standard STL files and
 adaptively refine a background mesh around an STL surface.
 
 <p align="center">
-  <img src="img/dino.png" alt="Dino STL distance field" width="45%" />
-  <img src="img/dino2.png" alt="Dino STL distance field (sliced)" width="45%" />
-</p>
-<p align="center">
-  <i>Example: signed distance field computed from a dino STL surface on an adaptively refined mesh using `demo_stl_distance.py`.</i>
+  <i>Example: signed distance field computed from a generated demo STL surface on an adaptively refined mesh using `demo_stl_distance.py`.</i>
 </p>

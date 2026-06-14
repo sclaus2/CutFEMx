@@ -34,7 +34,9 @@ Initial source reference:
   - `cpp/dolfinx_custom_data/fem/assembler.h`
   - `cpp/dolfinx_custom_data/fem/pack_form.h`, a small CutFEMx form adapter that
     delegates coefficient-packing primitives to upstream DOLFINx
-  - `cpp/dolfinx_custom_data/fem/forward.h` as a CutFEMx-only bridge header
+
+`cpp/dolfinx_custom_data/fem/forward.h` is a CutFEMx-owned MIT bridge header,
+not a copied DOLFINx source file.
 
 ## Update Rule
 

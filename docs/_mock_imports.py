@@ -38,3 +38,8 @@ except ImportError:
     sys.modules["dolfinx"] = MockCppModule()
     sys.modules["dolfinx.mesh"] = MockCppModule()
     sys.modules["dolfinx.fem"] = MockCppModule()
+# Copyright (c) 2026 ONERA
+# Authors: Susanne Claus
+# This file is part of CutFEMx
+#
+# SPDX-License-Identifier:    MIT

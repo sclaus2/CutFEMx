@@ -18,7 +18,7 @@
 #include <cutcells/mapping.h>
 #include <cutcells/mesh_view.h>
 
-#include "reference_cell.h"
+#include <cutcells/reference_cell.h>
 
 #include <cutfemx/cut/cut.h>
 #include <cutfemx/cut/runtime_quadrature.h>

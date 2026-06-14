@@ -1,3 +1,9 @@
+# Copyright (c) 2026 ONERA
+# Authors: Susanne Claus
+# This file is part of CutFEMx
+#
+# SPDX-License-Identifier:    MIT
+
 # The first step is to define the variational problem at hand. We define
 # the variational problem in UFL terms in a separate form file
 # {download}`demo_poisson/poisson.py`.  We begin by defining the finite

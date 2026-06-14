@@ -12,7 +12,7 @@ version = "0.2.0"
 description = "CutFEMx Python interface"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { file = "LICENSE" }
+license = { text = "MIT AND LGPL-3.0-or-later AND BSD-3-Clause" }
 authors = [
       { email = "susanne.claus@onera.fr" },
       { name = "Susanne Claus" },
@@ -60,7 +60,13 @@ wheel.exclude = ["cutfemx/wrappers/*.cpp"]
 build-dir = "build/{wheel_tag}"
 cmake.build-type = "Release"
 cmake.define = { BUILD_SHARED_LIBS = "ON", CMAKE_INSTALL_INCLUDEDIR = "cutfemx/include" }
-wheel.license-files = ["LICENSE"]
+wheel.license-files = [
+      "LICENSE",
+      "COPYING",
+      "COPYING.LESSER",
+      "THIRD_PARTY_NOTICES.md",
+      "third_party/geogram.psm.MultiPrecision/LICENSE",
+]
 
 [tool.pytest.ini_options]
 junit_family = "xunit2"

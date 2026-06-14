@@ -1,3 +1,9 @@
+// Copyright (c) 2026 ONERA
+// Authors: Susanne Claus
+// This file is part of CutFEMx
+//
+// SPDX-License-Identifier:    MIT
+
 /// Demo: FMM Unsigned Distance Computation
 /// 
 /// Computes unsigned distance from a sphere surface to all mesh vertices

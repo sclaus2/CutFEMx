@@ -1,3 +1,9 @@
+# Copyright (c) 2026 ONERA
+# Authors: Susanne Claus
+# This file is part of CutFEMx
+#
+# SPDX-License-Identifier:    MIT
+
 """Shared PyVista solution plots for CutFEMx demos."""
 
 from __future__ import annotations
