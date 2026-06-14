@@ -14,12 +14,15 @@ symmetric Nitsche terms on Gamma.
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 from mpi4py import MPI
 
 import cutfemx
 import numpy as np
+from _pyvista_solution_plot import add_plot_arguments, plot_scalar_cut_domains
+
 import ufl
 from dolfinx import default_scalar_type, fem, io, la, mesh
 
@@ -126,6 +129,14 @@ def write_xdmf(
         print(f"Wrote outside solution to {u2_path}")
 
 
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_plot_arguments(parser)
+    return parser.parse_args()
+
+
+args = parse_args()
 comm = MPI.COMM_WORLD
 
 n = 24
@@ -277,3 +288,14 @@ if comm.rank == 0:
     print(f"interface jump norm   = {np.sqrt(max(jump_error, 0.0)):.6e}")
 
 write_xdmf(output_dir, cut_data, u1_h, u2_h)
+
+if comm.rank == 0 and not args.no_plot:
+    plot_scalar_cut_domains(
+        cut_data,
+        (
+            ("phi<0", u1_h, "inside"),
+            ("phi>0", u2_h, "outside"),
+        ),
+        title="Interface Poisson solution",
+        field_name="u_h",
+    )

@@ -16,12 +16,15 @@ u = x - x_c on the sphere.
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 from mpi4py import MPI
 
 import cutfemx
 import numpy as np
+from _pyvista_solution_plot import add_plot_arguments, plot_scalar_cut_solution
+
 import ufl
 from dolfinx import fem, io, la, mesh
 
@@ -138,6 +141,14 @@ def write_xdmf(
         print(f"Wrote DG cut-surface solution to {gamma_dg_path}")
 
 
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_plot_arguments(parser)
+    return parser.parse_args()
+
+
+args = parse_args()
 comm = MPI.COMM_WORLD
 
 n = 10
@@ -191,15 +202,15 @@ n_facet = ufl.FacetNormal(msh)
 h = ufl.CellDiameter(msh)
 h_avg = ufl.avg(h)
 
-I = ufl.Identity(msh.geometry.dim)
-P = I - ufl.outer(n_gamma, n_gamma)
+identity = ufl.Identity(msh.geometry.dim)
+P = identity - ufl.outer(n_gamma, n_gamma)
 grad_G_u = ufl.dot(P, ufl.grad(u))
 grad_G_v = ufl.dot(P, ufl.grad(v))
 
 n_p = n_gamma("+")
 n_m = n_gamma("-")
-P_p = I - ufl.outer(n_p, n_p)
-P_m = I - ufl.outer(n_m, n_m)
+P_p = identity - ufl.outer(n_p, n_p)
+P_m = identity - ufl.outer(n_m, n_m)
 avg_grad_G_u = 0.5 * (
     ufl.dot(P_p, ufl.grad(u)("+")) + ufl.dot(P_m, ufl.grad(u)("-"))
 )
@@ -258,3 +269,15 @@ if comm.rank == 0:
     print(f"L2 error        = {np.sqrt(max(error_sq, 0.0)):.6e}")
 
 write_xdmf(output_dir, cell_cut, phi, uh, u_exact_bg, error_bg)
+
+if comm.rank == 0 and not args.no_plot:
+    plot_scalar_cut_solution(
+        cell_cut,
+        "phi=0",
+        uh,
+        title="Surface Poisson DG solution",
+        field_name="u_h",
+        mode="cut_only",
+        view="isometric",
+        warp=False,
+    )

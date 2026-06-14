@@ -83,8 +83,7 @@ def dogbone_level_set(
 
 The demo runs in this order:
 
-1. Define the dogbone level set, strain/stress/von-Mises helpers, serial solve
-   helper, and XDMF writer.
+1. Define the dogbone level set.
 2. Build the tetrahedral background mesh and interpolate the P1 level set.
 3. Cut the solid, locate `solid_cells`, build `solid_rules`, and select
    `ghost_facets`.
@@ -226,10 +225,95 @@ uh.x.scatter_forward()
 
 ## Stress Output
 
-After solving, the demo interpolates a cellwise DG0 von Mises field from the
-computed displacement and writes both background and cut-solid output. The
-tutorial view below shows the deformed cut mesh colored by that computed von
-Mises field.
+After solving, the demo derives a scalar von Mises stress field from the
+computed displacement. The stress tensor is first defined in UFL from the
+small-strain tensor,
+
+```python
+def epsilon(u):
+    return ufl.sym(ufl.grad(u))
+
+
+def sigma(u, mu: float, lmbda: float, gdim: int):
+    eps = epsilon(u)
+    return 2.0 * mu * eps + lmbda * ufl.tr(eps) * ufl.Identity(gdim)
+```
+
+For this 3D example, the von Mises stress is the scalar UFL expression
+
+$$
+\sigma_\mathrm{vm}
+=
+\sqrt{
+\frac{1}{2}
+\left[
+(\sigma_{xx}-\sigma_{yy})^2
++(\sigma_{yy}-\sigma_{zz})^2
++(\sigma_{zz}-\sigma_{xx})^2
+\right]
++3\left(\sigma_{xy}^2+\sigma_{yz}^2+\sigma_{zx}^2\right)
+}.
+$$
+
+The demo writes this definition directly in UFL:
+
+```python
+def von_mises_3d(u, mu: float, lmbda: float):
+    stress = sigma(u, mu, lmbda, 3)
+    return ufl.sqrt(
+        0.5
+        * (
+            (stress[0, 0] - stress[1, 1]) ** 2
+            + (stress[1, 1] - stress[2, 2]) ** 2
+            + (stress[2, 2] - stress[0, 0]) ** 2
+        )
+        + 3.0 * (stress[0, 1] ** 2 + stress[1, 2] ** 2 + stress[2, 0] ** 2)
+    )
+```
+
+The output field is cellwise constant. The helper
+`compute_von_mises_on_background_mesh` creates a DG0 scalar space on the
+background mesh, converts the UFL expression to a `dolfinx.fem.Expression` at
+the DG0 interpolation points, and interpolates one value per background cell:
+
+```python
+def compute_von_mises_on_background_mesh(
+    u: fem.Function,
+    mu: float,
+    lmbda: float,
+) -> fem.Function:
+    msh = u.function_space.mesh
+    Q = fem.functionspace(msh, ("Discontinuous Lagrange", 0))
+    stress = fem.Function(Q, name="von_mises")
+
+    interpolation_points = Q.element.interpolation_points
+    if callable(interpolation_points):
+        interpolation_points = interpolation_points()
+
+    stress.interpolate(
+        fem.Expression(von_mises_3d(u, mu, lmbda), interpolation_points)
+    )
+    return stress
+```
+
+This is an interpolation of the stress expression, not an additional variational
+projection. Since the displacement is P1, its gradient and the linear-elastic
+stress are cellwise constant on each background tetrahedron, so DG0 is the
+natural output space for this diagnostic.
+
+The background DG0 field is then restricted to the physical cut-solid mesh with
+`cutfemx.fem.cut_function` before writing the cut-domain XDMF file:
+
+```python
+von_mises = compute_von_mises_on_background_mesh(uh, mu, lmbda)
+
+cut_mesh = cutfemx.create_cut_mesh(cut_data, "phi<0", mode="full")
+stress_cut = cutfemx.fem.cut_function(von_mises, cut_mesh)
+stress_cut.name = "von_mises"
+```
+
+The tutorial view below shows the deformed cut mesh colored by that computed
+DG0 von Mises field.
 
 ```{raw} html
 <figure class="tutorial-figure">

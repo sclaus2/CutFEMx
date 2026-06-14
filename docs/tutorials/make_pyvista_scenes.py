@@ -2034,7 +2034,6 @@ def _stokes_state():
     cut_data = cutfemx.cut(phi)
     fluid_cells = cutfemx.locate_entities(cut_data, "phi>0")
     cut_cells = cutfemx.locate_entities(cut_data, "phi=0")
-    uncut_fluid_cells = np.setdiff1d(fluid_cells, cut_cells)
     fluid_rules = cutfemx.runtime_quadrature(cut_data, "phi>0", 4)
     interface_rules = cutfemx.runtime_quadrature(cut_data, "phi=0", 4)
     ghost_facets = cutfemx.ghost_penalty_facets(cut_data, "phi>0")
@@ -2046,7 +2045,6 @@ def _stokes_state():
         "cut_data": cut_data,
         "fluid_cells": fluid_cells,
         "cut_cells": cut_cells,
-        "uncut_fluid_cells": uncut_fluid_cells,
         "fluid_rules": fluid_rules,
         "interface_rules": interface_rules,
         "ghost_facets": ghost_facets,
@@ -2066,7 +2064,7 @@ def stokes_scene() -> None:
 
     def draw(plotter: pv.Plotter) -> None:
         _stokes_background(plotter, state)
-        plotter.add_mesh(_mesh_grid(state["mesh"], state["uncut_fluid_cells"]), color="#bfdbfe", show_edges=True, edge_color="#64748b", opacity=0.32)
+        plotter.add_mesh(_mesh_grid(state["mesh"], state["fluid_cells"]), color="#bfdbfe", show_edges=True, edge_color="#64748b", opacity=0.32)
         plotter.add_mesh(_mesh_grid(state["mesh"], state["cut_cells"]), color=CUT, show_edges=True, edge_color="#7c2d12", opacity=0.72)
 
     _export_scene(OUTPUT_DIR / "stokes-scene.png", "Stokes flow around a cut obstacle", draw, camera_distance=7.0)
@@ -2099,26 +2097,57 @@ def stokes_stabilization_scene() -> None:
     _export_scene(OUTPUT_DIR / "stokes-stabilization-scene.png", "Velocity and pressure stabilization facets", draw, camera_distance=7.0)
 
 
+def stokes_pressure_stabilization_scene() -> None:
+    state = _stokes_state()
+
+    def draw(plotter: pv.Plotter) -> None:
+        _stokes_background(plotter, state)
+        _add_facet_mesh(plotter, state["mesh"], state["pressure_facets"], color="#f97316", line_width=2.0, opacity=0.72)
+
+    _export_scene(
+        OUTPUT_DIR / "stokes-pressure-stabilization-scene.png",
+        "Pressure stabilization facets",
+        draw,
+        camera_distance=7.0,
+    )
+
+
+def stokes_velocity_ghost_scene() -> None:
+    state = _stokes_state()
+
+    def draw(plotter: pv.Plotter) -> None:
+        _stokes_background(plotter, state)
+        _add_facet_bands(plotter, state["mesh"], state["ghost_facets"], color=GHOST, width=0.014)
+
+    _export_scene(
+        OUTPUT_DIR / "stokes-velocity-ghost-scene.png",
+        "Velocity ghost-penalty facets",
+        draw,
+        camera_distance=7.0,
+    )
+
+
 def _stokes_traction(u, p, nu, n):
     return nu * ufl.dot(ufl.grad(u), n) - p * n
 
 
-def _solve_stokes_velocity(state: dict) -> fem.Function:
-    velocity = state.get("velocity")
-    if velocity is not None:
-        return velocity
+def _solve_stokes(state: dict) -> tuple[fem.Function, fem.Function]:
+    cached = state.get("stokes_solution")
+    if cached is not None:
+        return cached
 
     msh = state["mesh"]
     P1 = basix.ufl.element("Lagrange", msh.basix_cell(), 1)
     P1_vec = basix.ufl.element("Lagrange", msh.basix_cell(), 1, shape=(msh.geometry.dim,))
     W = fem.functionspace(msh, basix.ufl.mixed_element([P1_vec, P1]))
     V, _ = W.sub(0).collapse()
+    Q, _ = W.sub(1).collapse()
 
     dx_omega = ufl.Measure(
         "dx",
         domain=msh,
         subdomain_id=0,
-        subdomain_data=[state["uncut_fluid_cells"], state["fluid_rules"]],
+        subdomain_data=[state["fluid_cells"], state["fluid_rules"]],
     )
     dx_gamma = ufl.Measure("dx", domain=msh, subdomain_id=1, subdomain_data=state["interface_rules"])
     dS_ghost = ufl.Measure("dS", domain=msh, subdomain_id=2, subdomain_data=state["ghost_facets"])
@@ -2161,6 +2190,8 @@ def _solve_stokes_velocity(state: dict) -> fem.Function:
     inflow_u.interpolate(lambda x: np.stack((1.0 - x[1] ** 2, np.zeros_like(x[0]))))
     walls_u = fem.Function(V)
     walls_u.x.array[:] = 0.0
+    outflow_p = fem.Function(Q)
+    outflow_p.x.array[:] = 0.0
 
     facet_dim = msh.topology.dim - 1
     inflow_facets = mesh.locate_entities_boundary(
@@ -2173,11 +2204,18 @@ def _solve_stokes_velocity(state: dict) -> fem.Function:
         facet_dim,
         lambda x: np.isclose(np.abs(x[1]), 1.0),
     )
+    outflow_facets = mesh.locate_entities_boundary(
+        msh,
+        facet_dim,
+        lambda x: np.isclose(x[0], 5.0),
+    )
     inflow_dofs = fem.locate_dofs_topological((W.sub(0), V), facet_dim, inflow_facets)
     wall_dofs = fem.locate_dofs_topological((W.sub(0), V), facet_dim, wall_facets)
+    outflow_pressure_dofs = fem.locate_dofs_topological((W.sub(1), Q), facet_dim, outflow_facets)
     bcs = [
         fem.dirichletbc(inflow_u, inflow_dofs, W.sub(0)),
         fem.dirichletbc(walls_u, wall_dofs, W.sub(0)),
+        fem.dirichletbc(outflow_p, outflow_pressure_dofs, W.sub(1)),
     ]
 
     wh, _ = _solve_runtime_system(
@@ -2189,12 +2227,24 @@ def _solve_stokes_velocity(state: dict) -> fem.Function:
     )
     velocity = wh.sub(0).collapse()
     velocity.name = "u"
+    pressure = wh.sub(1).collapse()
+    pressure.name = "p"
     V_out = fem.functionspace(msh, ("Lagrange", 1, (msh.geometry.dim,)))
     velocity_out = fem.Function(V_out, name="u")
     velocity_out.interpolate(velocity)
     velocity_out.x.scatter_forward()
-    state["velocity"] = velocity_out
-    return velocity_out
+    state["stokes_solution"] = (velocity_out, pressure)
+    return velocity_out, pressure
+
+
+def _solve_stokes_velocity(state: dict) -> fem.Function:
+    velocity, _ = _solve_stokes(state)
+    return velocity
+
+
+def _solve_stokes_pressure(state: dict) -> fem.Function:
+    _, pressure = _solve_stokes(state)
+    return pressure
 
 
 def _stokes_velocity_grid(state: dict) -> pv.UnstructuredGrid:
@@ -2209,15 +2259,51 @@ def _stokes_velocity_grid(state: dict) -> pv.UnstructuredGrid:
     return grid
 
 
+def _stokes_pressure_grid(state: dict) -> pv.UnstructuredGrid:
+    cut_mesh = cutfemx.create_cut_mesh(state["cut_data"], "phi>0", mode="full")
+    if cut_mesh.mesh is None:
+        raise RuntimeError("Cannot plot an empty Stokes fluid mesh.")
+    pressure_cut = cutfemx.fem.cut_function(_solve_stokes_pressure(state), cut_mesh)
+    grid = _mesh_grid(cut_mesh.mesh)
+    values = np.asarray(pressure_cut.x.array, dtype=np.float64)
+    if values.size < grid.n_points:
+        raise RuntimeError("Pressure field has fewer values than cut-grid points.")
+    grid.point_data["p"] = values[: grid.n_points]
+    grid.set_active_scalars("p")
+    return grid
+
+
 def stokes_solution_scene() -> None:
     state = _stokes_state()
     grid = _stokes_velocity_grid(state)
 
     def draw(plotter: pv.Plotter) -> None:
-        plotter.add_mesh(grid, scalars="speed", cmap="Blues", show_edges=True, edge_color="#64748b", line_width=0.2)
+        plotter.add_mesh(grid, scalars="speed", cmap="coolwarm", show_edges=True, edge_color="#64748b", line_width=0.2)
         plotter.add_mesh(_circle_polyline(state["center"], state["radius"]), color=INTERFACE, line_width=4)
 
     _export_scene(OUTPUT_DIR / "stokes-solution-scene.png", "Velocity magnitude on the cut channel", draw, camera_distance=7.0)
+
+
+def stokes_velocity_result_scene() -> None:
+    state = _stokes_state()
+    grid = _stokes_velocity_grid(state)
+
+    def draw(plotter: pv.Plotter) -> None:
+        plotter.add_mesh(grid, scalars="speed", cmap="coolwarm", show_edges=True, edge_color="#64748b", line_width=0.2)
+        plotter.add_mesh(_circle_polyline(state["center"], state["radius"]), color=INTERFACE, line_width=4)
+
+    _export_scene(OUTPUT_DIR / "stokes-velocity-result-scene.png", "Velocity magnitude", draw, camera_distance=7.0)
+
+
+def stokes_pressure_result_scene() -> None:
+    state = _stokes_state()
+    grid = _stokes_pressure_grid(state)
+
+    def draw(plotter: pv.Plotter) -> None:
+        plotter.add_mesh(grid, scalars="p", cmap="coolwarm", show_edges=True, edge_color="#64748b", line_width=0.2)
+        plotter.add_mesh(_circle_polyline(state["center"], state["radius"]), color=INTERFACE, line_width=4)
+
+    _export_scene(OUTPUT_DIR / "stokes-pressure-result-scene.png", "Pressure", draw, camera_distance=7.0)
 
 
 def _elasticity_state():
@@ -3285,7 +3371,11 @@ def main() -> None:
     stokes_geometry_scene()
     stokes_cut_interface_scene()
     stokes_stabilization_scene()
+    stokes_pressure_stabilization_scene()
+    stokes_velocity_ghost_scene()
     stokes_solution_scene()
+    stokes_velocity_result_scene()
+    stokes_pressure_result_scene()
     elasticity_scene()
     elasticity_geometry_scene()
     elasticity_quadrature_scene()

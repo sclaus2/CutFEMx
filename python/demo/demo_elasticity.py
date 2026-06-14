@@ -8,12 +8,15 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 from mpi4py import MPI
 
 import cutfemx
 import numpy as np
+from _pyvista_solution_plot import add_plot_arguments, plot_deformed_cut_solution
+
 import ufl
 from dolfinx import default_scalar_type, fem, io, la, mesh
 
@@ -151,6 +154,14 @@ def write_xdmf(
         print(f"Wrote von Mises XDMF to {stress_path} and {cut_stress_path}")
 
 
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_plot_arguments(parser)
+    return parser.parse_args()
+
+
+args = parse_args()
 comm = MPI.COMM_WORLD
 
 n = 10
@@ -259,3 +270,14 @@ if comm.rank == 0:
     print(f"max sigma_vm  = {max_stress:.6e}")
 
 write_xdmf(output_dir, cut_data, uh, von_mises)
+
+if comm.rank == 0 and not args.no_plot:
+    plot_deformed_cut_solution(
+        cut_data,
+        "phi<0",
+        uh,
+        von_mises,
+        title="Cut elasticity solution",
+        displacement_name="deformation",
+        scalar_name="von_mises",
+    )

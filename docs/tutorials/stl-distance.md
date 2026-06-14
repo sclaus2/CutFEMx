@@ -118,7 +118,7 @@ The signed field is computed with the distance module:
 ```{raw} html
 <figure class="tutorial-figure">
   <img class="tutorial-image" src="../_static/tutorials/stl-distance-yz-contours-scene.png" alt="PyVista signed distance slice through the STL">
-  <figcaption>A middle $y$-$z$ slice through the computed signed-distance field shows filled values and contour lines; the highlighted contour marks the zero level set.</figcaption>
+  <figcaption>A middle y-z slice through the computed signed-distance field shows filled values and contour lines; the highlighted contour marks the zero level set.</figcaption>
 </figure>
 ```
 

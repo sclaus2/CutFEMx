@@ -11,7 +11,7 @@ below.
 ```{raw} html
 <figure class="tutorial-figure">
   <img class="tutorial-image" src="../_static/tutorials/stokes-scene.png" alt="PyVista Stokes overview">
-  <figcaption>The obstacle is placed closer to the inflow; orange cells are cut by the embedded circle.</figcaption>
+  <figcaption> Mesh for the Stokes flow around an obstacle. Orange cells are cut by the embedded circle.</figcaption>
 </figure>
 ```
 
@@ -25,7 +25,7 @@ $$
 \phi(x,y)=\sqrt{(x+1.2)^2+y^2}-0.3 .
 $$
 
-The demo uses the gradient form of the steady Stokes equations,
+The demo solves the steady Stokes equations,
 
 $$
 -\nu\Delta u+\nabla p=0,\qquad \nabla\cdot u=0
@@ -36,18 +36,14 @@ The fitted channel boundaries carry standard flow boundary conditions:
 
 $$
 u=(1-y^2,0)\quad\text{on }x=-3,\qquad
-u=0\quad\text{on }y=\pm1 .
+u=0\quad\text{on }y=\pm1,\qquad
+p=0\quad\text{on }x=5 .
 $$
 
 The circular obstacle has $u=0$ on $\Gamma=\{\phi=0\}$, imposed by Nitsche
-terms. The outflow at $x=5$ is left as the natural boundary of the weak form,
-
-$$
-(\nu\nabla u-pI)n=0 .
-$$
-
-This is the open-boundary condition whose viscous part is
-$\nabla u\,n$.
+terms. The outflow pressure condition fixes the pressure reference on the
+fitted outlet. The velocity outflow condition remains natural in the weak form,
+so no strong velocity constraint is applied at $x=5$.
 
 ## Implementation Order
 
@@ -62,8 +58,9 @@ The demo executes the solve in this order:
 5. Build `dx_omega`, `dx_gamma`, `dS_ghost`, and `dS_pressure`.
 6. Assemble the Stokes volume terms, obstacle Nitsche terms, velocity ghost
    penalty, and pressure gradient-jump stabilization.
-7. Build fitted inflow/wall velocity boundary conditions, assemble with BCs,
-   apply lifting, deactivate inactive dofs, and solve.
+7. Build fitted inflow/wall velocity boundary conditions and the fitted
+   outflow pressure condition, assemble with BCs, apply lifting, deactivate
+   inactive dofs, and solve.
 8. Split velocity/pressure, interpolate velocity for XDMF compatibility, print
    diagnostics, and write background plus cut-fluid XDMF files.
 
@@ -116,8 +113,11 @@ level_set.x.scatter_forward()
 cut_data = cutfemx.cut(level_set)
 fluid_cells = cutfemx.locate_entities(cut_data, "phi>0")
 cut_cells = cutfemx.locate_entities(cut_data, "phi=0")
-uncut_fluid_cells = np.setdiff1d(fluid_cells, cut_cells)
 ```
+
+The strict selector `"phi>0"` gives the ordinary fluid cells used with standard
+cell quadrature. The cut cells are not added as full cells in `dx_omega`; their
+fluid portions are integrated by the runtime quadrature rules below.
 
 ## Interface Quadrature And Nitsche Terms
 
@@ -137,7 +137,7 @@ fluid_rules = cutfemx.runtime_quadrature(cut_data, "phi>0", order)
 interface_rules = cutfemx.runtime_quadrature(cut_data, "phi=0", order)
 
 dx_omega = ufl.Measure(
-    "dx", domain=msh, subdomain_id=0, subdomain_data=[uncut_fluid_cells, fluid_rules]
+    "dx", domain=msh, subdomain_id=0, subdomain_data=[fluid_cells, fluid_rules]
 )
 dx_gamma = ufl.Measure("dx", domain=msh, subdomain_id=1, subdomain_data=interface_rules)
 n_gamma = -cutfemx.normal(level_set)
@@ -147,9 +147,8 @@ n_gamma = -cutfemx.normal(level_set)
 
 Let $V_h$ be the continuous P1 velocity space and $Q_h$ the continuous P1
 pressure space on the background mesh. Strong Dirichlet data are applied on the
-fitted inflow and wall facets, so the remaining test functions vanish there.
-The outflow is natural: no boundary integral is added at $x=5$, and the weak
-form therefore enforces $(\nu\nabla u-pI)n=0$ there.
+fitted inflow, wall, and outflow-pressure facets, so the corresponding test
+functions vanish there. No strong velocity condition is applied at the outflow.
 
 The cut-domain volume contribution is the standard mixed Stokes form:
 
@@ -168,7 +167,7 @@ a += -p * ufl.div(v) * dx_omega
 a += ufl.div(u) * q * dx_omega
 ```
 
-The weak obstacle terms use the gradient-form Stokes traction
+The weak obstacle terms use the Stokes traction
 $t(u,p)=(\nu\nabla u-pI)n_\Gamma$ and impose $u=0$ on
 $\Gamma=\{\phi=0\}$ by symmetric Nitsche terms:
 
@@ -179,10 +178,6 @@ N_\Gamma((u,p),(v,q))
 +\int_\Gamma \frac{\gamma_u\nu}{h}u\cdot v\,d\Gamma .
 $$
 
-The three Nitsche terms have distinct roles: the first is the consistency
-traction from integration by parts, the second is the adjoint-consistency term,
-and the third is the penalty that weakly enforces no-slip on the embedded
-circle.
 
 ```python
 def traction(u, p, nu, n):
@@ -211,8 +206,15 @@ small cut-cell extensions near the unfitted obstacle.
 
 ```{raw} html
 <figure class="tutorial-figure">
-  <img class="tutorial-image" src="../_static/tutorials/stokes-stabilization-scene.png" alt="PyVista Stokes stabilization scene">
-  <figcaption>Red facets are the velocity ghost-penalty band; faint orange facets are all active interior facets used by pressure stabilization.</figcaption>
+  <img class="tutorial-image" src="../_static/tutorials/stokes-pressure-stabilization-scene.png" alt="PyVista Stokes pressure stabilization facets">
+  <figcaption>Orange facets are the active interior facets used by the pressure gradient-jump stabilization.</figcaption>
+</figure>
+```
+
+```{raw} html
+<figure class="tutorial-figure">
+  <img class="tutorial-image" src="../_static/tutorials/stokes-velocity-ghost-scene.png" alt="PyVista Stokes velocity ghost penalty facets">
+  <figcaption>Red facets are the velocity ghost-penalty band around the cut obstacle cells.</figcaption>
 </figure>
 ```
 
@@ -243,8 +245,7 @@ S_p(p,q)=
 h^3[\nabla p]n\cdot[\nabla q]n\,dS .
 $$
 
-In the implementation this is the `dS_pressure` contribution and is assembled
-whether or not a facet lies in the cut band:
+In the implementation this is the `dS_pressure` contribution 
 
 ```python
 a += (
@@ -299,16 +300,18 @@ $$
 
 ## Boundary Conditions And Output
 
-The only strong boundary conditions are velocity conditions on the fitted
-inflow and channel walls. The outflow has no pressure Dirichlet dofs; its
-condition is the natural traction boundary described above. After solving,
-CutFEMx writes both background and cut-fluid XDMF files.
+The strong boundary conditions are velocity conditions on the fitted inflow and
+channel walls, plus a pressure condition on the fitted outflow. The pressure
+condition fixes the pressure level and sets the outlet reference value to zero.
+After solving, CutFEMx writes both background and cut-fluid XDMF files.
 
 ```python
 inflow_u = fem.Function(V)
 inflow_u.interpolate(lambda x: np.stack((1.0 - x[1] ** 2, np.zeros_like(x[0]))))
 walls_u = fem.Function(V)
 walls_u.x.array[:] = 0.0
+outflow_p = fem.Function(Q)
+outflow_p.x.array[:] = 0.0
 
 inflow_facets = mesh.locate_entities_boundary(
     msh, facet_dim, lambda x: np.isclose(x[0], -3.0)
@@ -316,19 +319,75 @@ inflow_facets = mesh.locate_entities_boundary(
 wall_facets = mesh.locate_entities_boundary(
     msh, facet_dim, lambda x: np.isclose(np.abs(x[1]), 1.0)
 )
+outflow_facets = mesh.locate_entities_boundary(
+    msh, facet_dim, lambda x: np.isclose(x[0], 5.0)
+)
 inflow_dofs = fem.locate_dofs_topological((W.sub(0), V), facet_dim, inflow_facets)
 wall_dofs = fem.locate_dofs_topological((W.sub(0), V), facet_dim, wall_facets)
+outflow_pressure_dofs = fem.locate_dofs_topological(
+    (W.sub(1), Q), facet_dim, outflow_facets
+)
 
 bcs = [
     fem.dirichletbc(inflow_u, inflow_dofs, W.sub(0)),
     fem.dirichletbc(walls_u, wall_dofs, W.sub(0)),
+    fem.dirichletbc(outflow_p, outflow_pressure_dofs, W.sub(1)),
 ]
+```
+
+## Deactivation
+
+The Stokes unknown is a mixed background field, so the linear system contains
+velocity and pressure degrees of freedom on the whole rectangular mesh. The
+forms only integrate over the fluid phase $\Omega=\{\phi>0\}$, which means
+degrees of freedom supported entirely inside the solid obstacle would otherwise
+produce empty matrix rows. These rows are not physical unknowns of the cut
+problem and must be deactivated before the sparse solve.
+
+The active domain is computed from the assembled CutFEMx form. It includes the
+mixed dofs touched by the volume, interface, ghost-penalty, pressure
+stabilization, and fitted-boundary terms. After assembly, CutFEMx replaces
+inactive rows by identity rows and sets the corresponding right-hand-side
+entries consistently. This gives the serial sparse system a well-defined value
+for every background dof while leaving the active fluid equations unchanged.
+
+The order is important when strong fitted boundary conditions are present:
+assemble with the velocity and pressure BCs, apply the usual lifting and
+boundary values, scatter the vector contributions, and only then deactivate
+inactive cut-domain dofs.
+
+```python
+a_form = cutfemx.fem.form(a)
+L_form = cutfemx.fem.form(L)
+
+A = cutfemx.fem.assemble_matrix(a_form, bcs=bcs)
+A.scatter_reverse()
+
+b = cutfemx.fem.assemble_vector(L_form)
+cutfemx.fem.apply_lifting(b.array, [a_form], [bcs])
+b.scatter_reverse(la.InsertMode.add)
+fem.set_bc(b.array, bcs)
+
+active = cutfemx.fem.active_domain(a_form)
+cutfemx.fem.deactivate_outside(A, b, active)
+```
+
+The fitted inflow, wall, and outflow-pressure dofs are still handled as
+ordinary DOLFINx Dirichlet conditions. Deactivation handles a different set of
+rows: mixed velocity-pressure dofs that are outside the active fluid problem
+because the obstacle cut removed their support.
+
+```{raw} html
+<figure class="tutorial-figure">
+  <img class="tutorial-image" src="../_static/tutorials/stokes-velocity-result-scene.png" alt="PyVista Stokes velocity magnitude result">
+  <figcaption>Velocity magnitude on the cut-fluid mesh.</figcaption>
+</figure>
 ```
 
 ```{raw} html
 <figure class="tutorial-figure">
-  <img class="tutorial-image" src="../_static/tutorials/stokes-solution-scene.png" alt="PyVista Stokes solution scene">
-  <figcaption>The final view color-maps a velocity-magnitude field on the cut-fluid mesh.</figcaption>
+  <img class="tutorial-image" src="../_static/tutorials/stokes-pressure-result-scene.png" alt="PyVista Stokes pressure result">
+  <figcaption>Pressure on the cut-fluid mesh with the fitted outflow pressure set to zero.</figcaption>
 </figure>
 ```
 

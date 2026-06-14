@@ -13,12 +13,15 @@ ghost penalty on facets adjacent to cut cells.
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 from mpi4py import MPI
 
 import cutfemx
 import numpy as np
+from _pyvista_solution_plot import add_plot_arguments, plot_scalar_cut_solution
+
 import ufl
 from dolfinx import fem, io, la, mesh
 
@@ -120,6 +123,14 @@ def write_xdmf(
         print(f"Wrote cut-domain solution to {cut_path}")
 
 
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_plot_arguments(parser)
+    return parser.parse_args()
+
+
+args = parse_args()
 comm = MPI.COMM_WORLD
 
 n = 24
@@ -237,3 +248,12 @@ if comm.rank == 0:
     print(f"L2 error            = {np.sqrt(max(error_sq, 0.0)):.6e}")
 
 write_xdmf(output_dir, cell_cut, phi, uh, u_exact_bg, error_bg)
+
+if comm.rank == 0 and not args.no_plot:
+    plot_scalar_cut_solution(
+        cell_cut,
+        "phi<0",
+        uh,
+        title="Cut DG Poisson solution",
+        field_name="u_h",
+    )

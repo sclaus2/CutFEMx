@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
-import basix.ufl
 from mpi4py import MPI
 
 import cutfemx
 import numpy as np
+from _pyvista_solution_plot import add_plot_arguments, plot_vector_scalar_cut_solution
+
+import basix.ufl
 import ufl
 from dolfinx import default_scalar_type, fem, io, la, mesh
 
@@ -99,6 +102,14 @@ def write_xdmf(
         print(f"Wrote pressure XDMF to {pressure_path} and {cut_pressure_path}")
 
 
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_plot_arguments(parser)
+    return parser.parse_args()
+
+
+args = parse_args()
 comm = MPI.COMM_WORLD
 
 n = 24
@@ -132,7 +143,6 @@ cut_data = cutfemx.cut(level_set)
 
 fluid_cells = cutfemx.locate_entities(cut_data, "phi>0")
 cut_cells = cutfemx.locate_entities(cut_data, "phi=0")
-uncut_fluid_cells = np.setdiff1d(fluid_cells, cut_cells)
 fluid_rules = cutfemx.runtime_quadrature(cut_data, "phi>0", order)
 interface_rules = cutfemx.runtime_quadrature(cut_data, "phi=0", order)
 ghost_facets = cutfemx.ghost_penalty_facets(cut_data, "phi>0")
@@ -141,7 +151,7 @@ active_cells = np.union1d(fluid_cells, cut_cells)
 pressure_facets = cutfemx.interior_facets_for_cells(msh, active_cells)
 
 dx_omega = ufl.Measure(
-    "dx", domain=msh, subdomain_id=0, subdomain_data=[uncut_fluid_cells, fluid_rules]
+    "dx", domain=msh, subdomain_id=0, subdomain_data=[fluid_cells, fluid_rules]
 )
 dx_gamma = ufl.Measure("dx", domain=msh, subdomain_id=1, subdomain_data=interface_rules)
 dS_ghost = ufl.Measure("dS", domain=msh, subdomain_id=2, subdomain_data=ghost_facets)
@@ -187,6 +197,8 @@ inflow_u = fem.Function(V)
 inflow_u.interpolate(lambda x: np.stack((1.0 - x[1] ** 2, np.zeros_like(x[0]))))
 walls_u = fem.Function(V)
 walls_u.x.array[:] = 0.0
+outflow_p = fem.Function(Q)
+outflow_p.x.array[:] = 0.0
 
 facet_dim = msh.topology.dim - 1
 inflow_facets = mesh.locate_entities_boundary(
@@ -195,12 +207,19 @@ inflow_facets = mesh.locate_entities_boundary(
 wall_facets = mesh.locate_entities_boundary(
     msh, facet_dim, lambda x: np.isclose(np.abs(x[1]), 1.0)
 )
+outflow_facets = mesh.locate_entities_boundary(
+    msh, facet_dim, lambda x: np.isclose(x[0], 5.0)
+)
 
 inflow_dofs = fem.locate_dofs_topological((W.sub(0), V), facet_dim, inflow_facets)
 wall_dofs = fem.locate_dofs_topological((W.sub(0), V), facet_dim, wall_facets)
+outflow_pressure_dofs = fem.locate_dofs_topological(
+    (W.sub(1), Q), facet_dim, outflow_facets
+)
 bcs = [
     fem.dirichletbc(inflow_u, inflow_dofs, W.sub(0)),
     fem.dirichletbc(walls_u, wall_dofs, W.sub(0)),
+    fem.dirichletbc(outflow_p, outflow_pressure_dofs, W.sub(1)),
 ]
 
 wh = solve_runtime_system_scipy(cutfemx.fem.form(a), cutfemx.fem.form(L), W, bcs)
@@ -223,3 +242,14 @@ if comm.rank == 0:
     print(f"velocity dofs = {velocity.x.array.size}")
 
 write_xdmf(output_dir, cut_data, velocity_out, pressure)
+
+if comm.rank == 0 and not args.no_plot:
+    plot_vector_scalar_cut_solution(
+        cut_data,
+        "phi>0",
+        velocity_out,
+        pressure,
+        title="Cut Stokes solution",
+        vector_name="u",
+        scalar_name="p",
+    )
