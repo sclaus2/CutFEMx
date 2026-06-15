@@ -19,12 +19,12 @@ def demo_stl_distance():
     rank = comm.Get_rank()
     
     # Path to STL file
-    stl_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "demo_surface.stl"))
+    stl_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "Dino.stl"))
     
     if rank == 0:
         print(f"Computing distance to STL: {stl_path}")
         if not os.path.exists(stl_path):
-            print("Error: demo_surface.stl not found in the demo directory!")
+            print("Error: Dino.stl not found in the demo directory!")
             return
 
     # 1. Get bbox of STL to define background mesh

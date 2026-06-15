@@ -277,5 +277,9 @@ functions. The library can generate distance fields from standard STL files and
 adaptively refine a background mesh around an STL surface.
 
 <p align="center">
-  <i>Example: signed distance field computed from a generated demo STL surface on an adaptively refined mesh using `demo_stl_distance.py`.</i>
+  <img src="img/dino.png" alt="Dino STL distance field" width="45%" />
+  <img src="img/dino2.png" alt="Dino STL distance field (sliced)" width="45%" />
+</p>
+<p align="center">
+  <i>Example: signed distance field computed from a dino STL surface on an adaptively refined mesh using `demo_stl_distance.py`.</i>
 </p>

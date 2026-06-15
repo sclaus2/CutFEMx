@@ -68,6 +68,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## CutFEMx Demo Geometry Assets
 
 `python/demo/demo_surface.stl` is a small generated STL surface created for the
-CutFEMx STL-distance demo. `python/demo/Dino.stl` is retained as a compatibility
-copy of the same generated surface. These files are CutFEMx-owned project
-material and are covered by the MIT license in `LICENSE`.
+CutFEMx STL-distance demo. `python/demo/Dino.stl`, `img/dino.png`, and
+`img/dino2.png` are the dino STL-distance demo assets used by the README
+example.
