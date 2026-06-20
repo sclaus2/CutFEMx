@@ -636,7 +636,8 @@ build_level_set_function(const CutData<T>& cut_data,
 }
 
 template <std::floating_point T>
-CutData<T> cut(std::shared_ptr<const dolfinx::fem::Function<T>> level_set)
+CutData<T> cut(std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
+               const cutcells::CutOptions& options)
 {
   if (!level_set)
     throw std::invalid_argument("cutfemx::cut requires a level-set function");
@@ -650,14 +651,17 @@ CutData<T> cut(std::shared_ptr<const dolfinx::fem::Function<T>> level_set)
 
   std::array<std::shared_ptr<const dolfinx::fem::Function<T>>, 1> level_sets{
       std::move(level_set)};
-  return cut<T>(std::move(mesh),
-                std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>(
-                    level_sets.data(), level_sets.size()));
+  return cut<T>(
+      std::move(mesh),
+      std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>(
+          level_sets.data(), level_sets.size()),
+      options);
 }
 
 template <std::floating_point T>
 CutData<T> cut(std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
-               std::span<const std::int32_t> entities, int entity_dim)
+               std::span<const std::int32_t> entities, int entity_dim,
+               const cutcells::CutOptions& options)
 {
   if (!level_set)
     throw std::invalid_argument("cutfemx::cut requires a level-set function");
@@ -674,46 +678,30 @@ CutData<T> cut(std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
   return cut<T>(std::move(mesh),
                 std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>(
                     level_sets.data(), level_sets.size()),
-                entities, entity_dim);
+                entities, entity_dim, options);
 }
 
 template <std::floating_point T>
 CutData<T> cut(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
-               std::shared_ptr<const dolfinx::fem::Function<T>> level_set)
+               std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
+               const cutcells::CutOptions& options)
 {
   if (!level_set)
     throw std::invalid_argument("cutfemx::cut requires a level-set function");
 
   std::array<std::shared_ptr<const dolfinx::fem::Function<T>>, 1> level_sets{
       std::move(level_set)};
-  return cut<T>(std::move(mesh),
-                std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>(
-                    level_sets.data(), level_sets.size()));
-}
-
-template <std::floating_point T>
-CutData<T> cut(
-    std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>> level_sets)
-{
-  if (level_sets.empty())
-    throw std::invalid_argument("cutfemx::cut requires at least one level-set function");
-  if (!level_sets.front())
-    throw std::invalid_argument("cutfemx::cut requires non-null level-set functions");
-
-  auto mesh = level_sets.front()->function_space()->mesh();
-  if (!mesh)
-  {
-    throw std::invalid_argument(
-        "cutfemx::cut could not infer a mesh from the level-set functions");
-  }
-
-  return cut<T>(std::move(mesh), level_sets);
+  return cut<T>(
+      std::move(mesh),
+      std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>(
+          level_sets.data(), level_sets.size()),
+      options);
 }
 
 template <std::floating_point T>
 CutData<T> cut(
     std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>> level_sets,
-    std::span<const std::int32_t> entities, int entity_dim)
+    const cutcells::CutOptions& options)
 {
   if (level_sets.empty())
     throw std::invalid_argument("cutfemx::cut requires at least one level-set function");
@@ -727,13 +715,35 @@ CutData<T> cut(
         "cutfemx::cut could not infer a mesh from the level-set functions");
   }
 
-  return cut<T>(std::move(mesh), level_sets, entities, entity_dim);
+  return cut<T>(std::move(mesh), level_sets, options);
+}
+
+template <std::floating_point T>
+CutData<T> cut(
+    std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>> level_sets,
+    std::span<const std::int32_t> entities, int entity_dim,
+    const cutcells::CutOptions& options)
+{
+  if (level_sets.empty())
+    throw std::invalid_argument("cutfemx::cut requires at least one level-set function");
+  if (!level_sets.front())
+    throw std::invalid_argument("cutfemx::cut requires non-null level-set functions");
+
+  auto mesh = level_sets.front()->function_space()->mesh();
+  if (!mesh)
+  {
+    throw std::invalid_argument(
+        "cutfemx::cut could not infer a mesh from the level-set functions");
+  }
+
+  return cut<T>(std::move(mesh), level_sets, entities, entity_dim, options);
 }
 
 template <std::floating_point T>
 CutData<T> cut(
     std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
-    std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>> level_sets)
+    std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>> level_sets,
+    const cutcells::CutOptions& options)
 {
   if (!mesh)
     throw std::invalid_argument("cutfemx::cut requires a mesh");
@@ -760,6 +770,7 @@ CutData<T> cut(
   cut_data.mesh_owner = std::move(mesh);
   cut_data.level_set_owners.assign(level_sets.begin(), level_sets.end());
   cut_data.level_set_names = frozen_level_set_names<T>(level_sets);
+  cut_data.cut_options = options;
   cut_data.gdim = cut_data.mesh_owner->geometry().dim();
   cut_data.tdim = cut_data.mesh_owner->topology()->dim();
 
@@ -778,7 +789,8 @@ template <std::floating_point T>
 CutData<T> cut(
     std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
     std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>> level_sets,
-    std::span<const std::int32_t> entities, int entity_dim)
+    std::span<const std::int32_t> entities, int entity_dim,
+    const cutcells::CutOptions& options)
 {
   if (!mesh)
     throw std::invalid_argument("cutfemx::cut requires a mesh");
@@ -805,6 +817,7 @@ CutData<T> cut(
   cut_data.mesh_owner = std::move(mesh);
   cut_data.level_set_owners.assign(level_sets.begin(), level_sets.end());
   cut_data.level_set_names = frozen_level_set_names<T>(level_sets);
+  cut_data.cut_options = options;
   cut_data.gdim = cut_data.mesh_owner->geometry().dim();
 
   build_entity_mesh_view(cut_data, entities, entity_dim);
@@ -820,11 +833,13 @@ template <std::floating_point T>
 CutData<T> cut(
     std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
     std::initializer_list<std::shared_ptr<const dolfinx::fem::Function<T>>>
-        level_sets)
+        level_sets,
+    const cutcells::CutOptions& options)
 {
   return cut<T>(std::move(mesh),
                 std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>(
-                    level_sets.begin(), level_sets.size()));
+                    level_sets.begin(), level_sets.size()),
+                options);
 }
 
 template <std::floating_point T>
@@ -839,9 +854,8 @@ void update(CutData<T>& cut_data)
   for (std::size_t i = 0; i < cut_data.level_sets.size(); ++i)
     cut_data.level_sets[i].dof_values = cut_data.level_set_owners[i]->x()->array();
 
-  auto [cut_cells, parent_cells]
-      = cutcells::cut<T, std::int32_t>(cut_data.mesh_view,
-                                       cut_data.level_sets, true);
+  auto [cut_cells, parent_cells] = cutcells::cut<T, std::int32_t>(
+      cut_data.mesh_view, cut_data.level_sets, cut_data.cut_options);
 
   cut_data.cut_cells = std::move(cut_cells);
   cut_data.parent_cells = std::move(parent_cells);
@@ -1392,51 +1406,61 @@ std::vector<std::pair<std::string, RuntimeQuadrature<T>>> runtime_quadratures(
 }
 
 template CutData<double> cut(
-    std::shared_ptr<const dolfinx::fem::Function<double>>);
-template CutData<float> cut(
-    std::shared_ptr<const dolfinx::fem::Function<float>>);
-template CutData<double> cut(
     std::shared_ptr<const dolfinx::fem::Function<double>>,
-    std::span<const std::int32_t>, int);
+    const cutcells::CutOptions&);
 template CutData<float> cut(
     std::shared_ptr<const dolfinx::fem::Function<float>>,
-    std::span<const std::int32_t>, int);
+    const cutcells::CutOptions&);
+template CutData<double> cut(
+    std::shared_ptr<const dolfinx::fem::Function<double>>,
+    std::span<const std::int32_t>, int, const cutcells::CutOptions&);
+template CutData<float> cut(
+    std::shared_ptr<const dolfinx::fem::Function<float>>,
+    std::span<const std::int32_t>, int, const cutcells::CutOptions&);
 template CutData<double> cut(
     std::shared_ptr<const dolfinx::mesh::Mesh<double>>,
-    std::shared_ptr<const dolfinx::fem::Function<double>>);
+    std::shared_ptr<const dolfinx::fem::Function<double>>,
+    const cutcells::CutOptions&);
 template CutData<float> cut(
     std::shared_ptr<const dolfinx::mesh::Mesh<float>>,
-    std::shared_ptr<const dolfinx::fem::Function<float>>);
-template CutData<double> cut(
-    std::span<const std::shared_ptr<const dolfinx::fem::Function<double>>>);
-template CutData<float> cut(
-    std::span<const std::shared_ptr<const dolfinx::fem::Function<float>>>);
+    std::shared_ptr<const dolfinx::fem::Function<float>>,
+    const cutcells::CutOptions&);
 template CutData<double> cut(
     std::span<const std::shared_ptr<const dolfinx::fem::Function<double>>>,
-    std::span<const std::int32_t>, int);
+    const cutcells::CutOptions&);
 template CutData<float> cut(
     std::span<const std::shared_ptr<const dolfinx::fem::Function<float>>>,
-    std::span<const std::int32_t>, int);
+    const cutcells::CutOptions&);
 template CutData<double> cut(
-    std::shared_ptr<const dolfinx::mesh::Mesh<double>>,
-    std::span<const std::shared_ptr<const dolfinx::fem::Function<double>>>);
+    std::span<const std::shared_ptr<const dolfinx::fem::Function<double>>>,
+    std::span<const std::int32_t>, int, const cutcells::CutOptions&);
 template CutData<float> cut(
-    std::shared_ptr<const dolfinx::mesh::Mesh<float>>,
-    std::span<const std::shared_ptr<const dolfinx::fem::Function<float>>>);
+    std::span<const std::shared_ptr<const dolfinx::fem::Function<float>>>,
+    std::span<const std::int32_t>, int, const cutcells::CutOptions&);
 template CutData<double> cut(
     std::shared_ptr<const dolfinx::mesh::Mesh<double>>,
     std::span<const std::shared_ptr<const dolfinx::fem::Function<double>>>,
-    std::span<const std::int32_t>, int);
+    const cutcells::CutOptions&);
 template CutData<float> cut(
     std::shared_ptr<const dolfinx::mesh::Mesh<float>>,
     std::span<const std::shared_ptr<const dolfinx::fem::Function<float>>>,
-    std::span<const std::int32_t>, int);
+    const cutcells::CutOptions&);
 template CutData<double> cut(
     std::shared_ptr<const dolfinx::mesh::Mesh<double>>,
-    std::initializer_list<std::shared_ptr<const dolfinx::fem::Function<double>>>);
+    std::span<const std::shared_ptr<const dolfinx::fem::Function<double>>>,
+    std::span<const std::int32_t>, int, const cutcells::CutOptions&);
 template CutData<float> cut(
     std::shared_ptr<const dolfinx::mesh::Mesh<float>>,
-    std::initializer_list<std::shared_ptr<const dolfinx::fem::Function<float>>>);
+    std::span<const std::shared_ptr<const dolfinx::fem::Function<float>>>,
+    std::span<const std::int32_t>, int, const cutcells::CutOptions&);
+template CutData<double> cut(
+    std::shared_ptr<const dolfinx::mesh::Mesh<double>>,
+    std::initializer_list<std::shared_ptr<const dolfinx::fem::Function<double>>>,
+    const cutcells::CutOptions&);
+template CutData<float> cut(
+    std::shared_ptr<const dolfinx::mesh::Mesh<float>>,
+    std::initializer_list<std::shared_ptr<const dolfinx::fem::Function<float>>>,
+    const cutcells::CutOptions&);
 
 template void update(CutData<double>&);
 template void update(CutData<float>&);

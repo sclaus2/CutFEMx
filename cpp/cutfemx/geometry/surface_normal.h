@@ -5,6 +5,7 @@
 // SPDX-License-Identifier:    MIT
 #pragma once
 
+#include <array>
 #include <cmath>
 #include <concepts>
 #include <cstdint>
@@ -17,8 +18,6 @@
 #include <cutcells/cell_types.h>
 #include <cutcells/mapping.h>
 #include <cutcells/mesh_view.h>
-
-#include <cutcells/reference_cell.h>
 
 #include <cutfemx/cut/cut.h>
 #include <cutfemx/cut/runtime_quadrature.h>
@@ -38,10 +37,26 @@ std::vector<T> parent_cell_vertex_coords_basix(
   std::vector<I> cell_node_scratch;
   const auto parent_nodes = mesh.cell_nodes(cell_id, cell_node_scratch);
 
+  auto vtk_local_for_basix_vertex = [](cutcells::cell::type ctype,
+                                       int basix_v) -> int
+  {
+    if (ctype == cutcells::cell::type::quadrilateral)
+    {
+      constexpr std::array<int, 4> basix_to_vtk{0, 1, 3, 2};
+      return basix_to_vtk[static_cast<std::size_t>(basix_v)];
+    }
+    if (ctype == cutcells::cell::type::hexahedron)
+    {
+      constexpr std::array<int, 8> basix_to_vtk{0, 1, 3, 2, 4, 5, 7, 6};
+      return basix_to_vtk[static_cast<std::size_t>(basix_v)];
+    }
+    return basix_v;
+  };
+
   for (int basix_v = 0; basix_v < nv; ++basix_v)
   {
     const int local_v = mesh.vtk_vertex_order
-                            ? cutcells::cell::basix_to_vtk_vertex(ctype, basix_v)
+                            ? vtk_local_for_basix_vertex(ctype, basix_v)
                             : basix_v;
     const I node_id = parent_nodes[static_cast<std::size_t>(local_v)];
     const T* x = mesh.node(node_id);

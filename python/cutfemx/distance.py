@@ -6,9 +6,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 import time
+from typing import Any
 
+import basix.ufl
 from dolfinx.fem import Function, functionspace
 from dolfinx.mesh import (
     GhostMode,
@@ -21,6 +24,7 @@ from dolfinx.mesh import (
 from cutfemx import cutfemx_cpp as _cpp
 
 __all__ = [
+    "NormalExtensionResult",
     "SignMode",
     "adapt_mesh_to_stl",
     "build_cell_triangle_map",
@@ -31,11 +35,37 @@ __all__ = [
     "distribute_stl",
     "distribute_stl_facets",
     "from_stl",
+    "extend_normal_velocity",
     "reinitialize",
 ]
 
 
 SignMode = _cpp.distance.SignMode
+
+
+@dataclass(frozen=True)
+class NormalExtensionResult:
+    """Background fields produced by normal-direction velocity extension."""
+
+    speed: Function
+    velocity: Function
+    signed_distance: Function
+
+
+def _element_degree(V: Any) -> int:
+    degree = V.ufl_element().degree
+    return int(degree() if callable(degree) else degree)
+
+
+def _vector_lagrange_space(mesh: Mesh, degree: int):
+    element = basix.ufl.element(
+        "Lagrange",
+        mesh.basix_cell(),
+        degree,
+        shape=(mesh.geometry.dim,),
+        dtype=mesh.geometry.x.dtype,
+    )
+    return functionspace(mesh, element)
 
 
 def compute_stl_bbox(path: str):
@@ -126,6 +156,73 @@ def reinitialize(
 ) -> None:
     """Reinitialize a level-set function in place as a signed distance field."""
     _cpp.distance.reinitialize(phi._cpp_object, max_iter, tol)
+
+
+def extend_normal_velocity(
+    phi: Function,
+    interface_speed: Function,
+    interface_cut_mesh,
+    *,
+    k_ring: int = 1,
+    target_space=None,
+    normal_sign: float = 1.0,
+    max_iter: int = 1000,
+    tol: float = 1.0e-10,
+) -> NormalExtensionResult:
+    """Extend scalar interface speed along normals into the background mesh.
+
+    The C++ carrier solve is first-order and vertex based. If ``target_space``
+    is supplied, the carrier fields are interpolated into that scalar Lagrange
+    space and the matching vector Lagrange space for the velocity.
+    """
+    mesh = phi.function_space.mesh
+    if interface_cut_mesh.mesh is None:
+        raise ValueError("interface_cut_mesh must contain a non-empty mesh")
+    if interface_speed.function_space.mesh is not interface_cut_mesh.mesh:
+        raise ValueError("interface_speed must live on interface_cut_mesh.mesh")
+    if k_ring < 0:
+        raise ValueError("k_ring must be non-negative")
+    if target_space is not None:
+        if target_space.mesh is not mesh:
+            raise ValueError("target_space must live on the same mesh as phi")
+        if target_space.value_size != 1:
+            raise ValueError("target_space must be scalar")
+
+    carrier_space = functionspace(mesh, ("Lagrange", 1))
+    carrier_vector_space = _vector_lagrange_space(mesh, 1)
+    speed = Function(carrier_space, name="extension_speed")
+    velocity = Function(carrier_vector_space, name="extension_velocity")
+    signed_distance = Function(carrier_space, name="extension_signed_distance")
+
+    _cpp.distance.extend_normal_velocity(
+        phi._cpp_object,
+        interface_speed._cpp_object,
+        interface_cut_mesh._cpp_object,
+        speed._cpp_object,
+        velocity._cpp_object,
+        signed_distance._cpp_object,
+        k_ring,
+        normal_sign,
+        max_iter,
+        tol,
+    )
+
+    if target_space is None:
+        return NormalExtensionResult(speed, velocity, signed_distance)
+
+    degree = _element_degree(target_space)
+    target_vector_space = _vector_lagrange_space(mesh, degree)
+    target_speed = Function(target_space, name=speed.name)
+    target_velocity = Function(target_vector_space, name=velocity.name)
+    target_signed_distance = Function(target_space, name=signed_distance.name)
+    target_speed.interpolate(speed)
+    target_velocity.interpolate(velocity)
+    target_signed_distance.interpolate(signed_distance)
+    return NormalExtensionResult(
+        target_speed,
+        target_velocity,
+        target_signed_distance,
+    )
 
 
 def adapt_mesh_to_stl(

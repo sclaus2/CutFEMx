@@ -187,27 +187,61 @@ def cut(
     level_set: Function | Sequence[Function],
     entities: npt.ArrayLike | None = None,
     entity_dim: int | None = None,
+    *,
+    cut_approximation: str = "auto",
+    cut_approximation_order: int = 1,
+    max_refinement_iterations: int = 8,
+    edge_max_depth: int = 20,
 ) -> CutData:
     """Cut one or more scalar level-set functions on cells or selected entities."""
     level_sets = _normalise_level_sets(level_set)
     candidate_entities, dim = _candidate_entities(entities, entity_dim)
     if len(level_sets) == 1:
         if candidate_entities is None:
-            return CutData(_cpp.cut(level_sets[0]._cpp_object), level_sets=level_sets)
+            return CutData(
+                _cpp.cut(
+                    level_sets[0]._cpp_object,
+                    cut_approximation,
+                    cut_approximation_order,
+                    max_refinement_iterations,
+                    edge_max_depth,
+                ),
+                level_sets=level_sets,
+            )
         return CutData(
-            _cpp.cut_entities(level_sets[0]._cpp_object, candidate_entities, dim),
+            _cpp.cut_entities(
+                level_sets[0]._cpp_object,
+                candidate_entities,
+                dim,
+                cut_approximation,
+                cut_approximation_order,
+                max_refinement_iterations,
+                edge_max_depth,
+            ),
             level_sets=level_sets,
             entities=candidate_entities,
             entity_dim=dim,
         )
     if candidate_entities is None:
         return CutData(
-            _cpp.cut_multi([phi._cpp_object for phi in level_sets]),
+            _cpp.cut_multi(
+                [phi._cpp_object for phi in level_sets],
+                cut_approximation,
+                cut_approximation_order,
+                max_refinement_iterations,
+                edge_max_depth,
+            ),
             level_sets=level_sets,
         )
     return CutData(
         _cpp.cut_multi_entities(
-            [phi._cpp_object for phi in level_sets], candidate_entities, dim
+            [phi._cpp_object for phi in level_sets],
+            candidate_entities,
+            dim,
+            cut_approximation,
+            cut_approximation_order,
+            max_refinement_iterations,
+            edge_max_depth,
         ),
         level_sets=level_sets,
         entities=candidate_entities,

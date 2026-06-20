@@ -22,7 +22,6 @@ boundary-perimeter
 stl-distance
 elasticity
 moving-poisson
-interactive-visualizations
 ```
 
 ## Suggested Session Flow

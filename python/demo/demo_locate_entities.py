@@ -4,17 +4,30 @@
 #
 # SPDX-License-Identifier:    MIT
 
+import argparse
+
 import numpy as np
 from mpi4py import MPI
 
 import cutfemx
 from dolfinx import fem, mesh, plot
 
+parser = argparse.ArgumentParser(description="Visualize located CutFEMx entities.")
+parser.add_argument(
+    "--no-show",
+    action="store_true",
+    help="Build the plot without opening a window.",
+)
+args = parser.parse_args()
+
 try:
     import pyvista
 except ModuleNotFoundError:
-    print("pyvista is required for this demo")
-    exit(0)
+    if args.no_show:
+        pyvista = None
+    else:
+        print("pyvista is required for this demo")
+        raise SystemExit(0)
 
 N = 15
 
@@ -38,8 +51,16 @@ cut_data = cutfemx.cut(level_set)
 intersected_entities = cutfemx.locate_entities(cut_data, "phi=0")
 inside_entities = cutfemx.locate_entities(cut_data, "phi<0")
 
-# To visualize the function u, we create a VTK-compatible grid to
-# values of u to
+if MPI.COMM_WORLD.rank == 0:
+    print(
+        f"intersected={intersected_entities.size}, inside={inside_entities.size}",
+        flush=True,
+    )
+
+if pyvista is None:
+    raise SystemExit(0)
+
+# To visualize the function u, create a VTK-compatible grid and attach values.
 cells, types, x = plot.vtk_mesh(V)
 grid = pyvista.UnstructuredGrid(cells, types, x)
 grid.point_data["ls"] = level_set.x.array
@@ -69,4 +90,7 @@ plotter.add_text("Elements Inside", font_size=14, color="black", position="upper
 plotter.add_mesh(sub_grid, show_edges=True, edge_color="black")
 plotter.view_xy()
 
-plotter.show()
+if args.no_show:
+    plotter.close()
+else:
+    plotter.show()

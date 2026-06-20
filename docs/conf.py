@@ -70,6 +70,7 @@ exclude_patterns = [
     "_build",
     "developer",
     "plans",
+    "private_notes",
     "Thumbs.db",
     ".DS_Store",
     "__pycache__",

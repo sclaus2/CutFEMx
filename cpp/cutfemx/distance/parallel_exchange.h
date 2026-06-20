@@ -176,6 +176,186 @@ void min_exchange_vertices(
     }
 }
 
+/// Synchronize distance plus transported payload. The payload associated with
+/// the minimum distance is copied together with that distance.
+template <typename Real>
+void min_exchange_vertices_payload(
+    const dolfinx::common::IndexMap& index_map,
+    std::span<Real> dist,
+    std::span<Real> speed,
+    std::span<Real> normals,
+    int normal_dim,
+    Real inf_value = std::numeric_limits<Real>::max())
+{
+    MPI_Comm comm = index_map.comm();
+    const int mpi_size = dolfinx::MPI::size(comm);
+    if (mpi_size == 1)
+        return;
+
+    const std::int32_t size_local = index_map.size_local();
+    const std::int32_t num_ghosts = index_map.num_ghosts();
+    if (num_ghosts == 0)
+        return;
+
+    std::span<const int> ghost_owners = index_map.owners();
+    std::span<const std::int64_t> ghosts = index_map.ghosts();
+    MPI_Datatype mpi_real = get_mpi_type<Real>();
+
+    std::vector<int> send_counts(mpi_size, 0);
+    for (int owner : ghost_owners)
+        send_counts[owner]++;
+
+    std::vector<int> send_displs(mpi_size + 1, 0);
+    for (int i = 0; i < mpi_size; ++i)
+        send_displs[i + 1] = send_displs[i] + send_counts[i];
+
+    const int payload_width = 1 + normal_dim;
+    std::vector<Real> send_vals(num_ghosts, inf_value);
+    std::vector<Real> send_payload(static_cast<std::size_t>(num_ghosts)
+                                   * payload_width, Real(0));
+    std::vector<std::int64_t> send_global_ids(num_ghosts);
+    std::vector<int> cursors(mpi_size, 0);
+
+    for (std::int32_t g = 0; g < num_ghosts; ++g)
+    {
+        int owner = ghost_owners[g];
+        int idx = send_displs[owner] + cursors[owner]++;
+        const std::int32_t local = size_local + g;
+        send_vals[idx] = dist[local];
+        send_payload[static_cast<std::size_t>(idx) * payload_width]
+            = speed[local];
+        for (int d = 0; d < normal_dim; ++d)
+        {
+            send_payload[static_cast<std::size_t>(idx) * payload_width + 1
+                         + static_cast<std::size_t>(d)]
+                = normals[static_cast<std::size_t>(local) * normal_dim
+                          + static_cast<std::size_t>(d)];
+        }
+        send_global_ids[idx] = ghosts[g];
+    }
+
+    std::vector<int> recv_counts(mpi_size);
+    MPI_Alltoall(send_counts.data(), 1, MPI_INT,
+                 recv_counts.data(), 1, MPI_INT, comm);
+
+    std::vector<int> recv_displs(mpi_size + 1, 0);
+    for (int i = 0; i < mpi_size; ++i)
+        recv_displs[i + 1] = recv_displs[i] + recv_counts[i];
+    int total_recv = recv_displs[mpi_size];
+
+    std::vector<Real> recv_vals(total_recv, inf_value);
+    std::vector<Real> recv_payload(static_cast<std::size_t>(total_recv)
+                                   * payload_width, Real(0));
+    std::vector<std::int64_t> recv_global_ids(total_recv);
+
+    MPI_Alltoallv(send_vals.data(), send_counts.data(), send_displs.data(),
+                  mpi_real, recv_vals.data(), recv_counts.data(),
+                  recv_displs.data(), mpi_real, comm);
+    MPI_Alltoallv(send_global_ids.data(), send_counts.data(), send_displs.data(),
+                  MPI_INT64_T, recv_global_ids.data(), recv_counts.data(),
+                  recv_displs.data(), MPI_INT64_T, comm);
+
+    std::vector<int> send_payload_counts(mpi_size, 0);
+    std::vector<int> recv_payload_counts(mpi_size, 0);
+    std::vector<int> send_payload_displs(mpi_size + 1, 0);
+    std::vector<int> recv_payload_displs(mpi_size + 1, 0);
+    for (int i = 0; i < mpi_size; ++i)
+    {
+        send_payload_counts[i] = send_counts[i] * payload_width;
+        recv_payload_counts[i] = recv_counts[i] * payload_width;
+        send_payload_displs[i + 1]
+            = send_payload_displs[i] + send_payload_counts[i];
+        recv_payload_displs[i + 1]
+            = recv_payload_displs[i] + recv_payload_counts[i];
+    }
+    MPI_Alltoallv(send_payload.data(), send_payload_counts.data(),
+                  send_payload_displs.data(), mpi_real, recv_payload.data(),
+                  recv_payload_counts.data(), recv_payload_displs.data(),
+                  mpi_real, comm);
+
+    auto local_range = index_map.local_range();
+    for (int i = 0; i < total_recv; ++i)
+    {
+        std::int64_t global_id = recv_global_ids[i];
+        if (global_id >= local_range[0] && global_id < local_range[1]
+            && recv_vals[i] < inf_value)
+        {
+            std::int32_t local_id =
+                static_cast<std::int32_t>(global_id - local_range[0]);
+            if (recv_vals[i] < dist[local_id])
+            {
+                dist[local_id] = recv_vals[i];
+                speed[local_id]
+                    = recv_payload[static_cast<std::size_t>(i) * payload_width];
+                for (int d = 0; d < normal_dim; ++d)
+                {
+                    normals[static_cast<std::size_t>(local_id) * normal_dim
+                            + static_cast<std::size_t>(d)]
+                        = recv_payload[static_cast<std::size_t>(i) * payload_width
+                                       + 1 + static_cast<std::size_t>(d)];
+                }
+            }
+        }
+    }
+
+    std::vector<Real> owned_reply(total_recv, inf_value);
+    std::vector<Real> payload_reply(static_cast<std::size_t>(total_recv)
+                                    * payload_width, Real(0));
+    for (int i = 0; i < total_recv; ++i)
+    {
+        std::int64_t global_id = recv_global_ids[i];
+        if (global_id >= local_range[0] && global_id < local_range[1])
+        {
+            std::int32_t local_id =
+                static_cast<std::int32_t>(global_id - local_range[0]);
+            owned_reply[i] = dist[local_id];
+            payload_reply[static_cast<std::size_t>(i) * payload_width]
+                = speed[local_id];
+            for (int d = 0; d < normal_dim; ++d)
+            {
+                payload_reply[static_cast<std::size_t>(i) * payload_width + 1
+                              + static_cast<std::size_t>(d)]
+                    = normals[static_cast<std::size_t>(local_id) * normal_dim
+                              + static_cast<std::size_t>(d)];
+            }
+        }
+    }
+
+    std::vector<Real> ghost_update(num_ghosts, inf_value);
+    std::vector<Real> ghost_payload_update(static_cast<std::size_t>(num_ghosts)
+                                           * payload_width, Real(0));
+    MPI_Alltoallv(owned_reply.data(), recv_counts.data(), recv_displs.data(),
+                  mpi_real, ghost_update.data(), send_counts.data(),
+                  send_displs.data(), mpi_real, comm);
+    MPI_Alltoallv(payload_reply.data(), recv_payload_counts.data(),
+                  recv_payload_displs.data(), mpi_real,
+                  ghost_payload_update.data(), send_payload_counts.data(),
+                  send_payload_displs.data(), mpi_real, comm);
+
+    std::fill(cursors.begin(), cursors.end(), 0);
+    for (std::int32_t g = 0; g < num_ghosts; ++g)
+    {
+        int owner = ghost_owners[g];
+        int idx = send_displs[owner] + cursors[owner]++;
+        const std::int32_t local = size_local + g;
+        if (ghost_update[idx] < dist[local])
+        {
+            dist[local] = ghost_update[idx];
+            speed[local]
+                = ghost_payload_update[static_cast<std::size_t>(idx)
+                                       * payload_width];
+            for (int d = 0; d < normal_dim; ++d)
+            {
+                normals[static_cast<std::size_t>(local) * normal_dim
+                        + static_cast<std::size_t>(d)]
+                    = ghost_payload_update[static_cast<std::size_t>(idx)
+                                           * payload_width + 1
+                                           + static_cast<std::size_t>(d)];
+            }
+        }
+    }
+}
+
 /// Strict owner→ghost copy (no MIN rule)
 /// Use this after FIM convergence to ensure ghost values exactly match owners
 /// for consistent VTK I/O.
@@ -253,6 +433,121 @@ void copy_owner_to_ghost(
         int owner = ghost_owners[g];
         int idx = send_displs[owner] + cursors[owner]++;
         dist[size_local + g] = ghost_update[idx];
+    }
+}
+
+template <typename Real>
+void copy_owner_to_ghost_payload(
+    const dolfinx::common::IndexMap& index_map,
+    std::span<Real> dist,
+    std::span<Real> speed,
+    std::span<Real> normals,
+    int normal_dim)
+{
+    MPI_Comm comm = index_map.comm();
+    const int mpi_size = dolfinx::MPI::size(comm);
+    if (mpi_size <= 1)
+        return;
+
+    const std::int32_t size_local = index_map.size_local();
+    const std::int32_t num_ghosts = index_map.num_ghosts();
+    if (num_ghosts == 0)
+        return;
+
+    std::span<const int> ghost_owners = index_map.owners();
+    std::span<const std::int64_t> ghosts_global = index_map.ghosts();
+    MPI_Datatype mpi_real = get_mpi_type<Real>();
+
+    std::vector<int> send_counts(mpi_size, 0);
+    for (int owner : ghost_owners)
+        send_counts[owner]++;
+
+    std::vector<int> send_displs(mpi_size + 1, 0);
+    for (int i = 0; i < mpi_size; ++i)
+        send_displs[i + 1] = send_displs[i] + send_counts[i];
+
+    std::vector<std::int64_t> send_global_ids(num_ghosts);
+    std::vector<int> cursors(mpi_size, 0);
+    for (std::int32_t g = 0; g < num_ghosts; ++g)
+    {
+        int owner = ghost_owners[g];
+        int idx = send_displs[owner] + cursors[owner]++;
+        send_global_ids[idx] = ghosts_global[g];
+    }
+
+    std::vector<int> recv_counts(mpi_size);
+    MPI_Alltoall(send_counts.data(), 1, MPI_INT, recv_counts.data(), 1, MPI_INT,
+                 comm);
+
+    std::vector<int> recv_displs(mpi_size + 1, 0);
+    for (int i = 0; i < mpi_size; ++i)
+        recv_displs[i + 1] = recv_displs[i] + recv_counts[i];
+    int total_recv = recv_displs[mpi_size];
+    std::vector<std::int64_t> recv_global_ids(total_recv);
+
+    MPI_Alltoallv(send_global_ids.data(), send_counts.data(), send_displs.data(),
+                  MPI_INT64_T, recv_global_ids.data(), recv_counts.data(),
+                  recv_displs.data(), MPI_INT64_T, comm);
+
+    const int payload_width = 2 + normal_dim;
+    std::vector<Real> owned_reply(static_cast<std::size_t>(total_recv)
+                                  * payload_width, Real(0));
+    auto local_range = index_map.local_range();
+    for (int i = 0; i < total_recv; ++i)
+    {
+        std::int64_t global_id = recv_global_ids[i];
+        if (global_id >= local_range[0] && global_id < local_range[1])
+        {
+            std::int32_t local_id =
+                static_cast<std::int32_t>(global_id - local_range[0]);
+            const std::size_t base = static_cast<std::size_t>(i) * payload_width;
+            owned_reply[base] = dist[local_id];
+            owned_reply[base + 1] = speed[local_id];
+            for (int d = 0; d < normal_dim; ++d)
+            {
+                owned_reply[base + 2 + static_cast<std::size_t>(d)]
+                    = normals[static_cast<std::size_t>(local_id) * normal_dim
+                              + static_cast<std::size_t>(d)];
+            }
+        }
+    }
+
+    std::vector<int> send_payload_counts(mpi_size, 0);
+    std::vector<int> recv_payload_counts(mpi_size, 0);
+    std::vector<int> send_payload_displs(mpi_size + 1, 0);
+    std::vector<int> recv_payload_displs(mpi_size + 1, 0);
+    for (int i = 0; i < mpi_size; ++i)
+    {
+        send_payload_counts[i] = send_counts[i] * payload_width;
+        recv_payload_counts[i] = recv_counts[i] * payload_width;
+        send_payload_displs[i + 1]
+            = send_payload_displs[i] + send_payload_counts[i];
+        recv_payload_displs[i + 1]
+            = recv_payload_displs[i] + recv_payload_counts[i];
+    }
+
+    std::vector<Real> ghost_update(static_cast<std::size_t>(num_ghosts)
+                                   * payload_width, Real(0));
+    MPI_Alltoallv(owned_reply.data(), recv_payload_counts.data(),
+                  recv_payload_displs.data(), mpi_real, ghost_update.data(),
+                  send_payload_counts.data(), send_payload_displs.data(),
+                  mpi_real, comm);
+
+    std::fill(cursors.begin(), cursors.end(), 0);
+    for (std::int32_t g = 0; g < num_ghosts; ++g)
+    {
+        int owner = ghost_owners[g];
+        int idx = send_displs[owner] + cursors[owner]++;
+        const std::int32_t local = size_local + g;
+        const std::size_t base = static_cast<std::size_t>(idx) * payload_width;
+        dist[local] = ghost_update[base];
+        speed[local] = ghost_update[base + 1];
+        for (int d = 0; d < normal_dim; ++d)
+        {
+            normals[static_cast<std::size_t>(local) * normal_dim
+                    + static_cast<std::size_t>(d)]
+                = ghost_update[base + 2 + static_cast<std::size_t>(d)];
+        }
     }
 }
 

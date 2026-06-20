@@ -1,6 +1,7 @@
 set(HEADERS_distance
   ${CMAKE_CURRENT_SOURCE_DIR}/eikonal_update.h
   ${CMAKE_CURRENT_SOURCE_DIR}/fast_iterative.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/normal_extension.h
   ${CMAKE_CURRENT_SOURCE_DIR}/parallel_exchange.h
   ${CMAKE_CURRENT_SOURCE_DIR}/point_triangle_distance.h
   ${CMAKE_CURRENT_SOURCE_DIR}/reinitialize.h

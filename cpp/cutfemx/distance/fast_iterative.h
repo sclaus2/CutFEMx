@@ -19,6 +19,8 @@
 #include <cmath>
 #include <algorithm>
 #include <dolfinx/common/Timer.h>
+#include <array>
+#include <span>
 
 #include "eikonal_update.h"
 #include "parallel_exchange.h"
@@ -49,13 +51,105 @@ struct FMMOptions {
 
 using FIMOptions = FMMOptions;
 
+template <typename Real>
+struct FIMTransportPayload
+{
+    std::span<Real> speed;
+    std::span<Real> normals;
+    int normal_dim = 3;
+
+    bool valid(std::int32_t num_vertices) const
+    {
+        return speed.size() >= static_cast<std::size_t>(num_vertices)
+            && normals.size()
+                   >= static_cast<std::size_t>(num_vertices)
+                          * static_cast<std::size_t>(normal_dim)
+            && normal_dim > 0;
+    }
+};
+
+template <typename F>
+void for_each_virtual_simplex(int tdim, std::span<const std::int32_t> c_verts,
+                              F&& f)
+{
+    const int num_verts = static_cast<int>(c_verts.size());
+
+    auto emit = [&](std::initializer_list<int> local)
+    {
+        std::array<std::int32_t, 4> simplex{-1, -1, -1, -1};
+        int n = 0;
+        for (int i : local)
+            simplex[static_cast<std::size_t>(n++)] = c_verts[static_cast<std::size_t>(i)];
+        f(std::span<const std::int32_t>(simplex.data(), static_cast<std::size_t>(n)));
+    };
+
+    if (tdim == 2 && num_verts == 3)
+    {
+        emit({0, 1, 2});
+    }
+    else if (tdim == 2 && num_verts == 4)
+    {
+        // Basix quadrilateral order is (0, 1, 2, 3). Split along 0--3.
+        emit({0, 1, 3});
+        emit({0, 3, 2});
+    }
+    else if (tdim == 3 && num_verts == 4)
+    {
+        emit({0, 1, 2, 3});
+    }
+    else if (tdim == 3 && num_verts == 8)
+    {
+        // Freudenthal split of a Basix-order hexahedron along body diagonal 0--7.
+        emit({0, 1, 3, 7});
+        emit({0, 1, 5, 7});
+        emit({0, 2, 3, 7});
+        emit({0, 2, 6, 7});
+        emit({0, 4, 5, 7});
+        emit({0, 4, 6, 7});
+    }
+}
+
+template <typename Real>
+void assign_payload_from_best_source(FIMTransportPayload<Real>* payload,
+                                     std::int32_t target,
+                                     std::span<const std::int32_t> sources,
+                                     std::span<Real> dist)
+{
+    if (!payload)
+        return;
+
+    std::int32_t best = -1;
+    Real best_value = std::numeric_limits<Real>::max();
+    for (std::int32_t source : sources)
+    {
+        if (source >= 0 && dist[static_cast<std::size_t>(source)] < best_value)
+        {
+            best = source;
+            best_value = dist[static_cast<std::size_t>(source)];
+        }
+    }
+    if (best < 0)
+        return;
+
+    payload->speed[static_cast<std::size_t>(target)]
+        = payload->speed[static_cast<std::size_t>(best)];
+    for (int d = 0; d < payload->normal_dim; ++d)
+    {
+        payload->normals[static_cast<std::size_t>(target) * payload->normal_dim
+                         + static_cast<std::size_t>(d)]
+            = payload->normals[static_cast<std::size_t>(best) * payload->normal_dim
+                               + static_cast<std::size_t>(d)];
+    }
+}
+
 // Low-level FIM Solver
 template <typename Real>
 void compute_distance_fim(
     const dolfinx::mesh::Mesh<Real>& mesh,
     std::span<Real> dist,
     const std::vector<std::int32_t>& seeds,
-    const FMMOptions& opt = {})
+    const FMMOptions& opt = {},
+    FIMTransportPayload<Real>* payload = nullptr)
 {
     // 0. Setup
     // ------------------------------------------------------------------------
@@ -98,7 +192,12 @@ void compute_distance_fim(
     
     // Initial sync to ensure consistency (e.g. if seeds are ghosts)
     std::vector<Real> dist_before(dist.begin(), dist.end());
-    min_exchange_vertices(*vertex_map, dist, static_cast<Real>(opt.inf_value));
+    if (payload && payload->valid(num_vertices))
+        min_exchange_vertices_payload(*vertex_map, dist, payload->speed,
+                                      payload->normals, payload->normal_dim,
+                                      static_cast<Real>(opt.inf_value));
+    else
+        min_exchange_vertices(*vertex_map, dist, static_cast<Real>(opt.inf_value));
     
     int initial_activated = 0;
     
@@ -140,79 +239,143 @@ void compute_distance_fim(
             for (std::int32_t c : cell_links)
             {
                 auto c_verts = cell_to_vertex->links(c);
-                int num_verts = c_verts.size();
-                
-                int u_idx = -1;
-                for(int k=0; k<num_verts; ++k) if(c_verts[k]==u) { u_idx=k; break; }
-                if (u_idx == -1) continue; 
-                
-                if (num_verts == 3) // Triangle
-                {
-                    std::int32_t v = c_verts[(u_idx + 1) % 3];
-                    std::int32_t w = c_verts[(u_idx + 2) % 3];
-                    
-                    auto attempt_update = [&](std::int32_t target, const Real* x_tgt, 
-                                            std::int32_t other, const Real* x_other, Real d_other)
+
+                for_each_virtual_simplex(
+                    tdim, c_verts,
+                    [&](std::span<const std::int32_t> simplex)
                     {
-                        Real new_d = opt.inf_value;
-                        if (d_other < opt.inf_value)
-                            new_d = update_2pt(x_tgt, x_u, d_u, x_other, d_other);
-                        else
-                            new_d = update_1pt(x_tgt, x_u, d_u);
-                            
-                        if (new_d < dist[target] - 1e-13) {
-                            Real change = dist[target] - new_d;
-                            dist[target] = new_d;
-                            
-                            // Only count convergence on owned nodes
-                            if (target < num_owned) {
-                                if (change > local_max_change) local_max_change = change;
-                            }
-                            
-                            // Activate target (Owned or Ghost)
-                            if (!active_mask[target]) {
-                                active_mask[target] = true;
-                                next_active_queue.push_back(target);
+                        int u_idx = -1;
+                        for (std::size_t k = 0; k < simplex.size(); ++k)
+                        {
+                            if (simplex[k] == u)
+                            {
+                                u_idx = static_cast<int>(k);
+                                break;
                             }
                         }
-                    };
-                    
-                    attempt_update(v, get_vertex_coords(v), w, get_vertex_coords(w), dist[w]);
-                    attempt_update(w, get_vertex_coords(w), v, get_vertex_coords(v), dist[v]);
-                }
-                else if (num_verts == 4) // Tet
-                {
-                     for(int i=0; i<4; ++i) {
-                         if (i == u_idx) continue;
-                         std::int32_t target = c_verts[i];
-                         
-                         int others[2]; int oi=0;
-                         for(int j=0; j<4; ++j) if(j!=u_idx && j!=i) others[oi++] = c_verts[j];
-                         
-                         std::int32_t v = others[0];
-                         std::int32_t w = others[1];
-                         
-                         Real new_d = update_1pt(get_vertex_coords(target), x_u, d_u);
-                         if (dist[v] < opt.inf_value) new_d = std::min(new_d, update_2pt(get_vertex_coords(target), x_u, d_u, get_vertex_coords(v), dist[v]));
-                         if (dist[w] < opt.inf_value) new_d = std::min(new_d, update_2pt(get_vertex_coords(target), x_u, d_u, get_vertex_coords(w), dist[w]));
-                         if (dist[v] < opt.inf_value && dist[w] < opt.inf_value)
-                            new_d = std::min(new_d, update_3pt(get_vertex_coords(target), x_u, d_u, get_vertex_coords(v), dist[v], get_vertex_coords(w), dist[w]));
-                            
-                         if (new_d < dist[target] - 1e-13) {
-                             Real change = dist[target] - new_d;
-                             dist[target] = new_d;
-                             
-                             if (target < num_owned) {
-                                if (change > local_max_change) local_max_change = change;
-                             }
-                             
-                             if (!active_mask[target]) {
-                                active_mask[target] = true;
-                                next_active_queue.push_back(target);
+                        if (u_idx == -1)
+                            return;
+
+                        auto accept_update =
+                            [&](std::int32_t target, Real new_d,
+                                std::span<const std::int32_t> sources)
+                        {
+                            if (new_d < dist[target] - 1e-13)
+                            {
+                                Real change = dist[target] - new_d;
+                                dist[target] = new_d;
+                                assign_payload_from_best_source(payload, target,
+                                                                sources, dist);
+
+                                if (target < num_owned
+                                    && change > local_max_change)
+                                    local_max_change = change;
+
+                                if (!active_mask[target])
+                                {
+                                    active_mask[target] = true;
+                                    next_active_queue.push_back(target);
+                                }
                             }
-                         }
-                     }
-                }
+                        };
+
+                        if (simplex.size() == 3)
+                        {
+                            std::int32_t v = -1;
+                            std::int32_t w = -1;
+                            for (std::size_t i = 0; i < simplex.size(); ++i)
+                            {
+                                if (static_cast<int>(i) == u_idx)
+                                    continue;
+                                if (v < 0)
+                                    v = simplex[i];
+                                else
+                                    w = simplex[i];
+                            }
+
+                            auto attempt_triangle_target =
+                                [&](std::int32_t target, std::int32_t other)
+                            {
+                                std::array<std::int32_t, 2> sources{u, other};
+                                Real new_d = opt.inf_value;
+                                if (dist[other] < opt.inf_value)
+                                    new_d = update_2pt(get_vertex_coords(target),
+                                                       x_u, d_u,
+                                                       get_vertex_coords(other),
+                                                       dist[other]);
+                                else
+                                {
+                                    sources[1] = u;
+                                    new_d = update_1pt(get_vertex_coords(target),
+                                                       x_u, d_u);
+                                }
+                                accept_update(target, new_d, sources);
+                            };
+
+                            attempt_triangle_target(v, w);
+                            attempt_triangle_target(w, v);
+                        }
+                        else if (simplex.size() == 4)
+                        {
+                            for (std::size_t i = 0; i < simplex.size(); ++i)
+                            {
+                                if (static_cast<int>(i) == u_idx)
+                                    continue;
+                                const std::int32_t target = simplex[i];
+
+                                std::array<std::int32_t, 2> others{-1, -1};
+                                int oi = 0;
+                                for (std::size_t j = 0; j < simplex.size(); ++j)
+                                {
+                                    if (static_cast<int>(j) != u_idx && j != i)
+                                        others[static_cast<std::size_t>(oi++)]
+                                            = simplex[j];
+                                }
+                                const std::int32_t v = others[0];
+                                const std::int32_t w = others[1];
+
+                                std::array<std::int32_t, 3> sources1{u, u, u};
+                                accept_update(target,
+                                              update_1pt(get_vertex_coords(target),
+                                                         x_u, d_u),
+                                              std::span<const std::int32_t>(
+                                                  sources1.data(), 1));
+
+                                if (dist[v] < opt.inf_value)
+                                {
+                                    std::array<std::int32_t, 2> sources{u, v};
+                                    accept_update(
+                                        target,
+                                        update_2pt(get_vertex_coords(target),
+                                                   x_u, d_u,
+                                                   get_vertex_coords(v), dist[v]),
+                                        sources);
+                                }
+                                if (dist[w] < opt.inf_value)
+                                {
+                                    std::array<std::int32_t, 2> sources{u, w};
+                                    accept_update(
+                                        target,
+                                        update_2pt(get_vertex_coords(target),
+                                                   x_u, d_u,
+                                                   get_vertex_coords(w), dist[w]),
+                                        sources);
+                                }
+                                if (dist[v] < opt.inf_value
+                                    && dist[w] < opt.inf_value)
+                                {
+                                    std::array<std::int32_t, 3> sources{u, v, w};
+                                    accept_update(
+                                        target,
+                                        update_3pt(get_vertex_coords(target),
+                                                   x_u, d_u,
+                                                   get_vertex_coords(v), dist[v],
+                                                   get_vertex_coords(w), dist[w]),
+                                        sources);
+                                }
+                            }
+                        }
+                    });
             } 
         } 
         
@@ -227,7 +390,12 @@ void compute_distance_fim(
         if (iter % current_sync_interval == 0)
         {
             std::vector<Real> dist_before_sync(dist.begin(), dist.end()); 
-            min_exchange_vertices(*vertex_map, dist, static_cast<Real>(opt.inf_value));
+            if (payload && payload->valid(num_vertices))
+                min_exchange_vertices_payload(*vertex_map, dist, payload->speed,
+                                              payload->normals, payload->normal_dim,
+                                              static_cast<Real>(opt.inf_value));
+            else
+                min_exchange_vertices(*vertex_map, dist, static_cast<Real>(opt.inf_value));
             
             int owned_cnt = 0;
             int ghost_cnt = 0;
@@ -292,7 +460,11 @@ void compute_distance_fim(
     // CRITICAL: Final owner→ghost copy to ensure perfect consistency for VTK output
     // The MIN-rule sync may leave ghosts with values slightly different from owners.
     // This strict copy ensures ghost values EXACTLY match their owners.
-    copy_owner_to_ghost(*vertex_map, dist);
+    if (payload && payload->valid(num_vertices))
+        copy_owner_to_ghost_payload(*vertex_map, dist, payload->speed,
+                                    payload->normals, payload->normal_dim);
+    else
+        copy_owner_to_ghost(*vertex_map, dist);
 }
 
 // Helper to get keys from map

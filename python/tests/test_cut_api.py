@@ -103,6 +103,27 @@ def test_cut_api_locate_entities_default_cells():
     assert np.array_equal(intersected_entities, entities_exact)
 
 
+def test_cut_api_accepts_linear_no_refinement_options():
+    _, level_set = _line_level_set()
+
+    options = {
+        "cut_approximation": "linear",
+        "cut_approximation_order": 1,
+        "max_refinement_iterations": 0,
+    }
+    cutter = cutfemx.cut(level_set, **options)
+    intersected_entities = cutfemx.locate_entities(cutter, "phi=0")
+
+    fresh = cutfemx.locate_entities(cutfemx.cut(level_set, **options), "phi=0")
+    assert np.array_equal(intersected_entities, fresh)
+
+    level_set.interpolate(lambda x: x[1] - 0.51)
+    cutfemx.update(cutter)
+    updated = cutfemx.locate_entities(cutter, "phi=0")
+    fresh_updated = cutfemx.locate_entities(cutfemx.cut(level_set, **options), "phi=0")
+    assert np.array_equal(updated, fresh_updated)
+
+
 def test_cut_api_update_reclassifies_when_level_set_values_change():
     _, level_set = _line_level_set()
 

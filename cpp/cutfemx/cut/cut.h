@@ -45,6 +45,7 @@ struct CutData
         owned_connectivity(std::move(other.owned_connectivity)),
         mesh_view(std::move(other.mesh_view)),
         level_sets(std::move(other.level_sets)),
+        cut_options(std::move(other.cut_options)),
         cut_cells(std::move(other.cut_cells)),
         parent_cells(std::move(other.parent_cells))
   {
@@ -66,6 +67,7 @@ struct CutData
     owned_connectivity = std::move(other.owned_connectivity);
     mesh_view = std::move(other.mesh_view);
     level_sets = std::move(other.level_sets);
+    cut_options = std::move(other.cut_options);
     cut_cells = std::move(other.cut_cells);
     parent_cells = std::move(other.parent_cells);
     rebind_views();
@@ -94,46 +96,62 @@ struct CutData
 
   cutcells::MeshView<T, std::int32_t> mesh_view;
   std::vector<cutcells::LevelSetFunction<T, std::int32_t>> level_sets;
+  cutcells::CutOptions cut_options;
   cutcells::HOCutCells<T, std::int32_t> cut_cells;
   cutcells::ParentCellClassification<T, std::int32_t> parent_cells;
 };
 
 template <std::floating_point T>
-CutData<T> cut(std::shared_ptr<const dolfinx::fem::Function<T>> level_set);
+CutData<T> cut(
+    std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
+    const cutcells::CutOptions& options = cutcells::CutOptions{});
 
 template <std::floating_point T>
-CutData<T> cut(std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
-               std::span<const std::int32_t> entities, int entity_dim);
+CutData<T> cut(
+    std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
+    std::span<const std::int32_t> entities, int entity_dim,
+    const cutcells::CutOptions& options = cutcells::CutOptions{});
 
 template <std::floating_point T>
-CutData<T> cut(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
-               std::shared_ptr<const dolfinx::fem::Function<T>> level_set);
+CutData<T> cut(
+    std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
+    std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
+    const cutcells::CutOptions& options = cutcells::CutOptions{});
 
 template <std::floating_point T>
-CutData<T> cut(std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>
-                   level_sets);
+CutData<T> cut(
+    std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>
+        level_sets,
+    const cutcells::CutOptions& options = cutcells::CutOptions{});
 
 template <std::floating_point T>
-CutData<T> cut(std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>
-                   level_sets,
-               std::span<const std::int32_t> entities, int entity_dim);
+CutData<T> cut(
+    std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>
+        level_sets,
+    std::span<const std::int32_t> entities, int entity_dim,
+    const cutcells::CutOptions& options = cutcells::CutOptions{});
 
 template <std::floating_point T>
-CutData<T> cut(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
-               std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>
-                   level_sets);
+CutData<T> cut(
+    std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
+    std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>
+        level_sets,
+    const cutcells::CutOptions& options = cutcells::CutOptions{});
 
 template <std::floating_point T>
-CutData<T> cut(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
-               std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>
-                   level_sets,
-               std::span<const std::int32_t> entities, int entity_dim);
+CutData<T> cut(
+    std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
+    std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>
+        level_sets,
+    std::span<const std::int32_t> entities, int entity_dim,
+    const cutcells::CutOptions& options = cutcells::CutOptions{});
 
 template <std::floating_point T>
 CutData<T> cut(
     std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
     std::initializer_list<std::shared_ptr<const dolfinx::fem::Function<T>>>
-        level_sets);
+        level_sets,
+    const cutcells::CutOptions& options = cutcells::CutOptions{});
 
 template <std::floating_point T>
 void update(CutData<T>& cut_data);

@@ -26,6 +26,7 @@
 #include <dolfinx/mesh/Mesh.h>
 
 #include <cutfemx/distance/fast_iterative.h>
+#include <cutfemx/distance/normal_extension.h>
 #include <cutfemx/distance/reinitialize.h>
 #include <cutfemx/distance/sign.h>
 #include <cutfemx/distance/stl/cell_triangle_map.h>
@@ -33,6 +34,7 @@
 #include <cutfemx/distance/stl/mesh_adapt.h>
 #include <cutfemx/distance/stl/reader.h>
 #include <cutfemx/distance/stl/surface.h>
+#include <cutfemx/mesh/cut_mesh.h>
 
 namespace nb = nanobind;
 
@@ -169,6 +171,29 @@ void declare_distance(nb::module_& m, std::string type)
         cutfemx::distance::reinitialize<Real>(*phi, opt);
       },
       nb::arg("phi"), nb::arg("max_iter") = 1000, nb::arg("tol") = 1e-10);
+
+  m.def(
+      "extend_normal_velocity",
+      [](std::shared_ptr<const dolfinx::fem::Function<Real>> phi,
+         std::shared_ptr<const dolfinx::fem::Function<Real>> interface_speed,
+         const cutfemx::mesh::CutMesh<Real>& interface_cut_mesh,
+         std::shared_ptr<dolfinx::fem::Function<Real>> speed,
+         std::shared_ptr<dolfinx::fem::Function<Real>> velocity,
+         std::shared_ptr<dolfinx::fem::Function<Real>> signed_distance,
+         int k_ring, double normal_sign, int max_iter, double tol)
+      {
+        cutfemx::distance::FMMOptions opt;
+        opt.max_iter = max_iter;
+        opt.tol = tol;
+        cutfemx::distance::extend_normal_velocity<Real>(
+            std::move(phi), *interface_speed, interface_cut_mesh, *speed,
+            *velocity, *signed_distance, k_ring, normal_sign, opt);
+      },
+      nb::arg("phi"), nb::arg("interface_speed"),
+      nb::arg("interface_cut_mesh"), nb::arg("speed"), nb::arg("velocity"),
+      nb::arg("signed_distance"), nb::arg("k_ring") = 1,
+      nb::arg("normal_sign") = 1.0, nb::arg("max_iter") = 1000,
+      nb::arg("tol") = 1.0e-10);
 
   m.def(
       "refinement_edges_from_stl",
