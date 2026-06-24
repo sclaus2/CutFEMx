@@ -1,0 +1,167 @@
+name: Linux
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/linux.yml"
+      - "CMakeLists.txt"
+      - "cpp/**"
+      - "python/**"
+      - "third_party/**"
+      - "pyproject.toml"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/linux.yml"
+      - "CMakeLists.txt"
+      - "cpp/**"
+      - "python/**"
+      - "third_party/**"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash -el {0}
+
+env:
+  CUTFEMX_RUNINTGEN_REF: main
+  CUTFEMX_CUTCELLS_REF: main
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
+  CTEST_PARALLEL_LEVEL: "2"
+  FI_PROVIDER: tcp
+  PYTHONNOUSERSITE: "1"
+
+jobs:
+  tests:
+    name: Python 3.12
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out CutFEMx
+        uses: actions/checkout@v4
+
+      - name: Set up FEniCSx environment
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: cutfemx-ci
+          init-shell: bash
+          cache-environment: true
+          cache-downloads: true
+          create-args: >-
+            -c conda-forge
+            --strict-channel-priority
+            python=3.12
+            fenics-dolfinx=0.11.0
+            fenics-basix=0.11.0
+            fenics-ffcx=0.11.0
+            fenics-ufl=2026.1.0
+            mpi4py
+            petsc4py
+            cmake
+            ninja
+            pkg-config
+            c-compiler
+            cxx-compiler
+            catch2
+            scikit-build-core
+            nanobind
+            cffi
+            numpy
+            scipy
+            matplotlib
+            pytest
+            pyamg
+            numba
+            libblas
+            liblapack
+            liblapacke
+
+      - name: Configure build environment
+        run: |
+          cc_bin="${CC:-${CONDA_PREFIX}/bin/x86_64-conda-linux-gnu-cc}"
+          cxx_bin="${CXX:-${CONDA_PREFIX}/bin/x86_64-conda-linux-gnu-c++}"
+          {
+            echo "CONDA_PREFIX=${CONDA_PREFIX}"
+            echo "CMAKE_PREFIX_PATH=${CONDA_PREFIX}"
+            echo "CC=${cc_bin}"
+            echo "CXX=${cxx_bin}"
+            echo "PYTHONNOUSERSITE=1"
+            echo "FI_PROVIDER=tcp"
+          } >> "${GITHUB_ENV}"
+          python -m pip install --upgrade pip
+          python - <<'PY'
+          import importlib.metadata as metadata
+
+          for name in ("fenics-basix", "fenics-dolfinx", "fenics-ffcx", "fenics-ufl"):
+              print(name, metadata.version(name))
+          PY
+
+      - name: Build and install runintgen
+        run: |
+          git clone --depth 1 --branch "${CUTFEMX_RUNINTGEN_REF}" \
+            https://github.com/sclaus2/runintgen.git "${RUNNER_TEMP}/runintgen"
+          python -m pip install --no-build-isolation --no-deps --force-reinstall \
+            "${RUNNER_TEMP}/runintgen"
+
+      - name: Build and install CutCells
+        run: |
+          git clone --depth 1 --branch "${CUTFEMX_CUTCELLS_REF}" \
+            https://github.com/sclaus2/cutcells.git "${RUNNER_TEMP}/CutCells"
+          cmake -G Ninja -S "${RUNNER_TEMP}/CutCells/cpp" \
+            -B "${RUNNER_TEMP}/CutCells/cpp/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${CONDA_PREFIX}" \
+            -DCMAKE_PREFIX_PATH="${CONDA_PREFIX}" \
+            -DCUTCELLS_WITH_ALGOIM=ON
+          cmake --build "${RUNNER_TEMP}/CutCells/cpp/build"
+          cmake --install "${RUNNER_TEMP}/CutCells/cpp/build"
+          python -m pip install --no-build-isolation --no-deps --force-reinstall \
+            "${RUNNER_TEMP}/CutCells/python"
+
+      - name: Build and install CutFEMx
+        run: |
+          python -m pip install --no-build-isolation --no-deps --force-reinstall .
+
+      - name: Run C++ tests
+        run: |
+          cmake -G Ninja -S cpp -B "${RUNNER_TEMP}/CutFEMx-cpp-build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${CONDA_PREFIX}" \
+            -DBUILD_TESTING=ON
+          cmake --build "${RUNNER_TEMP}/CutFEMx-cpp-build"
+          ctest --test-dir "${RUNNER_TEMP}/CutFEMx-cpp-build" --output-on-failure
+
+      - name: Verify Python extension ABI
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          import cutfemx.cutfemx_cpp
+          import dolfinx.cpp
+
+          dolfinx_ext = Path(dolfinx.cpp.__file__).name
+          cutfemx_ext = Path(cutfemx.cutfemx_cpp.__file__).name
+          print("DOLFINx extension:", dolfinx_ext)
+          print("CutFEMx extension:", cutfemx_ext)
+
+          if (".abi3." in dolfinx_ext) != (".abi3." in cutfemx_ext):
+              raise SystemExit(
+                  "CutFEMx and DOLFINx Python extensions use different ABI modes"
+              )
+          PY
+
+      - name: Run serial Python tests
+        run: |
+          python -m pytest -q python/tests -m "not mpi"
+
+      - name: Run MPI smoke tests
+        run: |
+          mpiexec -n 2 python -m pytest -q \
+            python/tests/test_adapt_mesh_to_stl.py::test_adapt_mesh_mpi \
+            python/tests/test_distance.py::test_normal_extension_payload_values_are_consistent_across_ghosts
