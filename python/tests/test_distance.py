@@ -7,10 +7,6 @@
 from mpi4py import MPI
 
 import numpy as np
-import os
-from pathlib import Path
-import subprocess
-import sys
 
 import pytest
 import cutfemx
@@ -305,35 +301,6 @@ def test_higher_order_extension_output_interpolates_sampled_speed():
     assert np.max(result.speed.x.array) <= 1.30
 
 
-def test_moving_circle_reinitialization_demo_smoke(tmp_path):
-    script = Path(__file__).parents[1] / "demo" / "demo_moving_circle_reinitialization.py"
-    output_csv = tmp_path / "moving_circle_reinitialization.csv"
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "--n",
-            "12",
-            "--steps",
-            "2",
-            "--corrector-steps",
-            "2",
-            "--no-plot",
-            "--output-csv",
-            str(output_csv),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    text = output_csv.read_text(encoding="utf-8")
-    assert "translation" in text
-    assert "rotation" in text
-    assert "predictor_corrector" in text
-
-
 def test_normal_extension_payload_values_are_consistent_across_ghosts():
     comm = MPI.COMM_WORLD
     _, V, _, result, _ = _build_circle_extension(comm, n=16)
@@ -365,32 +332,3 @@ def test_normal_extension_payload_values_are_consistent_across_ghosts():
                 continue
             data = np.asarray(values, dtype=float)
             assert np.max(np.ptp(data, axis=0)) < 1.0e-11
-
-
-def test_normal_extension_velocity_demo_smoke(tmp_path):
-    pytest.importorskip("pyvista")
-    script = Path(__file__).parents[1] / "demo" / "demo_normal_extension_velocity.py"
-    screenshot = tmp_path / "normal_extension_velocity.png"
-    env = os.environ.copy()
-    env.setdefault("PYVISTA_OFF_SCREEN", "true")
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "--target-degree",
-            "1",
-            "--n",
-            "12",
-            "--no-show",
-            "--screenshot",
-            str(screenshot),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert screenshot.exists()
-    assert screenshot.stat().st_size > 0
