@@ -28,6 +28,7 @@ def test_cutdg_poisson_manufactured_solution_converges():
     ]
     code = (
         "import os, runpy, sys; "
+        f"sys.path.insert(0, {str(demo_path.parent)!r}); "
         f"sys.argv = {demo_args!r}; "
         f"runpy.run_path({str(demo_path)!r}, run_name='__main__'); "
         "sys.stdout.flush(); "

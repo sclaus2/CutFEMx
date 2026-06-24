@@ -13,7 +13,7 @@ construct runintgen custom data from CutFEMx quadrature providers.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import prod
 from types import MethodType
 from types import SimpleNamespace
@@ -240,7 +240,10 @@ def compile_form(
         form_compiler_options=p_ffcx,
         jit_options=jit_options,
     )
-    sidecar = module._runintgen_jit.forms[0]
+    sidecar = _rebind_quadrature_function_terminals(
+        module._runintgen_jit.forms[0],
+        form,
+    )
     return CompiledRunintForm(
         ufl_form=form,
         ufcx_form=ufcx_form,
@@ -250,6 +253,52 @@ def compile_form(
         geometry_dtype=geometry_dtype,
         jit_info=sidecar,
     )
+
+
+def _rebind_quadrature_function_terminals(jit_info: Any, form: ufl.Form) -> Any:
+    """Attach current-form quadrature function terminals to cached JIT metadata."""
+    from runintgen.quadrature_function import (
+        form_quadrature_functions,
+        quadrature_function_spec,
+    )
+
+    old_infos = list(getattr(jit_info.module, "quadrature_functions", []) or [])
+    if not old_infos:
+        return jit_info
+
+    current_terminals = list(form_quadrature_functions(form))
+    old_terminals = []
+    seen_old: set[int] = set()
+    for info in sorted(old_infos, key=lambda item: (item.coefficient_number, item.slot)):
+        terminal_id = id(info.terminal)
+        if terminal_id in seen_old:
+            continue
+        seen_old.add(terminal_id)
+        old_terminals.append(info.terminal)
+
+    if len(current_terminals) != len(old_terminals):
+        return jit_info
+
+    terminal_map: dict[int, Any] = {}
+    for old_terminal, current_terminal in zip(
+        old_terminals, current_terminals, strict=True
+    ):
+        old_spec = quadrature_function_spec(old_terminal)
+        current_spec = quadrature_function_spec(current_terminal)
+        if (
+            old_spec.name != current_spec.name
+            or old_spec.value_shape != current_spec.value_shape
+            or old_spec.value_size != current_spec.value_size
+        ):
+            return jit_info
+        terminal_map[id(old_terminal)] = current_terminal
+
+    rebound_infos = [
+        replace(info, terminal=terminal_map.get(id(info.terminal), info.terminal))
+        for info in old_infos
+    ]
+    module = replace(jit_info.module, quadrature_functions=rebound_infos)
+    return replace(jit_info, module=module)
 
 
 def _normalised_subdomain_id(value: Any) -> int:

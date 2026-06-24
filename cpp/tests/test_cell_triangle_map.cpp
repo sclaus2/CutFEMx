@@ -182,7 +182,8 @@ TEST_CASE("build_cell_triangle_map", "[map]")
         {{{0.0, 0.0, 0.0}, {1.0, 1.0, 1.0}}}, 
         {2, 2, 2},
         dolfinx::mesh::CellType::tetrahedron,
-        dolfinx::mesh::create_cell_partitioner(dolfinx::mesh::GhostMode::shared_facet));
+        dolfinx::mesh::create_cell_partitioner(
+            dolfinx::mesh::GhostMode::shared_facet, 2));
     
     // Create a simple TriSoup with a triangle that crosses the mesh
     // Triangle in plane z = 0.5, covering entire xy domain

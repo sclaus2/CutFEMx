@@ -63,7 +63,7 @@ int main(int argc, char* argv[])
     
     // Create background mesh (unit cube with tetrahedra)
     int N = 8;  // Resolution
-    auto part = mesh::create_cell_partitioner(mesh::GhostMode::shared_facet);
+    auto part = mesh::create_cell_partitioner(mesh::GhostMode::shared_facet, 2);
     auto bg_mesh = std::make_shared<mesh::Mesh<T>>(
         mesh::create_box<T>(MPI_COMM_WORLD, 
                            {{{0.0, 0.0, 0.0}, {1.0, 1.0, 1.0}}},

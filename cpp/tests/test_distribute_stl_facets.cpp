@@ -72,7 +72,8 @@ TEST_CASE("distribute_stl_facets", "[mpi]")
         {{{0.0, 0.0, 0.0}, {1.0, 1.0, 1.0}}}, 
         {5, 5, 5},
         dolfinx::mesh::CellType::tetrahedron,
-        dolfinx::mesh::create_cell_partitioner(dolfinx::mesh::GhostMode::shared_facet));
+        dolfinx::mesh::create_cell_partitioner(
+            dolfinx::mesh::GhostMode::shared_facet, 2));
 
     // 2. Distribute STL options
     DistributeSTLOptions opt;

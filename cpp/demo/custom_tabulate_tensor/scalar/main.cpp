@@ -27,7 +27,8 @@ int main(int argc, char* argv[])
 
     int N = 11;
 
-    auto part = dolfinx::mesh::create_cell_partitioner(dolfinx::mesh::GhostMode::shared_facet);
+    auto part = dolfinx::mesh::create_cell_partitioner(
+        dolfinx::mesh::GhostMode::shared_facet, 2);
     auto mesh = std::make_shared<dolfinx::mesh::Mesh<T>>(
         dolfinx::mesh::create_rectangle(MPI_COMM_WORLD, {{{-1.0, -1.0}, {1.0, 1.0}}},
                                {N, N}, celltype, part));

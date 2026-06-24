@@ -2,6 +2,12 @@
 <img src="img/cutfemx_logo.png" alt="CutFEMx Logo" style="width:50%;" />
 </p>
 
+<p align="center">
+<a href="https://github.com/sclaus2/CutFEMx/actions/workflows/linux.yml">
+<img src="https://github.com/sclaus2/CutFEMx/actions/workflows/linux.yml/badge.svg" alt="Linux CI" />
+</a>
+</p>
+
 CutFEMx is a cut finite element library for FEniCSx. It supports cut finite
 element methods as described in
 
