@@ -21,6 +21,7 @@
 #include <cutfemx/distance/stl/cell_triangle_map.h>
 #include <cutfemx/mesh/cut_mesh.h>
 
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <memory>
@@ -163,6 +164,112 @@ SurfaceMesh<Real> extract_surface_from_levelset(
     return surface;
 }
 
+/// Build a surface mesh directly from background mesh facets.
+///
+/// This is useful when the interface is already represented by mesh facets
+/// (for example after MMG level-set remeshing) and should be used as the exact
+/// seed surface for FIM, rather than re-extracting a new zero contour from a
+/// nodal level-set field.
+template <typename Real>
+SurfaceMesh<Real> extract_surface_from_facets(
+    const dolfinx::mesh::Mesh<Real>& mesh,
+    std::span<const std::int32_t> facets)
+{
+    SurfaceMesh<Real> surface;
+
+    const int tdim = mesh.topology()->dim();
+    const int gdim = mesh.geometry().dim();
+    if (tdim != 2 && tdim != 3) {
+        throw std::invalid_argument(
+            "distance::extract_surface_from_facets supports 2D and 3D meshes");
+    }
+
+    surface.verts_per_elem = tdim;
+
+    auto topology = mesh.topology_mutable();
+    const int fdim = tdim - 1;
+    topology->create_connectivity(fdim, 0);
+    topology->create_connectivity(fdim, tdim);
+    auto facet_to_vertex = mesh.topology()->connectivity(fdim, 0);
+    auto facet_to_cell = mesh.topology()->connectivity(fdim, tdim);
+    auto facet_map = mesh.topology()->index_map(fdim);
+    auto vertex_map = mesh.topology()->index_map(0);
+    if (!facet_to_vertex || !facet_to_cell || !facet_map || !vertex_map) {
+        throw std::runtime_error("Mesh topology is incomplete.");
+    }
+
+    const std::int32_t num_facets =
+        static_cast<std::int32_t>(facet_map->size_local()
+                                  + facet_map->num_ghosts());
+    const std::int32_t num_vertices =
+        static_cast<std::int32_t>(vertex_map->size_local()
+                                  + vertex_map->num_ghosts());
+
+    VertexMapCache<Real> vmap;
+    vmap.build(mesh);
+    surface.X.assign(static_cast<std::size_t>(3 * num_vertices), Real(0));
+    for (std::int32_t v = 0; v < num_vertices; ++v) {
+        if (!vmap.has_geom(v)) {
+            continue;
+        }
+        const Real* x = vmap.coords(v);
+        for (int d = 0; d < gdim; ++d) {
+            surface.X[static_cast<std::size_t>(3 * v + d)] = x[d];
+        }
+    }
+
+    auto append_element =
+        [&](std::span<const std::int32_t> vertices, std::int32_t parent_cell)
+    {
+        for (std::int32_t v : vertices) {
+            surface.conn.push_back(v);
+        }
+        surface.parent_cell.push_back(parent_cell);
+    };
+
+    for (std::int32_t facet : facets) {
+        if (facet < 0 || facet >= num_facets) {
+            throw std::out_of_range("Interface facet index is out of range.");
+        }
+
+        auto vertices = facet_to_vertex->links(facet);
+        auto cells = facet_to_cell->links(facet);
+        if (cells.empty()) {
+            continue;
+        }
+
+        if (tdim == 2) {
+            if (vertices.size() != 2) {
+                throw std::runtime_error(
+                    "A 2D interface facet must have two vertices.");
+            }
+            for (std::int32_t c : cells) {
+                append_element(vertices, c);
+            }
+        } else {
+            if (vertices.size() == 3) {
+                for (std::int32_t c : cells) {
+                    append_element(vertices, c);
+                }
+            } else if (vertices.size() == 4) {
+                std::array<std::int32_t, 3> tri0{
+                    vertices[0], vertices[1], vertices[2]};
+                std::array<std::int32_t, 3> tri1{
+                    vertices[0], vertices[2], vertices[3]};
+                for (std::int32_t c : cells) {
+                    append_element(std::span<const std::int32_t>(tri0), c);
+                    append_element(std::span<const std::int32_t>(tri1), c);
+                }
+            } else {
+                throw std::runtime_error(
+                    "A 3D interface facet must have three or four vertices.");
+            }
+        }
+    }
+
+    return surface;
+}
+
 /// Build CellTriangleMap from SurfaceMesh (uses parent_cell info)
 /// This is more efficient than BVH since we already know parent cells
 template <typename Real>
@@ -284,6 +391,96 @@ void init_nearfield_from_surface(
             }
         }
     }
+}
+
+/// Reinitialize level set function as signed distance from tagged facets.
+///
+/// The supplied facets are treated as the exact zero-distance surface. The
+/// input function only supplies the sign convention, and is overwritten by the
+/// signed distance field.
+template <typename Real>
+void reinitialize_from_facets(
+    dolfinx::fem::Function<Real>& phi,
+    std::span<const std::int32_t> facets,
+    const FMMOptions& opt = FMMOptions{})
+{
+    auto mesh = phi.function_space()->mesh();
+    MPI_Comm comm = mesh->comm();
+    const int mpi_rank = dolfinx::MPI::rank(comm);
+
+    if (facets.empty()) {
+        if (mpi_rank == 0) {
+            std::cout << "Warning: No interface facets for reinitialization\n";
+        }
+        return;
+    }
+
+    std::span<const Real> phi_vals = phi.x()->array();
+    std::vector<int> original_signs(phi_vals.size());
+    for (std::size_t i = 0; i < phi_vals.size(); ++i) {
+        original_signs[i] = (phi_vals[i] >= 0) ? 1 : -1;
+    }
+
+    SurfaceMesh<Real> surface = extract_surface_from_facets(*mesh, facets);
+    if (surface.nE() == 0) {
+        if (mpi_rank == 0) {
+            std::cout << "Warning: Empty facet surface, skipping reinitialization\n";
+        }
+        return;
+    }
+
+    CellTriangleMap cell_map = build_map_from_surface(*mesh, surface);
+
+    auto topology = mesh->topology();
+    auto vertex_map = topology->index_map(0);
+    const std::int32_t num_vertices =
+        static_cast<std::int32_t>(vertex_map->size_local()
+                                  + vertex_map->num_ghosts());
+    std::vector<Real> dist(static_cast<std::size_t>(num_vertices),
+                           opt.inf_value);
+
+    init_nearfield_from_surface(*mesh, surface, cell_map,
+                                std::span<Real>(dist), opt);
+
+    std::vector<std::int32_t> seeds;
+    const std::int32_t num_owned = vertex_map->size_local();
+    for (std::int32_t v = 0; v < num_owned; ++v) {
+        if (dist[static_cast<std::size_t>(v)] < opt.inf_value) {
+            seeds.push_back(v);
+        }
+    }
+
+    int local_num_seeds = static_cast<int>(seeds.size());
+    int global_num_seeds = 0;
+    MPI_Allreduce(&local_num_seeds, &global_num_seeds, 1, MPI_INT, MPI_SUM,
+                  comm);
+    if (global_num_seeds == 0) {
+        throw std::runtime_error(
+            "Facet-seeded reinitialization found no near-field seeds.");
+    }
+
+    compute_distance_fim(*mesh, std::span<Real>(dist), seeds, opt);
+
+    VertexMapCache<Real> vmap;
+    vmap.build(*mesh, phi.function_space().get());
+
+    std::span<Real> func_vals = phi.x()->array();
+    for (std::int32_t v = 0; v < num_vertices; ++v) {
+        std::int32_t dof = vmap.vert_to_dof[v];
+        if (dof >= 0 && dof < static_cast<std::int32_t>(func_vals.size())) {
+            const Real d = std::abs(dist[static_cast<std::size_t>(v)]);
+            if (d <= Real(1.0e-13)) {
+                func_vals[static_cast<std::size_t>(dof)] = Real(0);
+            } else {
+                const Real s = (original_signs[static_cast<std::size_t>(dof)] >= 0)
+                                   ? Real(1)
+                                   : Real(-1);
+                func_vals[static_cast<std::size_t>(dof)] = s * d;
+            }
+        }
+    }
+
+    phi.x()->scatter_fwd();
 }
 
 /// Reinitialize level set function as signed distance function

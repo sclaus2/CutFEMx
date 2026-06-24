@@ -12,7 +12,8 @@ option(BUILD_SHARED_LIBS "Build cutfemx with shared libraries." ON)
 option(CUTFEMX_USE_MULTIPRECISION_PSM
        "Use geogram.psm.MultiPrecision for robust predicates." ON)
 
-find_package(Python 3.10 REQUIRED COMPONENTS Interpreter Development.Module)
+find_package(Python 3.10 REQUIRED COMPONENTS Interpreter Development.Module
+             OPTIONAL_COMPONENTS Development.SABIModule)
 message(STATUS "Using Python executable: ${Python_EXECUTABLE}")
 
 execute_process(
@@ -29,6 +30,42 @@ endif()
 list(APPEND CMAKE_PREFIX_PATH "${_cutfemx_nanobind_cmake_dir}")
 
 find_package(nanobind 2.0.0 REQUIRED CONFIG)
+
+execute_process(
+  COMMAND "${Python_EXECUTABLE}" -c
+          [=[
+import glob
+import importlib.util
+import os
+spec = importlib.util.find_spec("dolfinx")
+if spec is None or spec.origin is None:
+    raise SystemExit(0)
+path = os.path.dirname(spec.origin)
+matches = sorted(glob.glob(os.path.join(path, "cpp*.so")))
+if matches:
+    print(os.path.basename(matches[0]))
+]=]
+  OUTPUT_VARIABLE _cutfemx_dolfinx_cpp_extension
+  RESULT_VARIABLE _cutfemx_dolfinx_cpp_extension_result
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+set(_cutfemx_default_stable_abi OFF)
+if(_cutfemx_dolfinx_cpp_extension MATCHES "\\.abi3\\.")
+  set(_cutfemx_default_stable_abi ON)
+endif()
+set(CUTFEMX_PYTHON_STABLE_ABI "${_cutfemx_default_stable_abi}" CACHE BOOL
+    "Build the Python extension with the stable ABI used by ABI3 DOLFINx wheels.")
+if(_cutfemx_dolfinx_cpp_extension)
+  message(STATUS
+          "Detected DOLFINx Python extension: ${_cutfemx_dolfinx_cpp_extension}")
+endif()
+message(STATUS
+        "Build CutFEMx Python extension with stable ABI: ${CUTFEMX_PYTHON_STABLE_ABI}")
+if(CUTFEMX_PYTHON_STABLE_ABI AND NOT TARGET Python::SABIModule)
+  message(FATAL_ERROR
+          "CUTFEMX_PYTHON_STABLE_ABI requires Python::SABIModule. "
+          "Use a CMake/Python combination with Development.SABIModule support.")
+endif()
+
 find_package(MPI REQUIRED)
 find_package(OpenMP REQUIRED COMPONENTS CXX)
 
@@ -129,7 +166,12 @@ if(PETSC4PY_INCLUDE_DIR)
     CUTFEMX_HAS_RUNTIME_PETSC
     HAS_PETSC4PY)
 endif()
-nanobind_add_module(cutfemx_cpp ${WRAPPER_SOURCES} NOMINSIZE)
+set(CUTFEMX_NANOBIND_MODULE_OPTIONS NOMINSIZE)
+if(CUTFEMX_PYTHON_STABLE_ABI)
+  list(APPEND CUTFEMX_NANOBIND_MODULE_OPTIONS STABLE_ABI)
+endif()
+nanobind_add_module(cutfemx_cpp ${CUTFEMX_NANOBIND_MODULE_OPTIONS}
+                    ${WRAPPER_SOURCES})
 target_compile_definitions(cutfemx_cpp PRIVATE ${CUTFEMX_WRAPPER_DEFINITIONS})
 target_include_directories(cutfemx_cpp BEFORE PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp

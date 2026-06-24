@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 import basix.ufl
+import numpy as np
 from dolfinx.fem import Function, functionspace
 from dolfinx.mesh import (
     GhostMode,
@@ -37,6 +38,7 @@ __all__ = [
     "from_stl",
     "extend_normal_velocity",
     "reinitialize",
+    "reinitialize_from_facets",
 ]
 
 
@@ -156,6 +158,19 @@ def reinitialize(
 ) -> None:
     """Reinitialize a level-set function in place as a signed distance field."""
     _cpp.distance.reinitialize(phi._cpp_object, max_iter, tol)
+
+
+def reinitialize_from_facets(
+    phi: Function,
+    facets,
+    max_iter: int = 200,
+    tol: float = 1.0e-10,
+) -> None:
+    """Reinitialize ``phi`` from existing mesh facets as the zero interface."""
+    facet_array = np.ascontiguousarray(facets, dtype=np.int32)
+    _cpp.distance.reinitialize_from_facets(
+        phi._cpp_object, facet_array, max_iter, tol
+    )
 
 
 def extend_normal_velocity(

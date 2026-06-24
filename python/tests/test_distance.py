@@ -24,6 +24,7 @@ from cutfemx.distance import (
     extend_normal_velocity,
     from_stl,
     reinitialize,
+    reinitialize_from_facets,
 )
 
 from dolfinx.fem import Function, functionspace
@@ -82,6 +83,39 @@ def test_quad_reinitialize_updates_parabolic_level_set():
 
     assert np.max(np.abs(after - before)) > 1.0e-3
     assert post_error < 0.5 * pre_error
+
+
+def test_reinitialize_from_facets_uses_facets_as_zero_interface():
+    mesh = create_rectangle(
+        MPI.COMM_SELF,
+        [np.array([0.0, 0.0]), np.array([1.0, 1.0])],
+        [4, 4],
+        CellType.triangle,
+    )
+    V = functionspace(mesh, ("Lagrange", 1))
+    phi = Function(V)
+
+    coords = V.tabulate_dof_coordinates()
+    phi.x.array[:] = coords[:, 0] - 0.5
+    phi.x.array[np.isclose(coords[:, 0], 0.5)] = 0.25
+    phi.x.scatter_forward()
+
+    fdim = mesh.topology.dim - 1
+    mesh.topology.create_connectivity(fdim, 0)
+    f_to_v = mesh.topology.connectivity(fdim, 0)
+    points = mesh.geometry.x
+    facets = []
+    for facet in range(mesh.topology.index_map(fdim).size_local):
+        vertices = f_to_v.links(facet)
+        if np.allclose(points[vertices, 0], 0.5):
+            facets.append(facet)
+
+    assert facets
+
+    reinitialize_from_facets(phi, np.asarray(facets, dtype=np.int32), max_iter=500)
+
+    exact = coords[:, 0] - 0.5
+    np.testing.assert_allclose(phi.x.array, exact, atol=1.0e-12)
 
 
 def _write_cube_stl(path, lo=0.35, hi=0.65):
@@ -269,6 +303,35 @@ def test_higher_order_extension_output_interpolates_sampled_speed():
     np.testing.assert_allclose(result.speed.x.array[band], exact_speed[band], atol=0.08)
     assert np.min(result.speed.x.array) >= 0.70
     assert np.max(result.speed.x.array) <= 1.30
+
+
+def test_moving_circle_reinitialization_demo_smoke(tmp_path):
+    script = Path(__file__).parents[1] / "demo" / "demo_moving_circle_reinitialization.py"
+    output_csv = tmp_path / "moving_circle_reinitialization.csv"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--n",
+            "12",
+            "--steps",
+            "2",
+            "--corrector-steps",
+            "2",
+            "--no-plot",
+            "--output-csv",
+            str(output_csv),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    text = output_csv.read_text(encoding="utf-8")
+    assert "translation" in text
+    assert "rotation" in text
+    assert "predictor_corrector" in text
 
 
 def test_normal_extension_payload_values_are_consistent_across_ghosts():

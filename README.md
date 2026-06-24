@@ -269,6 +269,9 @@ The `python/demo` directory contains examples illustrating the usage of CutFEMx:
   field from an STL surface.
 - **Level-set reinitialization** (`demo_reinit.py`): convert a distorted level
   set into a signed distance field.
+- **Sututo/Sotuto CutFEM shape optimization** (`demo_sututo_cutfemx.py`):
+  run the cantilever level-set shape optimization with CutFEMx cut integration
+  and ghost-penalty stabilization.
 
 ## Geometry and Level Sets
 

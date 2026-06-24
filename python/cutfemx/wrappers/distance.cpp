@@ -173,6 +173,22 @@ void declare_distance(nb::module_& m, std::string type)
       nb::arg("phi"), nb::arg("max_iter") = 1000, nb::arg("tol") = 1e-10);
 
   m.def(
+      "reinitialize_from_facets",
+      [](std::shared_ptr<dolfinx::fem::Function<Real>> phi,
+         nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> facets,
+         int max_iter, double tol)
+      {
+        cutfemx::distance::FMMOptions opt;
+        opt.max_iter = max_iter;
+        opt.tol = tol;
+        cutfemx::distance::reinitialize_from_facets<Real>(
+            *phi, std::span<const std::int32_t>(facets.data(), facets.size()),
+            opt);
+      },
+      nb::arg("phi"), nb::arg("facets"), nb::arg("max_iter") = 1000,
+      nb::arg("tol") = 1e-10);
+
+  m.def(
       "extend_normal_velocity",
       [](std::shared_ptr<const dolfinx::fem::Function<Real>> phi,
          std::shared_ptr<const dolfinx::fem::Function<Real>> interface_speed,
