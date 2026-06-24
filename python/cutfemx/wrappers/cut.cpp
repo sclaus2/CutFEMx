@@ -7,6 +7,7 @@
 #include <array.h>
 
 #include <algorithm>
+#include <stdexcept>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/pair.h>
@@ -27,6 +28,13 @@ namespace nb = nanobind;
 
 namespace
 {
+template <typename Options>
+constexpr bool has_cut_refinement_options
+    = requires(Options& options, int value) {
+        options.max_refinement_iterations = value;
+        options.edge_max_depth = value;
+      };
+
 template <typename T>
 int local_facet_index(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
                       std::int32_t cell, std::int32_t facet)
@@ -116,8 +124,18 @@ inline cutcells::CutOptions make_cut_options(
       = cutcells::cell::TriangulationStrategy::classical;
   options.cut_approximation = std::move(cut_approximation);
   options.cut_approximation_order = cut_approximation_order;
-  options.max_refinement_iterations = max_refinement_iterations;
-  options.edge_max_depth = edge_max_depth;
+  if constexpr (has_cut_refinement_options<cutcells::CutOptions>)
+  {
+    options.max_refinement_iterations = max_refinement_iterations;
+    options.edge_max_depth = edge_max_depth;
+  }
+  else if (max_refinement_iterations != 8 || edge_max_depth != 20)
+  {
+    throw std::invalid_argument(
+        "This CutCells build does not support max_refinement_iterations or "
+        "edge_max_depth. Rebuild CutCells from a version that exposes adaptive "
+        "cut refinement options, or use the default values.");
+  }
   return options;
 }
 
