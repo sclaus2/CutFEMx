@@ -19,6 +19,7 @@ import cutfemx.petsc as cf_petsc
 
 import ufl
 from dolfinx import fem, la, mesh
+from dolfinx.fem import petsc as dolfinx_petsc
 
 pytestmark = pytest.mark.petsc4py
 
@@ -154,3 +155,109 @@ def test_petsc_runtime_matrix_accepts_mixed_subspace_extension_terms():
     assert dense.shape[0] == W.dofmap.index_map.size_local * W.dofmap.index_map_bs
     np.testing.assert_allclose(dense, dense.T, atol=1.0e-12)
     assert np.linalg.norm(dense) > 0.0
+
+
+def _interface_band_problem():
+    msh = mesh.create_rectangle(
+        MPI.COMM_SELF,
+        ((-1.0, -1.0), (1.0, 1.0)),
+        (8, 8),
+        cell_type=mesh.CellType.quadrilateral,
+    )
+    V_phi = fem.functionspace(msh, ("Lagrange", 1))
+    level_set = fem.Function(V_phi)
+    level_set.interpolate(lambda x: x[0] ** 2 + x[1] ** 2 - 0.6**2)
+
+    cut_data = cutfemx.cut(level_set)
+    cut_cells = cutfemx.locate_entities(cut_data, "phi=0")
+    rules = cutfemx.runtime_quadrature(cut_data, "phi=0", order=4)
+    dGamma = ufl.Measure("dx", domain=msh, subdomain_id=1, subdomain_data=rules)
+    dx_band = ufl.Measure("dx", domain=msh, subdomain_id=2, subdomain_data=cut_cells)
+
+    velocity = basix.ufl.element(
+        "Lagrange", msh.basix_cell(), 2, shape=(msh.geometry.dim,)
+    )
+    pressure = basix.ufl.element("Lagrange", msh.basix_cell(), 1)
+    W = fem.functionspace(msh, basix.ufl.mixed_element([velocity, pressure]))
+    u, p = ufl.TrialFunctions(W)
+    v, q = ufl.TestFunctions(W)
+
+    def mass_and_stiffness(u, p, v, q):
+        return (
+            ufl.inner(u, v)
+            + p * q
+            + ufl.inner(ufl.grad(u), ufl.grad(v))
+            + ufl.inner(ufl.grad(p), ufl.grad(q))
+        )
+
+    a = mass_and_stiffness(u, p, v, q) * dGamma
+    a += mass_and_stiffness(u, p, v, q) * dx_band
+    f = fem.Constant(msh, np.array([1.0, -0.5]))
+    L = ufl.inner(f, v) * dGamma
+    return W, cutfemx.fem.form(a), cutfemx.fem.form(L)
+
+
+def test_petsc_deactivate_outside_sets_diagonal_after_final_assembly():
+    W, a, L = _interface_band_problem()
+    domain = cutfemx.fem.active_domain(a)
+    inactive = domain.inactive_dofs
+    assert inactive.size > 0
+
+    A = cf_petsc.assemble_matrix(a)
+    A.assemble()
+    b = cf_petsc.assemble_vector(L)
+    b.ghostUpdate(addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE)
+
+    # Rows outside the active cells receive no assembly contribution. The
+    # scan must see the finally assembled matrix and leave it assembled.
+    np.testing.assert_array_equal(cf_petsc.zero_rows(A), inactive)
+    assert A.assembled
+
+    returned = cf_petsc.deactivate_outside(A, b, domain)
+    A.assemble()
+
+    assert returned is domain
+    assert cf_petsc.zero_rows(A) == []
+    np.testing.assert_allclose(A.getDiagonal().getArray()[inactive], 1.0)
+    np.testing.assert_allclose(b.getArray()[inactive], 0.0)
+
+    A_ref = cutfemx.fem.assemble_matrix(a)
+    A_ref.scatter_reverse()
+    b_ref = cutfemx.fem.assemble_vector(L)
+    b_ref.scatter_reverse(la.InsertMode.add)
+    cutfemx.fem.deactivate_outside(A_ref, b_ref, domain)
+    np.testing.assert_allclose(_dense_array(A), A_ref.to_dense())
+
+    ksp = PETSc.KSP().create(MPI.COMM_SELF)
+    ksp.setOperators(A)
+    ksp.setType(PETSc.KSP.Type.PREONLY)
+    ksp.getPC().setType(PETSc.PC.Type.LU)
+    x = A.createVecRight()
+    ksp.solve(b, x)
+
+    assert ksp.getConvergedReason() > 0
+    r = A.createVecLeft()
+    A.mult(x, r)
+    r.axpy(-1.0, b)
+    assert r.norm() < 1.0e-10 * b.norm()
+    np.testing.assert_allclose(x.getArray()[inactive], 0.0)
+    ksp.destroy()
+
+
+def test_petsc_deactivate_outside_rejects_matrix_without_diagonal():
+    W, a, _ = _interface_band_problem()
+    domain = cutfemx.fem.active_domain(a)
+
+    # A plain DOLFINx matrix only preallocates entries of the integration
+    # cells, so inactive rows have no diagonal to set.
+    msh = W.mesh
+    u = ufl.TrialFunction(W)
+    v = ufl.TestFunction(W)
+    cut_cells = domain.active_cells
+    dx_cells = ufl.Measure("dx", domain=msh, subdomain_data=[(1, cut_cells)])
+    A = dolfinx_petsc.assemble_matrix(fem.form(ufl.inner(u, v) * dx_cells(1)))
+    A.assemble()
+
+    with pytest.raises(RuntimeError, match="nonzero structure"):
+        cf_petsc.deactivate_outside(A, domain)
+    A.destroy()

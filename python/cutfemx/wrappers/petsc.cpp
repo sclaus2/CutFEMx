@@ -39,6 +39,7 @@
 #include <concepts>
 #include <functional>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -49,6 +50,66 @@ namespace nb = nanobind;
 
 namespace
 {
+/// Return a DOLFINx PETSc set function that throws when PETSc rejects a
+/// value. DOLFINx checks the PETSc error code only in debug builds, and its
+/// matrices forbid new nonzeros, so an entry outside the nonzero structure
+/// would otherwise be dropped silently.
+auto checked_set_fn(Mat A, InsertMode mode)
+{
+  return [set_fn = dolfinx::la::petsc::Matrix::set_fn(A, mode)](
+             std::span<const std::int32_t> rows,
+             std::span<const std::int32_t> cols,
+             std::span<const PetscScalar> vals) mutable -> int
+  {
+    if (PetscErrorCode ierr = set_fn(rows, cols, vals); ierr != 0)
+    {
+      const char* desc = nullptr;
+      PetscErrorMessage(ierr, &desc, nullptr);
+      throw std::runtime_error(
+          "Failed to set PETSc matrix values (PETSc error "
+          + std::to_string(ierr) + ": " + (desc ? desc : "unknown")
+          + "). Entries set after assembly, such as the diagonal of "
+            "deactivated rows, must be in the matrix nonzero structure; create "
+            "the matrix with cutfemx.petsc.create_matrix.");
+    }
+    return 0;
+  };
+}
+
+/// Write explicit zeros to the owned diagonal reserved by the runtime form
+/// sparsity pattern. PETSc drops preallocated entries that were never written
+/// at the first MAT_FINAL_ASSEMBLY, and DOLFINx matrices forbid new nonzeros
+/// afterwards. Rows outside the active integration domain receive no assembly
+/// contribution, so without explicit zeros deactivate_outside could not set
+/// their diagonal once the matrix has been assembled.
+template <dolfinx::scalar T, std::floating_point U>
+void write_reserved_diagonal(Mat A,
+                             const dolfinx_custom_data::fem::Form<T, U>& form)
+{
+  if (!dolfinx_custom_data::fem::reserves_deactivation_diagonal(form))
+    return;
+
+  const auto dofmap = form.function_spaces().at(0)->dofmaps().front();
+  std::vector<std::int32_t> rows(dofmap->index_map->size_local()
+                                 * dofmap->index_map_bs());
+  std::iota(rows.begin(), rows.end(), 0);
+  dolfinx_custom_data::fem::set_diagonal(checked_set_fn(A, ADD_VALUES),
+                                         std::span<const std::int32_t>(rows),
+                                         T(0));
+
+  // Reset the insert mode so the next caller may add or insert values.
+  MatAssemblyBegin(A, MAT_FLUSH_ASSEMBLY);
+  MatAssemblyEnd(A, MAT_FLUSH_ASSEMBLY);
+}
+
+/// Complete assembly so rows can be read back with MatGetRow, which PETSc
+/// rejects for matrices that are only flush-assembled.
+void finalize_for_row_access(Mat A)
+{
+  MatAssemblyBegin(A, MAT_FINAL_ASSEMBLY);
+  MatAssemblyEnd(A, MAT_FINAL_ASSEMBLY);
+}
+
 template <typename T>
 void validate_petsc_matrix_rows(Mat A, std::span<const std::int32_t> rows)
 {
@@ -110,7 +171,7 @@ void deactivate_outside_petsc_blocks(
     MatAssemblyEnd(Aii, MAT_FLUSH_ASSEMBLY);
 
     cutfemx::fem::deactivate_outside(
-        dolfinx::la::petsc::Matrix::set_fn(Aii, INSERT_VALUES),
+        checked_set_fn(Aii, INSERT_VALUES),
         *active_domains[i], diagonal);
   }
 }
@@ -149,7 +210,7 @@ void deactivate_outside_petsc_blocks(
     try
     {
       cutfemx::fem::deactivate_outside(
-          dolfinx::la::petsc::Matrix::set_fn(Aii, INSERT_VALUES),
+          checked_set_fn(Aii, INSERT_VALUES),
           std::span<T>(reinterpret_cast<T*>(array), n), *active_domains[i],
           diagonal, rhs_value);
     }
@@ -177,7 +238,11 @@ bool petsc_row_has_nonzero(const std::vector<Mat>& row_blocks,
     PetscInt ncols = 0;
     const PetscInt* cols = nullptr;
     const PetscScalar* values = nullptr;
-    MatGetRow(A, global_row, &ncols, &cols, &values);
+    if (PetscErrorCode ierr = MatGetRow(A, global_row, &ncols, &cols, &values);
+        ierr != 0)
+    {
+      dolfinx::la::petsc::error(ierr, __FILE__, "MatGetRow");
+    }
 
     bool nonzero = false;
     for (PetscInt k = 0; k < ncols; ++k)
@@ -202,8 +267,7 @@ std::vector<std::int32_t> zero_petsc_rows(Mat A, double tol)
   if (A == nullptr)
     throw std::runtime_error("Zero-row scan received a null PETSc matrix");
 
-  MatAssemblyBegin(A, MAT_FLUSH_ASSEMBLY);
-  MatAssemblyEnd(A, MAT_FLUSH_ASSEMBLY);
+  finalize_for_row_access(A);
 
   PetscInt rstart = 0;
   PetscInt rend = 0;
@@ -241,8 +305,7 @@ std::vector<std::vector<std::int32_t>> zero_petsc_block_rows(
     {
       if (A_blocks[i][j] == nullptr)
         continue;
-      MatAssemblyBegin(A_blocks[i][j], MAT_FLUSH_ASSEMBLY);
-      MatAssemblyEnd(A_blocks[i][j], MAT_FLUSH_ASSEMBLY);
+      finalize_for_row_access(A_blocks[i][j]);
 
       PetscInt block_rows = 0;
       PetscInt block_cols = 0;
@@ -290,8 +353,10 @@ void declare_runtime_petsc(nb::module_& m, std::string type)
         dolfinx::la::SparsityPattern sp
             = dolfinx_custom_data::fem::create_sparsity_pattern(form);
         sp.finalize();
-        return dolfinx::la::petsc::create_matrix(form.mesh()->comm(), sp,
-                                                 mat_type);
+        Mat A = dolfinx::la::petsc::create_matrix(form.mesh()->comm(), sp,
+                                                  mat_type);
+        write_reserved_diagonal(A, form);
+        return A;
       },
       nb::rv_policy::take_ownership, nb::arg("form"),
       nb::arg("type") = nb::none(),
@@ -327,8 +392,10 @@ void declare_runtime_petsc(nb::module_& m, std::string type)
               sp, *spaces[i], *aggregations[i]);
         }
         sp.finalize();
-        return dolfinx::la::petsc::create_matrix(form.mesh()->comm(), sp,
-                                                 mat_type);
+        Mat A = dolfinx::la::petsc::create_matrix(form.mesh()->comm(), sp,
+                                                  mat_type);
+        write_reserved_diagonal(A, form);
+        return A;
       },
       nb::rv_policy::take_ownership, nb::arg("form"), nb::arg("spaces"),
       nb::arg("aggregations"), nb::arg("type") = nb::none(),
@@ -455,7 +522,7 @@ void declare_runtime_petsc(nb::module_& m, std::string type)
           _bcs.push_back(*bc);
         }
         dolfinx_custom_data::fem::set_diagonal(
-            dolfinx::la::petsc::Matrix::set_fn(A, INSERT_VALUES), V, _bcs,
+            checked_set_fn(A, INSERT_VALUES), V, _bcs,
             diagonal);
       },
       nb::arg("A"), nb::arg("V"), nb::arg("bcs"), nb::arg("diagonal"),
@@ -478,7 +545,7 @@ void declare_runtime_petsc(nb::module_& m, std::string type)
               "ActiveDomain inactive rows are incompatible with the PETSc matrix row map");
         }
         cutfemx::fem::deactivate_outside(
-            dolfinx::la::petsc::Matrix::set_fn(A, INSERT_VALUES),
+            checked_set_fn(A, INSERT_VALUES),
             active_domain, diagonal);
       },
       nb::arg("A"), nb::arg("active_domain"), nb::arg("diagonal"),
@@ -511,7 +578,7 @@ void declare_runtime_petsc(nb::module_& m, std::string type)
         try
         {
           cutfemx::fem::deactivate_outside(
-              dolfinx::la::petsc::Matrix::set_fn(A, INSERT_VALUES),
+              checked_set_fn(A, INSERT_VALUES),
               std::span<T>(reinterpret_cast<T*>(array), n),
               active_domain, diagonal, rhs_value);
         }

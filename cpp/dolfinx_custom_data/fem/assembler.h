@@ -528,6 +528,23 @@ void build_sparsity_pattern(la::SparsityPattern& pattern, const Form<T, U>& a)
   t0.stop();
 }
 
+/// @brief Check whether the sparsity pattern of a form reserves diagonal
+/// entries for deactivation, i.e. whether its matrix is square.
+/// @param[in] a A bilinear form.
+/// @return True if insert_deactivation_diagonal adds diagonal entries.
+template <dolfinx::scalar T, std::floating_point U>
+bool reserves_deactivation_diagonal(const Form<T, U>& a)
+{
+  std::shared_ptr<const DofMap> dofmap0
+      = a.function_spaces().at(0)->dofmaps().front();
+  std::shared_ptr<const DofMap> dofmap1
+      = a.function_spaces().at(1)->dofmaps().front();
+  assert(dofmap0);
+  assert(dofmap1);
+  return dofmap0->index_map == dofmap1->index_map
+         and dofmap0->index_map_bs() == dofmap1->index_map_bs();
+}
+
 /// @brief Add diagonal entries for all locally visible row DOFs when the
 /// matrix is square.
 ///
@@ -539,19 +556,11 @@ template <dolfinx::scalar T, std::floating_point U>
 void insert_deactivation_diagonal(la::SparsityPattern& pattern,
                                   const Form<T, U>& a)
 {
+  if (!reserves_deactivation_diagonal(a))
+    return;
+
   std::shared_ptr<const DofMap> dofmap0
       = a.function_spaces().at(0)->dofmaps().front();
-  std::shared_ptr<const DofMap> dofmap1
-      = a.function_spaces().at(1)->dofmaps().front();
-  assert(dofmap0);
-  assert(dofmap1);
-
-  if (dofmap0->index_map != dofmap1->index_map
-      or dofmap0->index_map_bs() != dofmap1->index_map_bs())
-  {
-    return;
-  }
-
   const std::int32_t num_rows
       = dofmap0->index_map->size_local() + dofmap0->index_map->num_ghosts();
   std::vector<std::int32_t> rows(num_rows);
