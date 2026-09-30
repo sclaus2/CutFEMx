@@ -27,6 +27,105 @@ def _line_cut(n=(3, 3), offset=0.51):
     return msh, phi
 
 
+def _flower_cut():
+    msh = mesh.create_rectangle(
+        comm=MPI.COMM_WORLD,
+        points=((-0.95, -0.95), (0.95, 0.95)),
+        n=(14, 14),
+        cell_type=mesh.CellType.triangle,
+        diagonal=mesh.DiagonalType.left,
+    )
+    V = fem.functionspace(msh, ("Lagrange", 2))
+    phi = fem.Function(V)
+
+    def flower(x):
+        z = x[0] + 1j * x[1]
+        return (
+            np.abs(z) ** 2
+            - 0.30
+            - 4.5 * np.real(z**5) * np.exp(-np.abs(z) ** 2 / 0.35)
+        )
+
+    phi.interpolate(flower)
+    return msh, phi
+
+
+def _cell_neighbors(msh):
+    tdim = msh.topology.dim
+    msh.topology.create_entities(tdim - 1)
+    msh.topology.create_connectivity(tdim, tdim - 1)
+    msh.topology.create_connectivity(tdim - 1, tdim)
+    c_to_f = msh.topology.connectivity(tdim, tdim - 1)
+    f_to_c = msh.topology.connectivity(tdim - 1, tdim)
+    num_cells = msh.topology.index_map(tdim).size_local
+    return [
+        sorted({o for f in c_to_f.links(c) for o in f_to_c.links(f) if o != c})
+        for c in range(num_cells)
+    ]
+
+
+def _face_distance(neighbors, sources, allowed):
+    distance = {int(c): 0 for c in sources}
+    front = list(distance)
+    while front:
+        next_front = []
+        for c in front:
+            for o in neighbors[c]:
+                if o in allowed and o not in distance:
+                    distance[o] = distance[c] + 1
+                    next_front.append(o)
+        front = next_front
+    return distance
+
+
+@pytest.mark.parametrize(
+    "case, threshold, root_policy",
+    [
+        ("flower", 0.2, "interior_only"),
+        ("flower", 0.4, "interior_or_well_cut"),
+        ("line", 1.0, "interior_only"),
+    ],
+)
+def test_cell_aggregation_depth_is_face_distance_to_nearest_root(
+    case, threshold, root_policy
+):
+    msh, phi = _flower_cut() if case == "flower" else _line_cut(n=(6, 6))
+    cut_data = cutfemx.cut(phi)
+    aggregation = cutfemx.extensions.create_cell_aggregation(
+        cut_data, "phi < 0", threshold, root_policy=root_policy
+    )
+    assert aggregation.ill_posed_cells.size > 0
+    assert aggregation.rootless_cells.size == 0
+
+    neighbors = _cell_neighbors(msh)
+    active = set(aggregation.active_cells.tolist())
+    interior = set(aggregation.interior_cells.tolist())
+    well_posed = set(aggregation.well_posed_cells.tolist())
+    distance = _face_distance(neighbors, well_posed, active)
+    depth = aggregation.propagation_depth
+    root = aggregation.root_cell
+    aggregate = aggregation.aggregate_id
+
+    def stability(c):
+        return 1.0 if c in interior else aggregation.cut_volume_fraction[c]
+
+    for cell in aggregation.ill_posed_cells.tolist():
+        assert depth[cell] == distance[cell]
+        assert root[cell] in well_posed
+
+        # The root is reachable from the cell through cells of its aggregate.
+        members = {c for c in active if aggregate[c] == aggregate[cell]}
+        assert root[cell] in _face_distance(neighbors, [cell], members)
+
+        # The cell joined the most stable neighbour of the previous layer,
+        # ties going to the smallest cell index.
+        parents = [
+            o for o in neighbors[cell] if o in active and depth[o] == depth[cell] - 1
+        ]
+        parent = max(parents, key=lambda o: (stability(o), -o))
+        assert root[cell] == root[parent]
+
+
 def test_cell_aggregation_classifies_active_and_cut_cells():
     _, phi = _line_cut()
     cut_data = cutfemx.cut(phi)

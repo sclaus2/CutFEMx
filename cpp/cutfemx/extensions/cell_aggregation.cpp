@@ -13,6 +13,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #include <cutcells/ho_mesh_part_output.h>
 
@@ -225,34 +226,62 @@ CellAggregation<T> create_cell_aggregation(
   const int iteration_limit
       = max_iterations < 0 ? cut_data.num_local_cells : max_iterations;
 
-  for (int iteration = 0; iteration < iteration_limit; ++iteration)
-  {
-    int mapped_this_iteration = 0;
-    for (std::int32_t cell : aggregation.ill_posed_cells)
-    {
-      if (aggregation.root_cell[static_cast<std::size_t>(cell)] >= 0)
-        continue;
+  // Stability of a cell as a parent: its selected volume fraction, with
+  // interior cells counting as fully inside.
+  std::vector<T> stability = aggregation.cut_volume_fraction;
+  for (std::int32_t cell : aggregation.interior_cells)
+    stability[static_cast<std::size_t>(cell)] = T(1);
 
+  // Propagate roots layer by layer (Jacobi): iteration k only reads roots
+  // assigned in earlier iterations, so propagation_depth is the face distance
+  // through active cells to the nearest root. A cell joins the most stable
+  // mapped neighbour, ties going to the smallest cell index.
+  std::vector<std::int32_t> unmapped = aggregation.ill_posed_cells;
+  std::vector<std::int32_t> still_unmapped;
+  std::vector<std::pair<std::int32_t, std::int32_t>> layer; // (cell, parent)
+  for (int iteration = 0; iteration < iteration_limit && !unmapped.empty();
+       ++iteration)
+  {
+    layer.clear();
+    still_unmapped.clear();
+    for (std::int32_t cell : unmapped)
+    {
+      std::int32_t parent = -1;
+      // Neighbours are sorted, so a strict comparison keeps the smallest
+      // index among equally stable candidates.
       for (std::int32_t other : neighbors[static_cast<std::size_t>(cell)])
       {
-        if (!active_set.contains(other))
+        if (!active_set.contains(other)
+            || aggregation.root_cell[static_cast<std::size_t>(other)] < 0)
+        {
           continue;
-        const std::int32_t root =
-            aggregation.root_cell[static_cast<std::size_t>(other)];
-        if (root < 0)
-          continue;
-
-        aggregation.root_cell[static_cast<std::size_t>(cell)] = root;
-        aggregation.aggregate_id[static_cast<std::size_t>(cell)]
-            = aggregation.aggregate_id[static_cast<std::size_t>(other)];
-        aggregation.propagation_depth[static_cast<std::size_t>(cell)]
-            = aggregation.propagation_depth[static_cast<std::size_t>(other)] + 1;
-        ++mapped_this_iteration;
-        break;
+        }
+        if (parent < 0
+            || stability[static_cast<std::size_t>(other)]
+                   > stability[static_cast<std::size_t>(parent)])
+        {
+          parent = other;
+        }
       }
+
+      if (parent < 0)
+        still_unmapped.push_back(cell);
+      else
+        layer.emplace_back(cell, parent);
     }
-    if (mapped_this_iteration == 0)
+    if (layer.empty())
       break;
+
+    for (auto [cell, parent] : layer)
+    {
+      aggregation.root_cell[static_cast<std::size_t>(cell)]
+          = aggregation.root_cell[static_cast<std::size_t>(parent)];
+      aggregation.aggregate_id[static_cast<std::size_t>(cell)]
+          = aggregation.aggregate_id[static_cast<std::size_t>(parent)];
+      aggregation.propagation_depth[static_cast<std::size_t>(cell)]
+          = aggregation.propagation_depth[static_cast<std::size_t>(parent)] + 1;
+    }
+    std::swap(unmapped, still_unmapped);
   }
 
   for (std::int32_t cell : aggregation.ill_posed_cells)
