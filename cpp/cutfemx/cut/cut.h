@@ -160,10 +160,21 @@ template <std::floating_point T>
 std::vector<std::int32_t> locate_entities(const CutData<T>& cut_data,
                                           std::string_view ls_part);
 
+/// Return sorted raw local interior facet ids whose two adjacent cells both
+/// lie in `cells`.
 template <std::floating_point T>
 std::vector<std::int32_t> interior_facets_for_cells(
     std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
     std::span<const std::int32_t> cells, bool include_ghosts);
+
+/// Return sorted raw local interior facet ids that are incident to at least
+/// one cell of `cells` and whose two adjacent cells both lie in
+/// `active_cells`. Cells in `cells` are not implicitly active.
+template <std::floating_point T>
+std::vector<std::int32_t> interior_facets_for_cells(
+    std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
+    std::span<const std::int32_t> cells,
+    std::span<const std::int32_t> active_cells, bool include_ghosts);
 
 template <std::floating_point T>
 mesh::CutMesh<T> create_cut_mesh(const CutData<T>& cut_data,

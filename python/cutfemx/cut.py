@@ -331,22 +331,32 @@ def runtime_quadratures(
     }
 
 
+def _as_local_cells(cells: npt.ArrayLike) -> npt.NDArray[np.int32]:
+    return np.ascontiguousarray(np.asarray(cells, dtype=np.int32).ravel())
+
+
 def interior_facets_for_cells(
     msh: Mesh,
     cells: npt.ArrayLike,
     *,
     include_ghosts: bool = False,
+    active_cells: npt.ArrayLike | None = None,
 ) -> npt.NDArray[np.int32]:
-    """Return raw local interior facet ids whose adjacent cells are in ``cells``."""
-    local_cells = np.ascontiguousarray(np.asarray(cells, dtype=np.int32).ravel())
+    """Return raw local interior facet ids whose adjacent cells are in ``cells``.
+
+    With ``active_cells``, return the facets of ``cells`` whose two adjacent
+    cells both lie in ``active_cells`` instead.
+    """
+    local_cells = _as_local_cells(cells)
+    local_active = None if active_cells is None else _as_local_cells(active_cells)
     dtype = np.dtype(msh.geometry.x.dtype)
     if dtype == np.dtype(np.float64):
         return _cpp.interior_facets_for_cells_float64(
-            msh._cpp_object, local_cells, include_ghosts
+            msh._cpp_object, local_cells, include_ghosts, local_active
         )
     if dtype == np.dtype(np.float32):
         return _cpp.interior_facets_for_cells_float32(
-            msh._cpp_object, local_cells, include_ghosts
+            msh._cpp_object, local_cells, include_ghosts, local_active
         )
     raise ValueError(f"Unsupported mesh geometry dtype {dtype}.")
 
@@ -364,31 +374,11 @@ def ghost_penalty_facets(
     if cut_data.entity_dim is not None and cut_data.entity_dim != cut_data.mesh.topology.dim:
         raise ValueError("ghost_penalty_facets expects cell-hosted CutData.")
 
-    msh = cut_data.mesh
-    tdim = msh.topology.dim
-    fdim = tdim - 1
-    msh.topology.create_entities(fdim)
-    msh.topology.create_connectivity(tdim, fdim)
-    msh.topology.create_connectivity(fdim, tdim)
-    cell_to_facet = msh.topology.connectivity(tdim, fdim)
-    facet_to_cell = msh.topology.connectivity(fdim, tdim)
-    if cell_to_facet is None or facet_to_cell is None:
-        raise RuntimeError("Facet-cell connectivity is unavailable.")
-
     cut_cells = locate_entities(cut_data, "phi=0")
     selected_cells = locate_entities(cut_data, selector)
-    active_cells = set(np.concatenate([cut_cells, selected_cells]).tolist())
-    num_owned_facets = msh.topology.index_map(fdim).size_local
-
-    facets: set[int] = set()
-    for cell in cut_cells:
-        for facet in cell_to_facet.links(int(cell)):
-            facet = int(facet)
-            if not include_ghosts and facet >= num_owned_facets:
-                continue
-            adjacent = [int(c) for c in facet_to_cell.links(facet)]
-            if len(adjacent) != 2:
-                continue
-            if all(c in active_cells for c in adjacent):
-                facets.add(facet)
-    return np.asarray(sorted(facets), dtype=np.int32)
+    return interior_facets_for_cells(
+        cut_data.mesh,
+        cut_cells,
+        include_ghosts=include_ghosts,
+        active_cells=np.concatenate([cut_cells, selected_cells]),
+    )

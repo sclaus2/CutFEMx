@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
@@ -343,16 +344,23 @@ void declare_cut_api(nb::module_& m, std::string type)
       ("interior_facets_for_cells_" + type).c_str(),
       [](std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
          nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> cells,
-         bool include_ghosts)
+         bool include_ghosts,
+         std::optional<
+             nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig>>
+             active_cells)
       {
+        std::span<const std::int32_t> cells_span(cells.data(), cells.size());
+        std::span<const std::int32_t> active_span = cells_span;
+        if (active_cells)
+          active_span = {active_cells->data(), active_cells->size()};
         return dolfinx_wrappers::as_nbarray(
             cutfemx::interior_facets_for_cells<T>(
-                std::move(mesh),
-                std::span<const std::int32_t>(cells.data(), cells.size()),
-                include_ghosts));
+                std::move(mesh), cells_span, active_span, include_ghosts));
       },
       nb::arg("mesh"), nb::arg("cells"), nb::arg("include_ghosts") = false,
-      "Return raw local interior facet ids touched by cells.");
+      nb::arg("active_cells").none() = nb::none(),
+      "Return raw local interior facet ids touched by cells whose adjacent "
+      "cells are both active (active_cells defaults to cells).");
 
   m.def(
       "create_cut_mesh",

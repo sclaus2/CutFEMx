@@ -928,6 +928,16 @@ std::vector<std::int32_t> interior_facets_for_cells(
     std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
     std::span<const std::int32_t> cells, bool include_ghosts)
 {
+  return interior_facets_for_cells<T>(std::move(mesh), cells, cells,
+                                      include_ghosts);
+}
+
+template <std::floating_point T>
+std::vector<std::int32_t> interior_facets_for_cells(
+    std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
+    std::span<const std::int32_t> cells,
+    std::span<const std::int32_t> active_cells, bool include_ghosts)
+{
   if (!mesh)
     throw std::runtime_error("Cannot locate interior facets without a mesh.");
 
@@ -956,7 +966,7 @@ std::vector<std::int32_t> interior_facets_for_cells(
       = static_cast<std::int32_t>(facet_map->size_local());
 
   std::vector<std::uint8_t> selected_cells(num_cells, 0);
-  for (std::int32_t cell : cells)
+  for (std::int32_t cell : active_cells)
   {
     if (cell < 0 || cell >= num_cells)
       throw std::out_of_range("Cell index is out of range.");
@@ -966,6 +976,8 @@ std::vector<std::int32_t> interior_facets_for_cells(
   std::vector<std::int32_t> facets;
   for (std::int32_t cell : cells)
   {
+    if (cell < 0 || cell >= num_cells)
+      throw std::out_of_range("Cell index is out of range.");
     for (std::int32_t facet : c_to_f->links(cell))
     {
       if (!include_ghosts && facet >= num_owned_facets)
@@ -1476,6 +1488,12 @@ template std::vector<std::int32_t> interior_facets_for_cells(
 template std::vector<std::int32_t> interior_facets_for_cells(
     std::shared_ptr<const dolfinx::mesh::Mesh<float>>,
     std::span<const std::int32_t>, bool);
+template std::vector<std::int32_t> interior_facets_for_cells(
+    std::shared_ptr<const dolfinx::mesh::Mesh<double>>,
+    std::span<const std::int32_t>, std::span<const std::int32_t>, bool);
+template std::vector<std::int32_t> interior_facets_for_cells(
+    std::shared_ptr<const dolfinx::mesh::Mesh<float>>,
+    std::span<const std::int32_t>, std::span<const std::int32_t>, bool);
 
 template mesh::CutMesh<double> create_cut_mesh(
     const CutData<double>&, std::string_view, std::string_view);

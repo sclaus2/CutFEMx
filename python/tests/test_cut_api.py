@@ -1174,6 +1174,47 @@ def test_cut_api_ghost_penalty_facets_are_owned_unique_interior_facets():
     assert all(len(facet_to_cell.links(int(facet))) == 2 for facet in facets)
 
 
+@pytest.mark.parametrize("selector", ["phi<0", "phi>0"])
+def test_cut_api_ghost_penalty_facets_match_facet_band_definition(selector):
+    msh = mesh.create_box(
+        MPI.COMM_WORLD,
+        ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)),
+        (6, 6, 6),
+        cell_type=mesh.CellType.tetrahedron,
+    )
+    V = fem.functionspace(msh, ("Lagrange", 1))
+    level_set = fem.Function(V)
+    level_set.interpolate(lambda x: np.sqrt(x[0] ** 2 + x[1] ** 2 + x[2] ** 2) - 0.7)
+    cutter = cutfemx.cut(level_set)
+    facets = cutfemx.ghost_penalty_facets(cutter, selector)
+
+    tdim = msh.topology.dim
+    fdim = tdim - 1
+    msh.topology.create_connectivity(tdim, fdim)
+    cell_to_facet = msh.topology.connectivity(tdim, fdim)
+    facet_to_cell = msh.topology.connectivity(fdim, tdim)
+    num_owned_facets = msh.topology.index_map(fdim).size_local
+    cut_cells = cutfemx.locate_entities(cutter, "phi=0")
+    active = set(cut_cells.tolist()) | set(cutfemx.locate_entities(cutter, selector).tolist())
+    expected = sorted(
+        {
+            int(facet)
+            for cell in cut_cells
+            for facet in cell_to_facet.links(int(cell))
+            if facet < num_owned_facets
+            and len(facet_to_cell.links(int(facet))) == 2
+            and all(int(c) in active for c in facet_to_cell.links(int(facet)))
+        }
+    )
+
+    assert facets.dtype == np.int32
+    assert np.array_equal(facets, np.asarray(expected, dtype=np.int32))
+    np.testing.assert_array_equal(
+        facets,
+        cutfemx.interior_facets_for_cells(msh, cut_cells, active_cells=sorted(active)),
+    )
+
+
 def test_cut_api_interior_facets_for_cells_stays_inside_cell_set():
     msh = mesh.create_unit_square(MPI.COMM_WORLD, 4, 4)
     tdim = msh.topology.dim
@@ -1195,6 +1236,16 @@ def test_cut_api_interior_facets_for_cells_stays_inside_cell_set():
     all_cells = np.arange(num_cells, dtype=np.int32)
     all_facets = cutfemx.interior_facets_for_cells(msh, all_cells)
     assert np.array_equal(all_facets, _interior_facet_indices(msh))
+
+    # Seeding with a subset keeps only the facets incident to the seeds.
+    seeds = selected[:3]
+    seeded = cutfemx.interior_facets_for_cells(msh, seeds, active_cells=all_cells)
+    msh.topology.create_connectivity(tdim, fdim)
+    cell_to_facet = msh.topology.connectivity(tdim, fdim)
+    seed_facets = {int(f) for cell in seeds for f in cell_to_facet.links(int(cell))}
+    assert np.array_equal(seeded, np.intersect1d(all_facets, sorted(seed_facets)))
+    # Seed cells are not implicitly active.
+    assert cutfemx.interior_facets_for_cells(msh, seeds, active_cells=[]).size == 0
 
 
 def test_cutfemx_standard_only_form_active_domain_allows_no_inactive_dofs():
