@@ -4,6 +4,7 @@
 #
 # SPDX-License-Identifier:    MIT
 
+import time
 from collections import Counter
 
 from mpi4py import MPI
@@ -1298,6 +1299,76 @@ def test_cutfemx_runtime_area_and_perimeter_for_circle():
 
     assert abs(area - np.pi * radius**2) < 1.0e-2
     assert abs(perimeter - 2.0 * np.pi * radius) < 1.0e-2
+
+
+@pytest.mark.parametrize(
+    "level_set_expr, exact_2d",
+    [
+        # Zero set is a layer of mesh vertices and facets.
+        (lambda x: x[0] - 0.5, (3.0, 1.0, 2.0)),
+        # Zero set runs through mesh vertices and cuts cells diagonally.
+        (lambda x: x[0] + x[1] - 0.5, (2.875, 1.125, 1.5 * np.sqrt(2.0))),
+    ],
+    ids=["facet_aligned", "vertex_diagonal"],
+)
+@pytest.mark.parametrize(
+    "cell_type",
+    [
+        mesh.CellType.triangle,
+        mesh.CellType.quadrilateral,
+        mesh.CellType.tetrahedron,
+        mesh.CellType.hexahedron,
+    ],
+    ids=lambda cell_type: cell_type.name,
+)
+def test_cutfemx_linear_level_set_through_mesh_vertices(
+    cell_type, level_set_expr, exact_2d
+):
+    # Cells touching the zero set only through vertices, edges or facets used
+    # to be red-refined in every certification iteration (37 s for the 4x4x4
+    # tetrahedral box) and facet-aligned interfaces were counted twice.
+    if cell_type in (mesh.CellType.tetrahedron, mesh.CellType.hexahedron):
+        msh = mesh.create_box(
+            MPI.COMM_WORLD, ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)), (4, 4, 4),
+            cell_type=cell_type,
+        )
+        exact = tuple(2.0 * value for value in exact_2d)
+    else:
+        msh = mesh.create_rectangle(
+            MPI.COMM_WORLD, ((-1.0, -1.0), (1.0, 1.0)), (4, 4), cell_type=cell_type
+        )
+        exact = exact_2d
+    V = fem.functionspace(msh, ("Lagrange", 1))
+    level_set = fem.Function(V)
+    level_set.interpolate(level_set_expr)
+
+    start = time.perf_counter()
+    cutter = cutfemx.cut(level_set)
+    elapsed = msh.comm.allreduce(time.perf_counter() - start, op=MPI.MAX)
+    assert elapsed < 5.0, f"cutfemx.cut took {elapsed:.3f}s"
+
+    one = fem.Constant(msh, np.float64(1.0))
+    measures = []
+    for part in ("phi<0", "phi>0"):
+        dx_part = ufl.Measure(
+            "dx",
+            domain=msh,
+            subdomain_id=0,
+            subdomain_data=[
+                cutfemx.locate_entities(cutter, part),
+                cutfemx.runtime_quadrature(cutter, part, order=1),
+            ],
+        )
+        measures.append(cutfemx.fem.assemble_scalar(cutfemx.fem.form(one * dx_part)))
+    dx_interface = ufl.Measure(
+        "dx",
+        domain=msh,
+        subdomain_data=cutfemx.runtime_quadrature(cutter, "phi=0", order=1),
+    )
+    measures.append(cutfemx.fem.assemble_scalar(cutfemx.fem.form(one * dx_interface)))
+    measures = [msh.comm.allreduce(value, op=MPI.SUM) for value in measures]
+
+    np.testing.assert_allclose(measures, exact, rtol=1.0e-12)
 
 
 @pytest.mark.parametrize("backend", ["algoim", "algoim_general"])
