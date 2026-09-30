@@ -17,6 +17,7 @@
 #include <dolfinx/la/MatrixCSR.h>
 #include <dolfinx/la/Vector.h>
 #include <memory>
+#include <mpi.h>
 #include <numeric>
 #include <span>
 #include <stdexcept>
@@ -153,7 +154,14 @@ collect_active_cells(const dolfinx_custom_data::fem::Form<T, U>& form)
   }
 
   cells = deduplicate_cells(std::move(cells));
-  if (cells.empty())
+
+  // A process may own no active cells, but building the indicator is
+  // collective, so only fail when no process has active cells.
+  const int has_cells = cells.empty() ? 0 : 1;
+  int any_cells = 0;
+  MPI_Allreduce(&has_cells, &any_cells, 1, MPI_INT, MPI_LOR,
+                form.mesh()->comm());
+  if (!any_cells)
   {
     throw std::invalid_argument(
         "cutfemx.fem.active_domain found no active background cells");

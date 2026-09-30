@@ -19,6 +19,10 @@ import ufl
 from dolfinx import fem, la, mesh
 
 
+def _line(x):
+    return x[0] - 0.51
+
+
 def _line_level_set():
     msh = mesh.create_rectangle(
         comm=MPI.COMM_WORLD,
@@ -27,13 +31,24 @@ def _line_level_set():
         cell_type=mesh.CellType.triangle,
     )
 
-    def line(x):
-        return x[0] - 0.51
-
     V = fem.functionspace(msh, ("Lagrange", 1))
     level_set = fem.Function(V)
-    level_set.interpolate(line)
+    level_set.interpolate(_line)
     return msh, level_set
+
+
+def _owned_cells_crossing(msh, phi):
+    """Owned cells with vertices strictly on both sides of ``phi = 0``.
+
+    For an affine ``phi`` these are the cells the zero set passes through.
+    """
+    tdim = msh.topology.dim
+    owned = np.arange(msh.topology.index_map(tdim).size_local, dtype=np.int32)
+    one_sided = np.union1d(
+        mesh.locate_entities(msh, tdim, lambda x: phi(x) <= 0.0),
+        mesh.locate_entities(msh, tdim, lambda x: phi(x) >= 0.0),
+    )
+    return np.setdiff1d(owned, one_sided)
 
 
 def _quadratic_circle_level_set():
@@ -1509,6 +1524,41 @@ def test_cutfemx_active_domain_supports_mixed_space():
     assert domain.inactive_dofs.size > 0
     assert returned is domain
     np.testing.assert_allclose(b.array[domain.inactive_dofs], 0.0)
+
+
+def test_cutfemx_active_domain_is_collective_with_empty_processes():
+    msh, level_set = _line_level_set()
+    tdim = msh.topology.dim
+    V = fem.functionspace(msh, ("Lagrange", 1))
+    u = ufl.TrialFunction(V)
+    v = ufl.TestFunction(V)
+
+    def mass_form(cells):
+        cutter = cutfemx.cut(level_set, cells, tdim)
+        dx_inside = ufl.Measure(
+            "dx",
+            domain=msh,
+            subdomain_id=0,
+            subdomain_data=[
+                cutfemx.locate_entities(cutter, "phi<0"),
+                cutfemx.runtime_quadrature(cutter, "phi<0", order=2),
+            ],
+        )
+        return cutfemx.fem.form(u * v * dx_inside)
+
+    # Host the cut on a single process with cut cells, which are active for
+    # phi<0, so that all other processes have no active cells.
+    owned = np.arange(msh.topology.index_map(tdim).size_local, dtype=np.int32)
+    has_cut_cells = _owned_cells_crossing(msh, _line).size > 0
+    host_rank = msh.comm.allgather(has_cut_cells).index(True)
+    cells = owned if msh.comm.rank == host_rank else owned[:0]
+    domain = cutfemx.fem.active_domain(mass_form(cells))
+
+    assert (domain.active_cells.size > 0) == (msh.comm.rank == host_rank)
+    assert set(domain.active_cells.tolist()).issubset(set(cells.tolist()))
+
+    with pytest.raises(ValueError, match="no active background cells"):
+        cutfemx.fem.active_domain(mass_form(owned[:0]))
 
 
 def test_cutfemx_deactivation_removes_old_selector_api():
