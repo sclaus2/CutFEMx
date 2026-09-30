@@ -13,9 +13,8 @@ construct runintgen custom data from CutFEMx quadrature providers.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from math import prod
-from types import MethodType
+from dataclasses import dataclass
+from functools import cache
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
@@ -91,41 +90,23 @@ def _as_dolfinx_mesh(value: Any) -> Any:
     return value
 
 
-def _quadrature_function_set_values(
-    self: Any,
-    quadrature: Any,
-    values: npt.ArrayLike,
-) -> None:
-    rule_id = getattr(quadrature, "rule_id", None)
-    if rule_id is None:
-        raise TypeError("quadrature must carry a stable rule_id.")
-    self._runintgen_values[str(rule_id)] = values
-    self._runintgen_cache.pop(str(rule_id), None)
+@cache
+def _quadrature_function_class() -> type:
+    """Return the DOLFINx Function subclass with quadrature-function semantics."""
+    dolfinx_fem, _ = _require_dolfinx()
+    from runintgen.quadrature_function import QuadratureFunctionMixin
 
+    class DolfinxQuadratureFunction(dolfinx_fem.Function, QuadratureFunctionMixin):
+        """DOLFINx Function whose form values are given at quadrature points.
 
-def _quadrature_function_set_evaluator(self: Any, evaluator: Any) -> None:
-    self._runintgen_source = evaluator
-    self._runintgen_cache.clear()
+        Runtime kernels load its values from ``custom_data``; the DOLFINx dof
+        vector is only used as a background source when no values, evaluator
+        or callable are attached.
+        """
 
+        is_cellwise_constant = QuadratureFunctionMixin.is_cellwise_constant
 
-def _quadrature_function_invalidate(self: Any) -> None:
-    self._runintgen_cache.clear()
-    source = getattr(self, "_runintgen_source", None)
-    invalidate = getattr(source, "invalidate", None)
-    if invalidate is not None:
-        invalidate()
-
-
-def _quadrature_function_update(self: Any, *, version: int | None = None) -> None:
-    source = getattr(self, "_runintgen_source", None)
-    update = getattr(source, "update", None)
-    if update is not None:
-        update(version=version)
-    self._runintgen_cache.clear()
-
-
-def _quadrature_function_is_cellwise_constant(self: Any) -> bool:
-    return False
+    return DolfinxQuadratureFunction
 
 
 def QuadratureFunction(
@@ -137,9 +118,13 @@ def QuadratureFunction(
     shape: tuple[int, ...] = (),
     dtype: npt.DTypeLike | None = None,
 ) -> Any:
-    """Create a DOLFINx Function with runintgen quadrature semantics."""
+    """Create a DOLFINx Function with runintgen quadrature semantics.
+
+    Values are supplied per runtime rule set with ``set_values(rules, values,
+    restriction=None)``, by a context-aware evaluator (``set_evaluator``), or by
+    ``source(physical_points)``; see ``runintgen.QuadratureFunctionMixin``.
+    """
     dolfinx_fem, _ = _require_dolfinx()
-    from runintgen.quadrature_function import QuadratureFunctionSpec
 
     if space is not None:
         function_space = space
@@ -150,7 +135,7 @@ def QuadratureFunction(
         element = ("DG", 0, shape) if shape else ("DG", 0)
         function_space = dolfinx_fem.functionspace(mesh, element)
 
-    function = dolfinx_fem.Function(function_space, name=name, dtype=dtype)
+    function = _quadrature_function_class()(function_space, name=name, dtype=dtype)
 
     value_shape = tuple(shape or function.ufl_shape)
     if shape and value_shape != tuple(function.ufl_shape):
@@ -158,23 +143,7 @@ def QuadratureFunction(
             "The supplied shape does not match the DOLFINx FunctionSpace "
             f"shape {tuple(function.ufl_shape)}."
         )
-    value_size = int(prod(value_shape)) if value_shape else 1
-    function._runintgen_quadrature_function = QuadratureFunctionSpec(
-        name=name,
-        value_shape=value_shape,
-        value_size=value_size,
-    )
-    function._runintgen_source = source
-    function._runintgen_values = {}
-    function._runintgen_cache = {}
-    function.set_values = MethodType(_quadrature_function_set_values, function)
-    function.set_evaluator = MethodType(_quadrature_function_set_evaluator, function)
-    function.invalidate = MethodType(_quadrature_function_invalidate, function)
-    function.update = MethodType(_quadrature_function_update, function)
-    function.is_cellwise_constant = MethodType(
-        _quadrature_function_is_cellwise_constant,
-        function,
-    )
+    function._init_quadrature_function(source, name=name, value_shape=value_shape)
     return function
 
 
@@ -240,10 +209,8 @@ def compile_form(
         form_compiler_options=p_ffcx,
         jit_options=jit_options,
     )
-    sidecar = _rebind_quadrature_function_terminals(
-        module._runintgen_jit.forms[0],
-        form,
-    )
+    # runintgen rebinds providers and QuadratureFunction terminals of cached
+    # modules to this form.
     return CompiledRunintForm(
         ufl_form=form,
         ufcx_form=ufcx_form,
@@ -251,54 +218,8 @@ def compile_form(
         code=code,
         dtype=scalar_dtype,
         geometry_dtype=geometry_dtype,
-        jit_info=sidecar,
+        jit_info=module._runintgen_jit.forms[0],
     )
-
-
-def _rebind_quadrature_function_terminals(jit_info: Any, form: ufl.Form) -> Any:
-    """Attach current-form quadrature function terminals to cached JIT metadata."""
-    from runintgen.quadrature_function import (
-        form_quadrature_functions,
-        quadrature_function_spec,
-    )
-
-    old_infos = list(getattr(jit_info.module, "quadrature_functions", []) or [])
-    if not old_infos:
-        return jit_info
-
-    current_terminals = list(form_quadrature_functions(form))
-    old_terminals = []
-    seen_old: set[int] = set()
-    for info in sorted(old_infos, key=lambda item: (item.coefficient_number, item.slot)):
-        terminal_id = id(info.terminal)
-        if terminal_id in seen_old:
-            continue
-        seen_old.add(terminal_id)
-        old_terminals.append(info.terminal)
-
-    if len(current_terminals) != len(old_terminals):
-        return jit_info
-
-    terminal_map: dict[int, Any] = {}
-    for old_terminal, current_terminal in zip(
-        old_terminals, current_terminals, strict=True
-    ):
-        old_spec = quadrature_function_spec(old_terminal)
-        current_spec = quadrature_function_spec(current_terminal)
-        if (
-            old_spec.name != current_spec.name
-            or old_spec.value_shape != current_spec.value_shape
-            or old_spec.value_size != current_spec.value_size
-        ):
-            return jit_info
-        terminal_map[id(old_terminal)] = current_terminal
-
-    rebound_infos = [
-        replace(info, terminal=terminal_map.get(id(info.terminal), info.terminal))
-        for info in old_infos
-    ]
-    module = replace(jit_info.module, quadrature_functions=rebound_infos)
-    return replace(jit_info, module=module)
 
 
 def _normalised_subdomain_id(value: Any) -> int:
@@ -322,27 +243,15 @@ def _runtime_providers(jit_info: JITFormInfo) -> dict[tuple[str, int], Any]:
 
 
 def _reject_standard_quadrature_functions(form_object: ufl.Form) -> None:
-    """Reject standard-integral quadrature functions until supported."""
-    from runintgen.measures import is_runtime_integral
-    from runintgen.quadrature_function import integral_quadrature_functions
+    """Reject quadrature functions outside runtime-only integrals.
 
-    for integral in form_object.integrals():
-        if is_runtime_integral(integral):
-            continue
-        functions = integral_quadrature_functions(integral)
-        if not functions:
-            continue
-        labels = []
-        for function in functions:
-            spec = getattr(function, "_runintgen_quadrature_function")
-            labels.append(spec.name or "<unnamed>")
-        raise NotImplementedError(
-            "QuadratureFunction in standard DOLFINx integrals is not "
-            "implemented yet. Use a runtime measure with QuadratureRules, or "
-            "provide the quantity as an ordinary DOLFINx Function if standard "
-            "coefficient interpolation is intended. Affected quadrature "
-            f"functions: {', '.join(labels)}."
-        )
+    Standard DOLFINx integrals, and the standard entities of mixed integrals,
+    would read them as ordinary coefficients. Provide such a quantity as an
+    ordinary DOLFINx Function if coefficient interpolation is intended.
+    """
+    from runintgen.quadrature_function import validate_quadrature_function_form
+
+    validate_quadrature_function_form(form_object)
 
 
 def _as_cpp_object(obj: Any) -> Any:
@@ -685,13 +594,15 @@ def _needs_physical_points_for_q_functions(
     rules: QuadratureRules,
 ) -> bool:
     from runintgen.quadrature_function import (
+        quadrature_function_explicit_values,
         quadrature_function_source,
-        quadrature_function_values,
     )
 
     for info in getattr(module, "quadrature_functions", []) or []:
-        explicit = quadrature_function_values(info.terminal)
-        if str(rules.rule_id) in explicit:
+        explicit = quadrature_function_explicit_values(
+            info.terminal, rules.rule_id, info.restriction
+        )
+        if explicit is not None:
             continue
         source = quadrature_function_source(info.terminal)
         if source is not None:
@@ -926,20 +837,12 @@ def _evaluate_background_quadrature_function(
     info: Any,
     rules: QuadratureRules,
 ) -> npt.NDArray[np.float64]:
-    """Evaluate a DOLFINx-backed quadrature function source."""
-    from runintgen.quadrature_function import quadrature_function_source
-    from runintgen.runtime_data import QuadratureEvaluationContext
+    """Evaluate the DOLFINx dof vector of a quadrature function without a source.
 
+    runintgen calls this fallback only when no values, evaluator or callable
+    are attached to the function for ``rules``.
+    """
     function = info.terminal
-    source = quadrature_function_source(function)
-    if source is not None and hasattr(source, "evaluate"):
-        context = QuadratureEvaluationContext(
-            rules=rules,
-            info=info,
-            mesh=getattr(function.function_space, "mesh", None),
-        )
-        return source.evaluate(context)
-
     if not hasattr(function, "eval") or not hasattr(function, "function_space"):
         raise ValueError(
             f"QuadratureFunction {info.label!r} has no explicit values, no "

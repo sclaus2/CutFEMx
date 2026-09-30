@@ -283,17 +283,31 @@ def runtime_quadrature(
     cpp_rules = _cpp.runtime_quadrature(
         cut_data._cpp_object, ls_part, order, backend
     )
-    return _runtime_quadrature_from_cpp(cpp_rules)
+    return _runtime_quadrature_from_cpp(cpp_rules, cut_data)
 
 
-def _runtime_quadrature_from_cpp(cpp_rules) -> RuntimeQuadratureRules:
+def _runtime_quadrature_from_cpp(cpp_rules, cut_data: CutData) -> RuntimeQuadratureRules:
+    tdim = cpp_rules.tdim
+    points = cpp_rules.points
+    extra = {}
+    if cpp_rules.weights.size == 0:
+        # CutCells reports tdim 0 for an empty rule set, for example on a
+        # process without cut entities. Runtime points are reference points of
+        # the host entities, so empty rules take the host dimension.
+        tdim = cut_data.tdim
+        points = np.empty((0, tdim), dtype=np.float64)
+        extra = {
+            "gdim": cut_data.gdim,
+            "physical_points": np.empty((cut_data.gdim, 0), dtype=np.float64),
+        }
     rules = RuntimeQuadratureRules(
         kind=cpp_rules.kind,
-        tdim=cpp_rules.tdim,
-        points=cpp_rules.points,
+        tdim=tdim,
+        points=points,
         weights=cpp_rules.weights,
         offsets=cpp_rules.offsets,
         parent_map=cpp_rules.parent_map,
+        **extra,
     )
     rules._cutfemx_owner = cpp_rules
     return rules
@@ -312,7 +326,7 @@ def runtime_quadratures(
         cut_data._cpp_object, names, order, backend
     )
     return {
-        name: _runtime_quadrature_from_cpp(rule)
+        name: _runtime_quadrature_from_cpp(rule, cut_data)
         for name, rule in cpp_rules
     }
 

@@ -61,26 +61,40 @@ def _evaluate_vector_quadrature_function(
     *,
     label: str,
 ) -> npt.NDArray[np.float64]:
+    """Values of an input quadrature function on the rules and side of context.
+
+    The input may carry explicit values, an evaluator or a callable source.
+    """
+    from runintgen.runtime_data import evaluate_quadrature_function
+
     spec = getattr(function, "_runintgen_quadrature_function", None)
     if spec is None:
         raise TypeError(f"{label} must be a CutFEMx QuadratureFunction.")
     if not spec.value_shape:
         raise ValueError(f"{label} must be vector-valued.")
-    value_size = int(spec.value_size)
-    source = getattr(function, "_runintgen_source", None)
-    if source is None or not hasattr(source, "evaluate"):
-        raise ValueError(
-            f"{label} must have a context-aware evaluator in the first pass."
-        )
-    values = np.asarray(source.evaluate(context), dtype=np.float64)
-    if values.ndim == 1:
-        values = values.reshape((-1, value_size))
-    if values.shape != (context.rules.total_points, value_size):
-        raise ValueError(
-            f"{label} evaluator returned shape {values.shape}, expected "
-            f"({context.rules.total_points}, {value_size})."
-        )
+    values = evaluate_quadrature_function(function, context)
     return np.ascontiguousarray(values, dtype=np.float64)
+
+
+def _input_cache_key(function: typing.Any, context: typing.Any) -> tuple[typing.Any, ...]:
+    """Cache-key part for a quadrature function an evaluator reads.
+
+    runintgen adds the rule set and side of the request to the key.
+    """
+    from runintgen.quadrature_function import quadrature_function_explicit_values
+
+    explicit = quadrature_function_explicit_values(
+        function, context.rules.rule_id, context.restriction
+    )
+    if explicit is not None:
+        return ("values", id(explicit))
+    source = getattr(function, "_runintgen_source", None)
+    key_fn = getattr(source, "cache_key", None)
+    return (
+        "source",
+        id(function),
+        key_fn(context) if key_fn is not None else id(source),
+    )
 
 
 class _LevelSetValueEvaluator:
@@ -350,19 +364,11 @@ class _CorrectionDistanceEvaluator:
             raise ValueError("max_iterations must be positive.")
 
     def cache_key(self, context: typing.Any) -> tuple[typing.Any, ...]:
-        direction_source = getattr(self.direction, "_runintgen_source", None)
-        direction_key_fn = getattr(direction_source, "cache_key", None)
-        direction_key = (
-            direction_key_fn(context)
-            if direction_key_fn is not None
-            else id(direction_source)
-        )
         return (
             id(self.level_set),
             id(self.cut_data),
             self.selector,
-            id(self.direction),
-            direction_key,
+            _input_cache_key(self.direction, context),
             self.max_distance,
             self.max_distance_factor,
             self.tolerance,
@@ -457,18 +463,8 @@ class _ConormalEvaluator:
             raise ValueError("tolerance must be positive.")
 
     def cache_key(self, context: typing.Any) -> tuple[typing.Any, ...]:
-        normal_source = getattr(self.normal_field, "_runintgen_source", None)
-        normal_key_fn = getattr(normal_source, "cache_key", None)
-        normal_key = (
-            normal_key_fn(context)
-            if normal_key_fn is not None
-            else id(normal_source)
-        )
-        side = None if context.metadata is None else context.metadata.get("side")
         return (
-            id(self.normal_field),
-            normal_key,
-            side,
+            _input_cache_key(self.normal_field, context),
             self.tolerance,
             self.version,
         )
@@ -480,13 +476,12 @@ class _ConormalEvaluator:
         self.version = self.version + 1 if version is None else int(version)
 
     def evaluate(self, context: typing.Any) -> npt.NDArray[np.float64]:
-        metadata = context.metadata or {}
-        side = metadata.get("side")
-        if side not in {"+", "-"}:
+        if context.restriction not in {"+", "-"}:
             raise ValueError(
                 "conormal is side-aware and must be used as mu('+') or mu('-') "
                 "on a runtime dS measure."
             )
+        metadata = context.metadata or {}
         local_facets = metadata.get("local_facets")
         if local_facets is None:
             raise ValueError("conormal requires local facet metadata from dS assembly.")
