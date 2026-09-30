@@ -1222,9 +1222,10 @@ def test_cut_api_interior_facets_for_cells_stays_inside_cell_set():
     msh.topology.create_entities(fdim)
     msh.topology.create_connectivity(fdim, tdim)
     facet_to_cell = msh.topology.connectivity(fdim, tdim)
-    num_cells = msh.topology.index_map(tdim).size_local
+    cell_map = msh.topology.index_map(tdim)
+    num_owned_cells = cell_map.size_local
 
-    selected = np.arange(0, num_cells, 2, dtype=np.int32)
+    selected = np.arange(0, num_owned_cells, 2, dtype=np.int32)
     selected_set = set(selected.tolist())
     facets = cutfemx.interior_facets_for_cells(msh, selected)
 
@@ -1233,17 +1234,36 @@ def test_cut_api_interior_facets_for_cells_stays_inside_cell_set():
         assert len(adjacent) == 2
         assert all(c in selected_set for c in adjacent)
 
-    all_cells = np.arange(num_cells, dtype=np.int32)
-    all_facets = cutfemx.interior_facets_for_cells(msh, all_cells)
-    assert np.array_equal(all_facets, _interior_facet_indices(msh))
+    # An owned facet shared with a ghost cell only lies inside the cell set
+    # when that ghost cell is selected too.
+    interior_facets = _interior_facet_indices(msh)
+    owned_cell_facets = np.asarray(
+        [
+            facet
+            for facet in interior_facets
+            if all(c < num_owned_cells for c in facet_to_cell.links(int(facet)))
+        ],
+        dtype=np.int32,
+    )
+    owned_cells = np.arange(num_owned_cells, dtype=np.int32)
+    assert np.array_equal(
+        cutfemx.interior_facets_for_cells(msh, owned_cells), owned_cell_facets
+    )
+
+    local_cells = np.arange(num_owned_cells + cell_map.num_ghosts, dtype=np.int32)
+    assert np.array_equal(
+        cutfemx.interior_facets_for_cells(msh, local_cells), interior_facets
+    )
 
     # Seeding with a subset keeps only the facets incident to the seeds.
     seeds = selected[:3]
-    seeded = cutfemx.interior_facets_for_cells(msh, seeds, active_cells=all_cells)
+    seeded = cutfemx.interior_facets_for_cells(msh, seeds, active_cells=owned_cells)
     msh.topology.create_connectivity(tdim, fdim)
     cell_to_facet = msh.topology.connectivity(tdim, fdim)
     seed_facets = {int(f) for cell in seeds for f in cell_to_facet.links(int(cell))}
-    assert np.array_equal(seeded, np.intersect1d(all_facets, sorted(seed_facets)))
+    assert np.array_equal(
+        seeded, np.intersect1d(owned_cell_facets, sorted(seed_facets))
+    )
     # Seed cells are not implicitly active.
     assert cutfemx.interior_facets_for_cells(msh, seeds, active_cells=[]).size == 0
 
