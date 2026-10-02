@@ -261,3 +261,116 @@ def test_petsc_deactivate_outside_rejects_matrix_without_diagonal():
     with pytest.raises(RuntimeError, match="nonzero structure"):
         cf_petsc.deactivate_outside(A, domain)
     A.destroy()
+
+
+def _ghost_penalty_elasticity(cells_only=False):
+    """Vector Q2 on a cut square with a gradient-jump ghost penalty."""
+    msh = mesh.create_rectangle(
+        MPI.COMM_WORLD,
+        ((-1.0, -1.0), (1.0, 1.0)),
+        (6, 6),
+        cell_type=mesh.CellType.quadrilateral,
+    )
+    level_set = fem.Function(fem.functionspace(msh, ("Lagrange", 1)))
+    level_set.interpolate(lambda x: x[0] ** 2 + x[1] ** 2 - 0.63**2)
+    cut_data = cutfemx.cut(level_set)
+    inside = cutfemx.locate_entities(cut_data, "phi<0")
+    rules = cutfemx.runtime_quadrature(cut_data, "phi<0", order=3)
+    ghost = cutfemx.ghost_penalty_facets(cut_data, "phi<0")
+    dx = ufl.Measure("dx", domain=msh, subdomain_id=0, subdomain_data=[inside, rules])
+    dS = ufl.Measure("dS", domain=msh, subdomain_id=1, subdomain_data=ghost)
+
+    V = fem.functionspace(msh, ("Lagrange", 2, (msh.geometry.dim,)))
+    u, v = ufl.TrialFunction(V), ufl.TestFunction(V)
+    n = ufl.FacetNormal(msh)
+    a = ufl.inner(ufl.sym(ufl.grad(u)), ufl.sym(ufl.grad(v))) * dx
+    if not cells_only:
+        a += ufl.inner(ufl.jump(ufl.grad(u), n), ufl.jump(ufl.grad(v), n)) * dS
+    dofs = fem.locate_dofs_geometrical(V, lambda x: x[0] < -0.3)
+    bc = fem.dirichletbc(np.zeros(msh.geometry.dim), dofs, V)
+    return cutfemx.fem.form(a), [bc]
+
+
+def _owned_rows(A: PETSc.Mat) -> np.ndarray:
+    """Owned rows of A as a dense array with global columns."""
+    indptr, indices, values = A.getValuesCSR()
+    dense = np.zeros((indptr.size - 1, A.getSize()[1]), dtype=values.dtype)
+    rows = np.repeat(np.arange(indptr.size - 1), np.diff(indptr))
+    dense[rows, indices] = values
+    return dense
+
+
+def _assert_same_matrix(A: PETSc.Mat, B: PETSc.Mat):
+    """Compare owned rows. Off-process contributions arrive at final
+    assembly in no fixed order, so sums may differ by round-off."""
+    a, b = _owned_rows(A), _owned_rows(B)
+    scale = MPI.COMM_WORLD.allreduce(np.abs(b).max(initial=0.0), op=MPI.MAX)
+    assert scale > 0.0
+    np.testing.assert_allclose(a, b, rtol=0.0, atol=1e-13 * scale)
+
+
+def test_petsc_create_matrix_holds_full_sparsity_pattern():
+    """AIJ matrices start assembled, with explicit zeros on the whole pattern."""
+    a, _ = _ghost_penalty_elasticity()
+    A = cf_petsc.create_matrix(a)
+    pattern = cutfemx.fem.create_matrix(a)
+
+    bs0, bs1 = pattern.block_size
+    num_rows = pattern.index_map(0).size_local
+    assert A.assembled
+    assert A.getInfo(PETSc.Mat.InfoType.LOCAL)["nz_used"] == (
+        bs0 * bs1 * pattern.indptr[num_rows]
+    )
+    assert A.norm(PETSc.NormType.FROBENIUS) == 0.0
+
+
+def test_petsc_assembly_into_full_pattern_matches_set_values():
+    """Adding into the CSR arrays equals MatSetValues, also when re-assembling."""
+    a, bcs = _ghost_penalty_elasticity()
+    A = cf_petsc.assemble_matrix(a, bcs=bcs)
+    A.assemble()
+
+    # One MatSetValues call leaves B unassembled, so assembling B goes
+    # through MatSetValues for every element.
+    B = cf_petsc.create_matrix(a)
+    B.setValueLocal(0, 0, 0.0, addv=PETSc.InsertMode.ADD_VALUES)
+    assert not B.assembled
+    cf_petsc.assemble_matrix(B, a, bcs=bcs)
+    B.assemble()
+
+    _assert_same_matrix(A, B)
+
+    A.zeroEntries()
+    cf_petsc.assemble_matrix(A, a, bcs=bcs)
+    A.assemble()
+    _assert_same_matrix(A, B)
+
+
+def test_petsc_assembly_outside_pattern_falls_back_to_set_values():
+    """Blocks missing from an assembled matrix are inserted with MatSetValues."""
+    a_cells, _ = _ghost_penalty_elasticity(cells_only=True)
+    a, bcs = _ghost_penalty_elasticity()
+
+    A = cf_petsc.create_matrix(a_cells)
+    A.setOption(PETSc.Mat.Option.NEW_NONZERO_ALLOCATION_ERR, False)
+    cf_petsc.assemble_matrix(A, a, bcs=bcs)
+    A.assemble()
+    B = cf_petsc.assemble_matrix(a, bcs=bcs)
+    B.assemble()
+
+    _assert_same_matrix(A, B)
+
+
+@pytest.mark.skipif(MPI.COMM_WORLD.size > 1, reason="checks a process-local flag")
+def test_petsc_assembly_into_full_pattern_skips_set_values():
+    """Assembling into the CSR arrays leaves the matrix assembled.
+
+    Any MatSetValues call, e.g. after an element was wrongly found to be
+    outside the nonzero structure, marks the matrix as unassembled. The
+    Python wrapper's diagonal insertion does too, so call the binding.
+    """
+    a, _ = _ghost_penalty_elasticity()
+    A = cf_petsc.create_matrix(a)
+    assemble = getattr(cutfemx.cutfemx_cpp.fem.petsc, f"assemble_matrix_{a.type_name}")
+    assemble(A, a._cpp_object, [])
+    assert A.assembled
