@@ -458,10 +458,14 @@ def _with_affine_quadrature_degrees(form: ufl.Form, msh: Any) -> ufl.Form:
     Integrals with a user-given ``quadrature_degree`` and runtime-only integrals,
     whose degree runintgen chooses, are left unchanged.
     """
-    from runintgen.measures import RuntimeIntegralMode, runtime_integral_mode
-
     if not _is_affine_tensor_product_mesh(msh):
         return form
+    return _attach_affine_quadrature_degrees(form)
+
+
+def _attach_affine_quadrature_degrees(form: ufl.Form) -> ufl.Form:
+    """Attach affine-cell quadrature degrees to the integrals of ``form``."""
+    from runintgen.measures import RuntimeIntegralMode, runtime_integral_mode
 
     integrals = []
     for integral in form.integrals():
@@ -495,6 +499,8 @@ def _compile_cut_form(
     custom_data: Any | None = None,
     affine_quadrature_degrees: bool = True,
 ) -> CutForm:
+    from runintgen.measures import RuntimeIntegralMode, runtime_integral_mode
+
     from cutfemx._runintgen_adapter import (
         _reject_standard_quadrature_functions,
         compile_form,
@@ -517,11 +523,19 @@ def _compile_cut_form(
     options["scalar_type"] = scalar_dtype.type
     options["geometry_type"] = geometry_dtype.type
     _reject_standard_quadrature_functions(ufl_form)
+    affine_cells = _is_affine_tensor_product_mesh(msh)
+    if affine_cells and any(
+        runtime_integral_mode(integral) is not RuntimeIntegralMode.STANDARD
+        for integral in ufl_form.integrals()
+    ):
+        # Runtime kernels then compute the Jacobian once per cell, not per point.
+        # runintgen detects degree-1 simplex meshes itself.
+        options.setdefault("runintgen_affine_geometry", True)
     compiled = compile_form(
         msh.comm if jit_comm is None else jit_comm,
         (
-            _with_affine_quadrature_degrees(ufl_form, msh)
-            if affine_quadrature_degrees
+            _attach_affine_quadrature_degrees(ufl_form)
+            if affine_cells and affine_quadrature_degrees
             else ufl_form
         ),
         form_compiler_options=options,
@@ -570,6 +584,12 @@ def form(
     estimate assumes non-affine cells and over-integrates, e.g. 49 instead of 9
     points per facet for a Q2 gradient-jump penalty. Integrals with an explicit
     ``quadrature_degree`` in their metadata keep it.
+
+    On such meshes, and on degree-1 simplex meshes, the kernels of integrals
+    with runtime quadrature compute the Jacobian once per cell instead of at
+    every quadrature point. Both assume that the cells stay affine: recompile
+    the form if the mesh is deformed into non-affine cells, or pass
+    ``form_compiler_options={"runintgen_affine_geometry": False}``.
     """
 
     if isinstance(form_object, ufl.ZeroBaseForm):

@@ -134,3 +134,44 @@ def test_affine_quadrature_degrees_preserve_matrix(cell_type, degree):
     scale = np.abs(matrices[1]).max()
     assert scale > 0.0
     assert np.abs(matrices[0] - matrices[1]).max() <= 1e-11 * scale
+
+
+@pytest.mark.parametrize(
+    "cell_type",
+    [mesh.CellType.quadrilateral, mesh.CellType.hexahedron, mesh.CellType.tetrahedron],
+)
+def test_runtime_kernels_on_affine_cells_compute_the_jacobian_once(cell_type, tmp_path):
+    """Runtime kernels evaluate the Jacobian of affine cells once, not per point."""
+    msh = _box(cell_type, 4)
+    x = msh.geometry.x
+    x[:, 0] += 0.3 * x[:, 1]  # sheared cells are still affine
+    gdim = msh.geometry.dim
+    V = fem.functionspace(msh, ("Lagrange", 2, (gdim,)))
+    u, v = ufl.TrialFunction(V), ufl.TestFunction(V)
+    _, dx_runtime, _ = _cut_measures(msh)
+    a = ufl.inner(ufl.sym(ufl.grad(u)), ufl.sym(ufl.grad(v))) * dx_runtime
+
+    def compile_and_assemble(name, options=None):
+        cache = tmp_path / name
+        a_form = cutfemx.fem.form(
+            a, form_compiler_options=options, jit_options={"cache_dir": str(cache)}
+        )
+        A = cutfemx.fem.assemble_matrix(a_form)
+        A.scatter_reverse()
+        (code,) = [path.read_text() for path in cache.glob("*.c")]
+        once = code.index("// Section: Jacobian") < code.index("for (int rt_chunk")
+        return A.to_dense(), once
+
+    A_cell, once = compile_and_assemble("default")
+    A_point, once_point = compile_and_assemble(
+        "per point", {"runintgen_affine_geometry": False}
+    )
+    assert once and not once_point
+    scale = np.abs(A_point).max()
+    assert scale > 0.0
+    assert np.abs(A_cell - A_point).max() <= 1e-12 * scale
+
+    if cell_type != mesh.CellType.tetrahedron:
+        _perturb(msh)
+        _, once = compile_and_assemble("perturbed")
+        assert not once
