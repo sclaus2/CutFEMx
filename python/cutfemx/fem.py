@@ -11,6 +11,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from mpi4py import MPI
+
 import numpy as np
 
 import basix.ufl
@@ -20,6 +22,12 @@ from cutfemx import extensions as _extensions
 from cutfemx.cut import CutMesh
 from dolfinx import default_scalar_type, fem, la
 from dolfinx.fem import Function
+from dolfinx.mesh import CellType
+from ufl.algorithms import extract_arguments, extract_coefficients
+from ufl.algorithms.apply_algebra_lowering import apply_algebra_lowering
+from ufl.algorithms.apply_derivatives import apply_derivatives
+from ufl.algorithms.estimate_degrees import SumDegreeEstimator
+from ufl.corealg.map_dag import map_expr_dag
 
 __all__ = [
     "ActiveDomain",
@@ -366,6 +374,116 @@ def _create_cpp_form(
     return cpp_form, owners
 
 
+def _is_affine_tensor_product_mesh(msh: Any) -> bool:
+    """Return whether every cell of a quadrilateral or hexahedral mesh is affine.
+
+    A degree-1 quadrilateral (hexahedron) is the affine image of the reference
+    cell when it is a parallelogram (parallelepiped), i.e. when the bilinear
+    (trilinear) terms of its coordinate map vanish. The result is the same on
+    all processes.
+    """
+    msh = getattr(msh, "_cpp_object", msh)
+    cell_type = msh.topology.cell_type
+    geometry = msh.geometry
+    if (
+        cell_type not in (CellType.quadrilateral, CellType.hexahedron)
+        or len(geometry.cmaps) != 1
+        or geometry.cmaps[0].degree != 1
+    ):
+        return False
+
+    x = geometry.x[geometry.dofmaps[0]]
+    # Coefficients of the coordinate map x(X) in the basis 1, X_0, X_1, X_0 X_1, ...
+    # for the Basix vertex numbering (tensor product, X_0 fastest).
+    linear = np.stack([x[:, 1] - x[:, 0], x[:, 2] - x[:, 0]], axis=1)
+    nonlinear = [x[:, 0] - x[:, 1] - x[:, 2] + x[:, 3]]
+    if cell_type == CellType.hexahedron:
+        linear = np.concatenate([linear, (x[:, 4] - x[:, 0])[:, None]], axis=1)
+        nonlinear += [
+            x[:, 0] - x[:, 1] - x[:, 4] + x[:, 5],
+            x[:, 0] - x[:, 2] - x[:, 4] + x[:, 6],
+            x[:, 1] + x[:, 2] + x[:, 4] - x[:, 3] - x[:, 5] - x[:, 6] + x[:, 7] - x[:, 0],
+        ]
+    size = np.linalg.norm(linear, axis=2).max(axis=1, initial=0.0)
+    deviation = np.linalg.norm(np.stack(nonlinear, axis=1), axis=2).max(axis=1, initial=0.0)
+    roundoff = 64.0 * np.finfo(x.dtype).eps * np.abs(x).max(axis=(1, 2), initial=0.0)
+    affine = bool(np.all(deviation <= 1e-10 * size + roundoff))
+    return bool(msh.comm.allreduce(affine, op=MPI.LAND))
+
+
+class _AffineCellDegreeEstimator(SumDegreeEstimator):
+    """UFL degree estimator for affinely mapped cells.
+
+    UFL estimates geometric quantities of quadrilaterals and hexahedra as
+    non-constant and adds the degree of the Jacobian determinant, e.g. degree
+    12 instead of 4 for ``inner(jump(grad(u), n), jump(grad(v), n)) * dS`` with
+    Q2 on hexahedra. On affine cells every geometric quantity except the
+    coordinates is constant per cell or facet.
+    """
+
+    def geometric_quantity(self, v):
+        return 0
+
+    def facet_coordinate(self, v):
+        return 1
+
+
+def _affine_quadrature_degree(integral: ufl.classes.Integral) -> int:
+    """Estimate the quadrature degree of an integral over affine cells."""
+    integrand = apply_derivatives(apply_algebra_lowering(integral.integrand()))
+    degree = map_expr_dag(_AffineCellDegreeEstimator(1, {}), integrand)
+    return int(max(degree) if isinstance(degree, tuple) else degree)
+
+
+def _table_exact_quadrature_degree(integral: ufl.classes.Integral) -> int:
+    """Lowest degree that classifies the FE tables of ``integral`` exactly.
+
+    FFCx drops tables that vanish at every quadrature point of the IR rule.
+    The runtime kernel of a mixed integral is generated from the same IR, so the
+    rule must be exact for squares of the tables (see runintgen's placeholder
+    rule for runtime-only integrals).
+    """
+    integrand = integral.integrand()
+    functions = [*extract_arguments(integrand), *extract_coefficients(integrand)]
+    elements = [f.ufl_element() for f in functions]
+    elements.append(integral.ufl_domain().ufl_coordinate_element())
+    degrees = [e.embedded_superdegree for e in elements]
+    return 2 * max((d for d in degrees if d is not None), default=0)
+
+
+def _with_affine_quadrature_degrees(form: ufl.Form, msh: Any) -> ufl.Form:
+    """Attach affine-cell quadrature degrees to the integrals of ``form``.
+
+    Applies to quadrilateral and hexahedral meshes whose cells are all affine.
+    Integrals with a user-given ``quadrature_degree`` and runtime-only integrals,
+    whose degree runintgen chooses, are left unchanged.
+    """
+    from runintgen.measures import RuntimeIntegralMode, runtime_integral_mode
+
+    if not _is_affine_tensor_product_mesh(msh):
+        return form
+
+    integrals = []
+    for integral in form.integrals():
+        metadata = integral.metadata()
+        mode = runtime_integral_mode(integral)
+        if (
+            integral.integral_type() not in ("cell", "exterior_facet", "interior_facet")
+            or metadata.get("quadrature_degree", -1) >= 0
+            or "quadrature_rule" in metadata
+            or mode is RuntimeIntegralMode.RUNTIME
+        ):
+            integrals.append(integral)
+            continue
+        degree = _affine_quadrature_degree(integral)
+        if mode is RuntimeIntegralMode.MIXED:
+            degree = max(degree, _table_exact_quadrature_degree(integral))
+        integrals.append(
+            integral.reconstruct(metadata={**metadata, "quadrature_degree": degree})
+        )
+    return ufl.Form(integrals)
+
+
 def _compile_cut_form(
     ufl_form: ufl.Form,
     *,
@@ -375,6 +493,7 @@ def _compile_cut_form(
     jit_comm: Any | None = None,
     entity_maps: Sequence[Any] | None = None,
     custom_data: Any | None = None,
+    affine_quadrature_degrees: bool = True,
 ) -> CutForm:
     from cutfemx._runintgen_adapter import (
         _reject_standard_quadrature_functions,
@@ -400,7 +519,11 @@ def _compile_cut_form(
     _reject_standard_quadrature_functions(ufl_form)
     compiled = compile_form(
         msh.comm if jit_comm is None else jit_comm,
-        ufl_form,
+        (
+            _with_affine_quadrature_degrees(ufl_form, msh)
+            if affine_quadrature_degrees
+            else ufl_form
+        ),
         form_compiler_options=options,
         jit_options=jit_options,
     )
@@ -436,8 +559,18 @@ def form(
     jit_comm: Any | None = None,
     entity_maps: Sequence[Any] | None = None,
     custom_data: Any | None = None,
+    affine_quadrature_degrees: bool = True,
 ) -> Any:
-    """Compile a UFL form for the CutFEMx migration pipeline."""
+    """Compile a UFL form for the CutFEMx migration pipeline.
+
+    On quadrilateral and hexahedral meshes whose cells are all parallelograms or
+    parallelepipeds (e.g. Cartesian background meshes), quadrature degrees are
+    estimated with the geometry constant per cell, as UFL does for affine
+    simplices, unless ``affine_quadrature_degrees`` is False. UFL's default
+    estimate assumes non-affine cells and over-integrates, e.g. 49 instead of 9
+    points per facet for a Q2 gradient-jump penalty. Integrals with an explicit
+    ``quadrature_degree`` in their metadata keep it.
+    """
 
     if isinstance(form_object, ufl.ZeroBaseForm):
         return fem.form(
@@ -462,6 +595,7 @@ def form(
             jit_comm=jit_comm,
             entity_maps=entity_maps,
             custom_data=custom_data,
+            affine_quadrature_degrees=affine_quadrature_degrees,
         )
 
     if isinstance(form_object, Sequence) and not isinstance(form_object, (str, bytes)):
@@ -474,6 +608,7 @@ def form(
                 jit_comm=jit_comm,
                 entity_maps=entity_maps,
                 custom_data=custom_data,
+                affine_quadrature_degrees=affine_quadrature_degrees,
             )
             for item in form_object
         ]
