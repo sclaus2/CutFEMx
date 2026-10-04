@@ -27,17 +27,17 @@
 namespace cutfemx
 {
 
+/// The selector and order of runtime rules whose points lie on straight
+/// pieces of a zero set: rules of the lookup tables for a single equality
+/// selector such as "phi=0", an interface of the host cells. surface_normal
+/// makes the pieces again from it.
 struct RuntimeSurfaceProvenance
 {
   std::string selector;
   std::int32_t level_set_index = -1;
-  std::vector<std::int32_t> cut_cell_ids;
-  std::vector<std::int32_t> parent_cell_ids;
-  std::vector<std::int32_t> local_zero_entity_ids;
-  std::vector<std::int32_t> dimensions;
+  int order = 0;
 
-  bool empty() const noexcept { return cut_cell_ids.empty(); }
-  std::size_t size() const noexcept { return cut_cell_ids.size(); }
+  bool empty() const noexcept { return level_set_index < 0; }
 };
 
 template <std::floating_point T>

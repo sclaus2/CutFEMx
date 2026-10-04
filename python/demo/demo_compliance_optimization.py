@@ -2305,8 +2305,6 @@ def _cut_level_set(phi: fem.Function, args: argparse.Namespace) -> cutfemx.CutDa
         phi,
         cut_approximation=args.cut_approximation,
         cut_approximation_order=args.cut_approximation_order,
-        max_refinement_iterations=args.max_refinement_iterations,
-        edge_max_depth=args.edge_max_depth,
     )
 
 
@@ -3638,8 +3636,6 @@ def parse_args(
         ghost_gamma=1.0e-5,
         cut_approximation="linear",
         cut_approximation_order=1,
-        max_refinement_iterations=0,
-        edge_max_depth=20,
         reinit_max_iter=600,
         reinit_tol=1.0e-10,
         initial_reinit=True,
@@ -3773,8 +3769,6 @@ def parse_args(
     hidden("--ghost-gamma", type=float)
     hidden("--cut-approximation", choices=("auto", "linear", "iso_p1"))
     hidden("--cut-approximation-order", type=int)
-    hidden("--max-refinement-iterations", type=int)
-    hidden("--edge-max-depth", type=int)
     hidden("--reinit-max-iter", type=int)
     hidden("--reinit-tol", type=float)
     hidden("--initial-reinit", action=argparse.BooleanOptionalAction)
@@ -3877,10 +3871,6 @@ def parse_args(
         parser.error("--cut-approximation-order must be 1 for linear cuts.")
     if args.cut_approximation_order < 1:
         parser.error("--cut-approximation-order must be positive.")
-    if args.max_refinement_iterations < 0:
-        parser.error("--max-refinement-iterations must be nonnegative.")
-    if args.edge_max_depth < 0:
-        parser.error("--edge-max-depth must be nonnegative.")
     if args.reinit_interval < 0:
         parser.error("--reinit-interval must be nonnegative.")
     if args.reinit_volume_correction_limit < 0.0:

@@ -1872,11 +1872,11 @@ def _surface_state():
     phi.x.scatter_forward()
     cell_cut = cutfemx.cut(phi)
     cut_cells = cutfemx.locate_entities(cell_cut, "phi=0")
-    gamma_rules = cutfemx.runtime_quadrature(cell_cut, "phi=0", 4, backend="algoim")
+    gamma_rules = cutfemx.runtime_quadrature(cell_cut, "phi=0", 4, backend="quadrays")
     facet_dim = msh.topology.dim - 1
     skeleton_facets = cutfemx.interior_facets_for_cells(msh, cut_cells)
     facet_cut = cutfemx.cut(phi, skeleton_facets, facet_dim)
-    skeleton_rules = cutfemx.runtime_quadrature(facet_cut, "phi=0", 4, backend="algoim")
+    skeleton_rules = cutfemx.runtime_quadrature(facet_cut, "phi=0", 4)
     surface_skeleton_facets = cutfemx.locate_entities(facet_cut, "phi=0")
     gamma_mesh = cutfemx.create_cut_mesh(cell_cut, "phi=0", mode="cut_only").mesh
     return {

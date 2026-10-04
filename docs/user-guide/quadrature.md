@@ -54,31 +54,37 @@ omega_rules = cutfemx.runtime_quadrature(cell_cut, "phi<0", order=4)
 gamma_rules = cutfemx.runtime_quadrature(cell_cut, "phi=0", order=4)
 ```
 
-For quadrilateral and hexahedral cuts, pass `backend="algoim"` to use the
-Algoim Bernstein-polynomial quadrature backend. The older Algoim callback path
-remains available as `backend="algoim_general"`. The selector interface is the
-same for all backends:
+A provider holds one rule per cut entity, and rules on the entity facets that
+lie in a zero set the selector asks for (a level set vanishing on mesh facets
+cuts no cell). `order` is the polynomial degree the rules integrate exactly on
+flat pieces, from 1 to 10.
+
+The default `backend="straight"` (or `"lut"`) subdivides each cut entity by a
+Pk-iso-P1 template of the level sets' degree, cuts the sub-cells with the
+CutCells lookup tables and integrates the straight pieces with the reference
+rules of degree `order`. `cutfemx.cut(phi, cut_approximation="iso_p1",
+cut_approximation_order=k)` sets the template order to `k` (1 to 4).
+
+`backend="quadrays"` integrates the level sets themselves, with curved rules
+of enough Gauss points per segment of each height line for degree `order`. It
+takes triangles and quadrilaterals in 2D and tetrahedra, hexahedra, prisms and
+pyramids in 3D, as cells of the mesh dimension; cuts of facets use the straight
+backend. The selector interface is the same for both backends:
 
 ```python
 omega_rules = cutfemx.runtime_quadrature(
-    cell_cut, "phi<0", order=4, backend="algoim"
+    cell_cut, "phi<0", order=4, backend="quadrays"
 )
 exterior_rules = cutfemx.runtime_quadrature(
-    cell_cut, "phi>0", order=4, backend="algoim"
+    cell_cut, "phi>0", order=4, backend="quadrays"
 )
 gamma_rules = cutfemx.runtime_quadrature(
-    cell_cut, "phi=0", order=4, backend="algoim"
+    cell_cut, "phi=0", order=4, backend="quadrays"
 )
 ```
 
-When several Algoim Bernstein rules are needed for the same level set,
-`runtime_quadratures` can avoid some repeated work and returns a dictionary
-keyed by the same selector strings. It is an optional optimization; using
-`runtime_quadrature` one rule at a time is the canonical interface.
-
-The Algoim backends are only valid for quadrilateral and hexahedral host cells,
-with refinements that preserve those tensor-product shapes. Triangle and
-tetrahedron meshes should use the default `backend="straight"` CutCells rules.
+`runtime_quadratures` returns the rules of several selectors at once, as a
+dictionary keyed by the selector strings.
 
 A provider stores the parent entity map, offsets into the point and weight
 arrays, and the reference coordinates used by the runtime kernels. Physical

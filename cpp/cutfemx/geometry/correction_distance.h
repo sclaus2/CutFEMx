@@ -11,6 +11,7 @@
 #include <concepts>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <span>
@@ -27,8 +28,6 @@
 #include <dolfinx/fem/Function.h>
 #include <dolfinx/fem/FunctionSpace.h>
 #include <dolfinx/mesh/Mesh.h>
-
-#include <cutcells/edge_root.h>
 
 namespace cutfemx::geometry
 {
@@ -65,6 +64,97 @@ double coordinate_diameter(const std::vector<T>& coordinates, int gdim)
   if (diameter <= 0.0)
     throw std::runtime_error("correction_distance encountered a zero-size cell.");
   return diameter;
+}
+
+/// A root t of a function on [0, 1].
+struct SegmentRoot
+{
+  double t = 0.5;
+  double residual = std::numeric_limits<double>::max();
+  bool converged = false;
+};
+
+/// @brief A root of @p f on [0, 1] by Brent's method, if f changes sign there.
+///
+/// Converged when |f(t)| <= ftol, or when the bracket is narrower than
+/// @p xtol with |f(t)| <= 100 ftol.
+template <typename F>
+SegmentRoot find_segment_root(F&& f, int max_iterations, double xtol,
+                              double ftol)
+{
+  double a = 0.0, b = 1.0;
+  double fa = f(a), fb = f(b);
+  if (std::abs(fa) <= ftol)
+    return {0.0, std::abs(fa), true};
+  if (std::abs(fb) <= ftol)
+    return {1.0, std::abs(fb), true};
+  if (fa * fb > 0.0)
+    return {std::abs(fa) < std::abs(fb) ? 0.0 : 1.0,
+            std::min(std::abs(fa), std::abs(fb)), false};
+
+  double c = a, fc = fa;
+  double d = b - a, e = d;
+  for (int iteration = 0; iteration < max_iterations; ++iteration)
+  {
+    if ((fb > 0.0) == (fc > 0.0))
+    {
+      c = a;
+      fc = fa;
+      d = e = b - a;
+    }
+    if (std::abs(fc) < std::abs(fb))
+    {
+      a = b;
+      b = c;
+      c = a;
+      fa = fb;
+      fb = fc;
+      fc = fa;
+    }
+    const double tol
+        = 2.0 * std::numeric_limits<double>::epsilon() * std::abs(b)
+          + 0.5 * xtol;
+    const double m = 0.5 * (c - b);
+    if (std::abs(fb) <= ftol || std::abs(m) <= tol)
+      return {b, std::abs(fb), std::abs(fb) <= 100.0 * ftol};
+
+    if (std::abs(e) >= tol && std::abs(fa) > std::abs(fb))
+    {
+      // inverse quadratic interpolation, or the secant through a and b
+      const double s = fb / fa;
+      double p, q;
+      if (a == c)
+      {
+        p = 2.0 * m * s;
+        q = 1.0 - s;
+      }
+      else
+      {
+        const double r = fb / fc;
+        q = fa / fc;
+        p = s * (2.0 * m * q * (q - r) - (b - a) * (r - 1.0));
+        q = (q - 1.0) * (r - 1.0) * (s - 1.0);
+      }
+      if (p > 0.0)
+        q = -q;
+      p = std::abs(p);
+      if (2.0 * p < std::min(3.0 * m * q - std::abs(tol * q), std::abs(e * q)))
+      {
+        e = d;
+        d = p / q;
+      }
+      else
+        d = e = m;
+    }
+    else
+      d = e = m;
+
+    a = b;
+    fa = fb;
+    b += std::abs(d) > tol ? d : (m > 0.0 ? tol : -tol);
+    fb = f(b);
+  }
+  return {b, std::abs(fb), std::abs(fb) <= ftol};
 }
 } // namespace detail
 
@@ -330,26 +420,30 @@ std::vector<double> evaluate_correction_distances(
               + static_cast<T>(bound * direction);
       }
 
-      auto phi_on_segment = [&](std::span<const T> physical) -> T
+      std::array<T, 3> pt{T(0), T(0), T(0)};
+      auto phi_on_segment = [&](double t) -> double
       {
-        return phi_at_physical_point(physical);
+        for (int d = 0; d < gdim; ++d)
+        {
+          const std::size_t i = static_cast<std::size_t>(d);
+          pt[i] = static_cast<T>((1.0 - t) * static_cast<double>(p0[i])
+                                 + t * static_cast<double>(p1[i]));
+        }
+        return static_cast<double>(phi_at_physical_point(
+            std::span<const T>(pt.data(), static_cast<std::size_t>(gdim))));
       };
 
-      const auto info = cutcells::cell::edge_root::find_root_parameter_info<T>(
-          std::span<const T>(p0.data(), static_cast<std::size_t>(gdim)),
-          std::span<const T>(p1.data(), static_cast<std::size_t>(gdim)),
-          phi_on_segment, cutcells::cell::edge_root::method::brent, T(0),
-          max_iterations, static_cast<T>(tolerance),
-          static_cast<T>(tolerance));
+      const detail::SegmentRoot info = detail::find_segment_root(
+          phi_on_segment, max_iterations, tolerance, tolerance);
       if (!info.converged)
       {
         throw std::runtime_error(
-            "correction_distance CutCells root solve did not converge at "
+            "correction_distance root solve did not converge at "
             "quadrature point " + std::to_string(point) + ", parent cell "
             + std::to_string(cell) + ", residual "
-            + std::to_string(static_cast<double>(info.residual)) + ".");
+            + std::to_string(info.residual) + ".");
       }
-      values[point] = -bound + 2.0 * bound * static_cast<double>(info.t);
+      values[point] = -bound + 2.0 * bound * info.t;
     }
   }
 

@@ -5,19 +5,25 @@
 // SPDX-License-Identifier:    MIT
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <concepts>
 #include <cstdint>
-#include <memory>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
-#include <cutcells/cell_types.h>
-#include <cutcells/mapping.h>
+#include <cutcells/bernstein.h>
+#include <cutcells/level_set_cell.h>
+#include <cutcells/lut/cell_pieces.h>
+#include <cutcells/lut/piece_rules.h>
 #include <cutcells/mesh_view.h>
+#include <cutcells/part/mesh_part.h>
+#include <cutcells/reference_cell.h>
 
 #include <cutfemx/cut/cut.h>
 #include <cutfemx/cut/runtime_quadrature.h>
@@ -25,149 +31,152 @@
 
 namespace cutfemx::geometry
 {
-namespace
+namespace detail
 {
-template <std::floating_point T, std::integral I>
-std::vector<T> parent_cell_vertex_coords_basix(
-    const cutcells::MeshView<T, I>& mesh, I cell_id)
+/// Unit normal of a straight piece of a zero set from its physical vertices:
+/// a segment in 2D, a planar triangle or quadrilateral (Basix order) in 3D.
+/// Zero for a degenerate piece.
+inline std::array<double, 3> piece_normal(std::span<const double> x, int gdim)
 {
-  const auto ctype = mesh.cell_type(cell_id);
-  const int nv = cutcells::cell::get_num_vertices(ctype);
-  std::vector<T> coords(static_cast<std::size_t>(nv * mesh.gdim), T(0));
-  std::vector<I> cell_node_scratch;
-  const auto parent_nodes = mesh.cell_nodes(cell_id, cell_node_scratch);
-
-  auto vtk_local_for_basix_vertex = [](cutcells::cell::type ctype,
-                                       int basix_v) -> int
+  std::array<double, 3> n{0.0, 0.0, 0.0};
+  if (gdim == 2)
+    n = {x[3] - x[1], x[0] - x[2], 0.0};
+  else
   {
-    if (ctype == cutcells::cell::type::quadrilateral)
+    // Newell's normal; Basix numbers a quadrilateral 0, 1, 3, 2 around it
+    const std::size_t nv = x.size() / 3;
+    constexpr std::array<std::size_t, 4> quadrilateral{0, 1, 3, 2};
+    for (std::size_t i = 0; i < nv; ++i)
     {
-      constexpr std::array<int, 4> basix_to_vtk{0, 1, 3, 2};
-      return basix_to_vtk[static_cast<std::size_t>(basix_v)];
+      const std::size_t a = nv == 4 ? quadrilateral[i] : i;
+      const std::size_t b = nv == 4 ? quadrilateral[(i + 1) % 4] : (i + 1) % nv;
+      const double* p = x.data() + 3 * a;
+      const double* q = x.data() + 3 * b;
+      n[0] += (p[1] - q[1]) * (p[2] + q[2]);
+      n[1] += (p[2] - q[2]) * (p[0] + q[0]);
+      n[2] += (p[0] - q[0]) * (p[1] + q[1]);
     }
-    if (ctype == cutcells::cell::type::hexahedron)
-    {
-      constexpr std::array<int, 8> basix_to_vtk{0, 1, 3, 2, 4, 5, 7, 6};
-      return basix_to_vtk[static_cast<std::size_t>(basix_v)];
-    }
-    return basix_v;
-  };
-
-  for (int basix_v = 0; basix_v < nv; ++basix_v)
-  {
-    const int local_v = mesh.vtk_vertex_order
-                            ? vtk_local_for_basix_vertex(ctype, basix_v)
-                            : basix_v;
-    const I node_id = parent_nodes[static_cast<std::size_t>(local_v)];
-    const T* x = mesh.node(node_id);
-    for (int d = 0; d < mesh.gdim; ++d)
-      coords[static_cast<std::size_t>(basix_v * mesh.gdim + d)] = x[d];
   }
-  return coords;
+  const double norm = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+  if (norm > 0.0)
+  {
+    for (double& component : n)
+      component /= norm;
+  }
+  return n;
 }
 
+/// The rule of one cell, piece by piece: each point with the unit normal of
+/// the straight piece it lies on.
 template <std::floating_point T>
-std::vector<T> entity_reference_coords(
-    const cutcells::AdaptCell<T>& adapt_cell,
-    std::span<const std::int32_t> entity_vertices)
+struct PieceRules
 {
-  std::vector<T> coords(
-      static_cast<std::size_t>(entity_vertices.size() * adapt_cell.tdim), T(0));
-  for (std::size_t j = 0; j < entity_vertices.size(); ++j)
-  {
-    const std::int32_t vertex = entity_vertices[j];
-    for (int d = 0; d < adapt_cell.tdim; ++d)
-    {
-      coords[static_cast<std::size_t>(j * adapt_cell.tdim + d)]
-          = adapt_cell.vertex_coords[static_cast<std::size_t>(
-              vertex * adapt_cell.tdim + d)];
-    }
-  }
-  return coords;
-}
+  std::vector<T> points;  ///< reference coordinates, tdim per point
+  std::vector<T> weights;
+  std::vector<std::array<double, 3>> normals; ///< one per point
+};
 
+/// Append the rule of a straight piece with reference vertices @p xi.
 template <std::floating_point T>
-std::vector<std::int32_t> zero_entity_vertices(
-    const cutcells::AdaptCell<T>& adapt_cell, std::int32_t zero_entity_id)
+void append_piece(const cutcells::lut::CellMap<T>& map, cutcells::cell::type type,
+                  std::span<const T> xi, int degree, std::vector<T>& x,
+                  std::vector<double>& physical, PieceRules<T>& out)
 {
-  if (zero_entity_id < 0
-      || static_cast<std::size_t>(zero_entity_id)
-             >= adapt_cell.zero_entity_dim.size())
-  {
-    throw std::runtime_error("Surface-normal provenance references an invalid "
-                             "zero entity.");
-  }
-
-  const int dim
-      = adapt_cell.zero_entity_dim[static_cast<std::size_t>(zero_entity_id)];
-  const std::int32_t entity_id
-      = adapt_cell.zero_entity_id[static_cast<std::size_t>(zero_entity_id)];
-  if (dim == 0)
-    return {entity_id};
-
-  auto vertices = adapt_cell.entity_to_vertex[dim][entity_id];
-  return std::vector<std::int32_t>(vertices.begin(), vertices.end());
+  cutcells::lut::append_piece_rule(map, type, xi, degree, out.points,
+                                   out.weights);
+  cutcells::lut::push_forward(map, xi, x);
+  physical.assign(x.begin(), x.end());
+  out.normals.resize(out.weights.size(),
+                     piece_normal(std::span<const double>(physical), map.gdim));
 }
 
-std::vector<double> checked_unit(std::vector<double> value,
-                                 const std::string& label)
+/// The rule of @p cell in a part of the lookup tables for a single equality
+/// selector on @p level_set, piece by piece as cutcells::part::quadrature_rules
+/// makes it: the straight pieces of the cell in the zero set, then the zero
+/// faces @p zero_faces that the cell owns.
+template <std::floating_point T>
+void piece_rules(const CutData<T>& cut_data,
+                 const cutcells::part::MeshPart<T, std::int32_t>& part,
+                 int level_set, std::span<const int> zero_faces,
+                 std::int32_t cell, int degree,
+                 const cutcells::lut::CellMap<T>& map,
+                 cutcells::LevelSetCell<T, std::int32_t>& scratch,
+                 cutcells::lut::Pieces<T>& pieces, PieceRules<T>& out)
 {
-  double norm = 0.0;
-  for (double component : value)
-    norm += component * component;
-  norm = std::sqrt(norm);
-  if (norm < 1.0e-14)
-    throw std::runtime_error(label + " is degenerate.");
-  for (double& component : value)
-    component /= norm;
-  return value;
-}
+  out.points.clear();
+  out.weights.clear();
+  out.normals.clear();
+  std::vector<T> x;
+  std::vector<double> physical;
+  const int tdim = map.tdim();
 
-std::vector<double> geometric_surface_normal(std::span<const double> x,
-                                             int tdim, int gdim,
-                                             std::size_t rule)
-{
-  if (tdim != gdim || (tdim != 2 && tdim != 3))
+  if (std::ranges::binary_search(part.cut_cells, cell))
   {
-    throw std::runtime_error(
-        "surface_normal currently supports codimension-one cuts in 2D or 3D "
-        "meshes with gdim == tdim.");
-  }
-
-  if (tdim == 2)
-  {
-    if (x.size() < 4)
+    // the cell's template and the level set at its vertices
+    const cutcells::LevelSetFunction<T, std::int32_t>& ls
+        = cut_data.level_sets[static_cast<std::size_t>(level_set)];
+    const int ls_degree = std::max(1, ls.analytic ? 2 : ls.mesh_data.degree);
+    const cutcells::lut::Options& options = cut_data.options.lut;
+    const int k = options.template_order > 0
+                      ? options.template_order
+                      : std::min(ls_degree,
+                                 map.type == cutcells::cell::type::pyramid ? 2 : 4);
+    const std::span<const double> tv = cutcells::lut::template_vertices(map.type, k);
+    const std::vector<T> xi(tv.begin(), tv.end());
+    const std::size_t nv = xi.size() / static_cast<std::size_t>(tdim);
+    cutcells::make_cell_level_set(ls, cell, scratch);
+    std::vector<T> values(nv);
+    for (std::size_t v = 0; v < nv; ++v)
     {
-      throw std::runtime_error(
-          "surface_normal encountered an interval with fewer than two vertices.");
+      values[v] = cutcells::bernstein::evaluate<T>(
+          map.type, scratch.bernstein_order,
+          std::span<const T>(scratch.bernstein_coeffs),
+          std::span<const T>(xi).subspan(v * tdim, tdim));
     }
-    const double tx = x[2] - x[0];
-    const double ty = x[3] - x[1];
-    return checked_unit({ty, -tx},
-                        "surface_normal rule " + std::to_string(rule));
+    cutcells::lut::cut_cell<T>(
+        map.type, k, std::span<const T>(values), 1, /*zero_sets=*/1,
+        /*curves=*/false,
+        options.triangulate ? options.triangulation
+                            : cutcells::cell::TriangulationStrategy::none,
+        pieces);
+    for (int p = 0; p < pieces.n_pieces(); ++p)
+    {
+      if (pieces.zero[static_cast<std::size_t>(p)] != 1)
+        continue;
+      const std::size_t begin
+          = static_cast<std::size_t>(pieces.offsets[p] * tdim);
+      const std::size_t size = static_cast<std::size_t>(
+          (pieces.offsets[p + 1] - pieces.offsets[p]) * tdim);
+      append_piece(map, pieces.types[static_cast<std::size_t>(p)],
+                   std::span<const T>(pieces.vertices).subspan(begin, size),
+                   degree, x, physical, out);
+    }
   }
 
-  if (x.size() < 9)
+  const std::vector<T> reference = cutcells::cell::reference_vertices<T>(map.type);
+  std::vector<T> facet;
+  for (const int z : zero_faces)
   {
-    throw std::runtime_error(
-        "surface_normal encountered a surface entity with fewer than three "
-        "vertices.");
+    const int f = cut_data.result.zero_face_local[static_cast<std::size_t>(z)];
+    facet.clear();
+    for (const int v : cutcells::part::facet_vertices(map.type, f))
+    {
+      facet.insert(facet.end(), reference.begin() + v * tdim,
+                   reference.begin() + (v + 1) * tdim);
+    }
+    append_piece(map, cutcells::part::facet_type(map.type, f),
+                 std::span<const T>(facet), degree, x, physical, out);
   }
-  const double ax = x[3] - x[0];
-  const double ay = x[4] - x[1];
-  const double az = x[5] - x[2];
-  const double bx = x[6] - x[0];
-  const double by = x[7] - x[1];
-  const double bz = x[8] - x[2];
-  return checked_unit({ay * bz - az * by, az * bx - ax * bz,
-                       ax * by - ay * bx},
-                      "surface_normal rule " + std::to_string(rule));
 }
-} // namespace
+} // namespace detail
 
 /// Evaluate the geometric normal of the selected cut surface.
 ///
-/// The runtime quadrature object supplies one provenance record per rule slice.
+/// The runtime rules come from the lookup tables (backend "straight") for a
+/// single equality selector such as "phi=0": their points lie on straight
+/// pieces of the zero set, one rule per cell. The rule of each cell is made
+/// again piece by piece, and must give the same points; each point takes the
+/// unit normal of its piece, oriented along the level-set gradient there.
 /// The returned values are flattened row-major with shape (num_points, gdim).
 template <std::floating_point T>
 std::vector<double> evaluate_surface_normals(
@@ -202,11 +211,6 @@ std::vector<double> evaluate_surface_normals(
     throw std::runtime_error(
         "surface_normal expects offsets.size() == parent_map.size() + 1.");
   }
-  if (provenance.size() != parent_map.size())
-  {
-    throw std::runtime_error(
-        "surface_normal provenance is not aligned with runtime quadrature rules.");
-  }
   if (points.size() != num_points * point_dim)
     throw std::runtime_error("surface_normal point array has inconsistent shape.");
   if (static_cast<int>(point_dim) != cut_data.tdim)
@@ -217,71 +221,101 @@ std::vector<double> evaluate_surface_normals(
 
   const int tdim = cut_data.tdim;
   const int gdim = cut_data.gdim;
+  if (tdim != gdim || (tdim != 2 && tdim != 3))
+  {
+    throw std::runtime_error(
+        "surface_normal currently supports codimension-one cuts in 2D or 3D "
+        "meshes with gdim == tdim.");
+  }
+
   std::vector<double> level_normals = level_set::evaluate_normals<T>(
       cut_data.level_set_owners[static_cast<std::size_t>(
           provenance.level_set_index)],
       points, num_points, point_dim, offsets, parent_map, 1.0);
   std::vector<double> values(num_points * static_cast<std::size_t>(gdim), 0.0);
+  if (parent_map.empty())
+    return values;
 
+  const auto part = select_part(cut_data, provenance.selector);
+  // the order of the rules is the degree they integrate exactly
+  const int degree = provenance.order;
+
+  // The zero faces of the part by owning host cell; rules name background
+  // cells, which the host cells of an entity cut map to.
+  std::unordered_map<std::int32_t, std::vector<int>> zero_faces;
+  for (const int z : part.zero_faces)
+    zero_faces[cut_data.result.zero_face_cells[static_cast<std::size_t>(z)]].push_back(z);
+  std::unordered_map<std::int32_t, std::int32_t> host_cell;
+  for (std::size_t h = 0; h < cut_data.parent_entities.size(); ++h)
+    host_cell.emplace(cut_data.parent_entities[h], static_cast<std::int32_t>(h));
+
+  cutcells::lut::CellMap<T> map;
+  cutcells::LevelSetCell<T, std::int32_t> scratch;
+  cutcells::lut::Pieces<T> pieces;
+  detail::PieceRules<T> rules;
+  std::vector<std::int32_t> node_scratch;
+  const T tolerance = T(64) * std::numeric_limits<T>::epsilon();
   for (std::size_t rule = 0; rule < parent_map.size(); ++rule)
   {
-    const std::int32_t cut_cell_id = provenance.cut_cell_ids[rule];
-    if (cut_cell_id < 0
-        || static_cast<std::size_t>(cut_cell_id)
-               >= cut_data.cut_cells.adapt_cells.size())
-    {
-      throw std::runtime_error(
-          "surface_normal provenance references an invalid cut cell.");
-    }
-    if (provenance.dimensions[rule] != tdim - 1)
-    {
-      throw std::runtime_error(
-          "surface_normal provenance is not codimension one.");
-    }
-
-    const auto& adapt_cell
-        = cut_data.cut_cells.adapt_cells[static_cast<std::size_t>(cut_cell_id)];
-    const auto vertices = zero_entity_vertices(
-        adapt_cell, provenance.local_zero_entity_ids[rule]);
-    const auto ref_coords = entity_reference_coords(
-        adapt_cell, std::span<const std::int32_t>(vertices.data(), vertices.size()));
-    const std::int32_t host_parent_cell = provenance.parent_cell_ids[rule];
-    const auto parent_vertex_coords
-        = parent_cell_vertex_coords_basix(cut_data.mesh_view, host_parent_cell);
-    const auto phys_coords = cutcells::cell::push_forward_affine_map<T>(
-        adapt_cell.parent_cell_type, parent_vertex_coords, gdim,
-        std::span<const T>(ref_coords.data(), ref_coords.size()));
-
-    std::vector<double> normal(phys_coords.begin(), phys_coords.end());
-    normal = geometric_surface_normal(
-        std::span<const double>(normal.data(), normal.size()), tdim, gdim, rule);
-
     const std::int32_t q0 = offsets[rule];
     const std::int32_t q1 = offsets[rule + 1];
     if (q0 < 0 || q1 < q0 || static_cast<std::size_t>(q1) > num_points)
       throw std::runtime_error("surface_normal offsets are out of range.");
-    if (q0 == q1)
-      continue;
 
-    double orient = 0.0;
-    for (int d = 0; d < gdim; ++d)
+    std::int32_t cell = parent_map[rule];
+    if (!cut_data.parent_entities.empty())
     {
-      orient += normal[static_cast<std::size_t>(d)]
-              * level_normals[static_cast<std::size_t>(q0 * gdim + d)];
+      const auto it = host_cell.find(cell);
+      if (it == host_cell.end())
+      {
+        throw std::runtime_error(
+            "surface_normal rule names a cell outside the cut's host cells.");
+      }
+      cell = it->second;
     }
-    if (orient < 0.0)
+    map.type = cut_data.mesh_view.cell_type(cell);
+    map.gdim = gdim;
+    cutcells::cell_vertex_coords_basix(cut_data.mesh_view, cell, map.vertices,
+                                       node_scratch);
+    const auto zit = zero_faces.find(cell);
+    detail::piece_rules(
+        cut_data, part, provenance.level_set_index,
+        zit != zero_faces.end() ? std::span<const int>(zit->second)
+                                : std::span<const int>(),
+        cell, degree, map, scratch, pieces, rules);
+
+    bool same = rules.weights.size() == static_cast<std::size_t>(q1 - q0);
+    for (std::size_t i = 0; same && i < rules.points.size(); ++i)
     {
-      for (double& component : normal)
-        component = -component;
+      same = std::abs(rules.points[i]
+                      - points[static_cast<std::size_t>(q0) * point_dim + i])
+             <= tolerance;
+    }
+    if (!same)
+    {
+      throw std::runtime_error(
+          "surface_normal: the runtime quadrature of cell "
+          + std::to_string(parent_map[rule])
+          + " does not match the straight pieces of the cut; recreate it "
+            "after updating the cut.");
     }
 
     for (std::int32_t q = q0; q < q1; ++q)
     {
+      std::array<double, 3> normal = rules.normals[static_cast<std::size_t>(q - q0)];
+      double orient = 0.0;
       for (int d = 0; d < gdim; ++d)
       {
-        values[static_cast<std::size_t>(q * gdim + d)]
-            = normal[static_cast<std::size_t>(d)];
+        orient += normal[d]
+                  * level_normals[static_cast<std::size_t>(q * gdim + d)];
       }
+      if (orient < 0.0)
+      {
+        for (double& component : normal)
+          component = -component;
+      }
+      for (int d = 0; d < gdim; ++d)
+        values[static_cast<std::size_t>(q * gdim + d)] = normal[d];
     }
   }
   return values;

@@ -29,13 +29,6 @@ namespace nb = nanobind;
 
 namespace
 {
-template <typename Options>
-constexpr bool has_cut_refinement_options
-    = requires(Options& options, int value) {
-        options.max_refinement_iterations = value;
-        options.edge_max_depth = value;
-      };
-
 template <typename T>
 int local_facet_index(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
                       std::int32_t cell, std::int32_t facet)
@@ -115,27 +108,36 @@ std::vector<std::int32_t> facet_integration_rows(
   return rows;
 }
 
-inline cutcells::CutOptions make_cut_options(
-    std::string cut_approximation, int cut_approximation_order,
-    int max_refinement_iterations, int edge_max_depth)
+/// The options of cutfemx::cut from the keywords of cutfemx.cut, as
+/// cutcells.cut reads them: the order of the lookup tables' template from
+/// cut_approximation, 'auto' (the level sets' degree), 'linear' (1) or
+/// 'iso_p1' (cut_approximation_order).
+inline cutfemx::CutOptions make_cut_options(const std::string& cut_approximation,
+                                            int cut_approximation_order)
 {
-  cutcells::CutOptions options;
-  options.triangulate_cut_parts = true;
-  options.triangulation_strategy
-      = cutcells::cell::TriangulationStrategy::classical;
-  options.cut_approximation = std::move(cut_approximation);
-  options.cut_approximation_order = cut_approximation_order;
-  if constexpr (has_cut_refinement_options<cutcells::CutOptions>)
+  cutfemx::CutOptions options;
+  if (cut_approximation == "auto")
+    options.lut.template_order = 0;
+  else if (cut_approximation == "linear")
   {
-    options.max_refinement_iterations = max_refinement_iterations;
-    options.edge_max_depth = edge_max_depth;
+    if (cut_approximation_order != 1)
+    {
+      throw std::invalid_argument(
+          "cut_approximation='linear' requires cut_approximation_order=1");
+    }
+    options.lut.template_order = 1;
   }
-  else if (max_refinement_iterations != 8 || edge_max_depth != 20)
+  else if (cut_approximation == "iso_p1")
+    options.lut.template_order = cut_approximation_order;
+  else
   {
     throw std::invalid_argument(
-        "This CutCells build does not support max_refinement_iterations or "
-        "edge_max_depth. Rebuild CutCells from a version that exposes adaptive "
-        "cut refinement options, or use the default values.");
+        "cut_approximation must be 'auto', 'linear', or 'iso_p1'");
+  }
+  if (options.lut.template_order < 0 || options.lut.template_order > 4)
+  {
+    throw std::invalid_argument(
+        "cut_approximation_order (the template order) goes from 1 to 4");
   }
   return options;
 }
@@ -253,78 +255,62 @@ void declare_cut_api(nb::module_& m, std::string type)
   m.def(
       "cut",
       [](std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
-         const std::string& cut_approximation, int cut_approximation_order,
-         int max_refinement_iterations, int edge_max_depth)
+         const std::string& cut_approximation, int cut_approximation_order)
       {
         return std::make_shared<CutData>(cutfemx::cut(
             std::move(level_set),
-            make_cut_options(cut_approximation, cut_approximation_order,
-                             max_refinement_iterations, edge_max_depth)));
+            make_cut_options(cut_approximation, cut_approximation_order)));
       },
       nb::arg("level_set"), nb::arg("cut_approximation") = "auto",
-      nb::arg("cut_approximation_order") = 1,
-      nb::arg("max_refinement_iterations") = 8,
-      nb::arg("edge_max_depth") = 20);
+      nb::arg("cut_approximation_order") = 1);
 
   m.def(
       "cut_entities",
       [](std::shared_ptr<const dolfinx::fem::Function<T>> level_set,
          nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> entities,
          int entity_dim, const std::string& cut_approximation,
-         int cut_approximation_order, int max_refinement_iterations,
-         int edge_max_depth)
+         int cut_approximation_order)
       {
         return std::make_shared<CutData>(cutfemx::cut(
             std::move(level_set),
             std::span<const std::int32_t>(entities.data(), entities.size()),
             entity_dim,
-            make_cut_options(cut_approximation, cut_approximation_order,
-                             max_refinement_iterations, edge_max_depth)));
+            make_cut_options(cut_approximation, cut_approximation_order)));
       },
       nb::arg("level_set"), nb::arg("entities"), nb::arg("entity_dim"),
       nb::arg("cut_approximation") = "auto",
-      nb::arg("cut_approximation_order") = 1,
-      nb::arg("max_refinement_iterations") = 8,
-      nb::arg("edge_max_depth") = 20);
+      nb::arg("cut_approximation_order") = 1);
 
   m.def(
       "cut_multi",
       [](std::vector<std::shared_ptr<const dolfinx::fem::Function<T>>> level_sets,
-         const std::string& cut_approximation, int cut_approximation_order,
-         int max_refinement_iterations, int edge_max_depth)
+         const std::string& cut_approximation, int cut_approximation_order)
       {
         return std::make_shared<CutData>(cutfemx::cut<T>(
             std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>(
                 level_sets.data(), level_sets.size()),
-            make_cut_options(cut_approximation, cut_approximation_order,
-                             max_refinement_iterations, edge_max_depth)));
+            make_cut_options(cut_approximation, cut_approximation_order)));
       },
       nb::arg("level_sets"), nb::arg("cut_approximation") = "auto",
-      nb::arg("cut_approximation_order") = 1,
-      nb::arg("max_refinement_iterations") = 8,
-      nb::arg("edge_max_depth") = 20);
+      nb::arg("cut_approximation_order") = 1);
 
   m.def(
       "cut_multi_entities",
       [](std::vector<std::shared_ptr<const dolfinx::fem::Function<T>>> level_sets,
          nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> entities,
          int entity_dim, const std::string& cut_approximation,
-         int cut_approximation_order, int max_refinement_iterations,
-         int edge_max_depth)
+         int cut_approximation_order)
       {
         return std::make_shared<CutData>(cutfemx::cut<T>(
             std::span<const std::shared_ptr<const dolfinx::fem::Function<T>>>(
                 level_sets.data(), level_sets.size()),
             std::span<const std::int32_t>(entities.data(), entities.size()),
             entity_dim,
-            make_cut_options(cut_approximation, cut_approximation_order,
-                             max_refinement_iterations, edge_max_depth)));
+            make_cut_options(cut_approximation, cut_approximation_order)));
       },
       nb::arg("level_sets"), nb::arg("entities"), nb::arg("entity_dim"),
       nb::arg("cut_approximation") = "auto",
-      nb::arg("cut_approximation_order") = 1,
-      nb::arg("max_refinement_iterations") = 8,
-      nb::arg("edge_max_depth") = 20);
+      nb::arg("cut_approximation_order") = 1);
 
   m.def(
       "update_cut",

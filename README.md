@@ -144,8 +144,7 @@ cmake -G Ninja -S cpp -B cpp/build \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" \
   -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
-  -DCMAKE_OSX_DEPLOYMENT_TARGET=13.4 \
-  -DCUTCELLS_WITH_ALGOIM=ON
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=13.4
 cmake --build cpp/build
 cmake --install cpp/build
 
@@ -157,10 +156,6 @@ cd ..
 
 On Linux, omit the `-DCMAKE_OSX_DEPLOYMENT_TARGET=13.4` line from the direct
 CutCells CMake configure command.
-
-When Algoim support is enabled, the CutCells CMake configuration looks for
-BLAS/LAPACK in `CMAKE_PREFIX_PATH` before falling back to system locations. If
-you need to override that choice, set `CUTCELLS_ALGOIM_LAPACK_LIBRARIES`.
 
 Check the install:
 
