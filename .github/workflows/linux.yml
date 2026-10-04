@@ -30,7 +30,7 @@ defaults:
 
 env:
   CUTFEMX_RUNINTGEN_REF: main
-  CUTFEMX_CUTCELLS_REF: main
+  CUTFEMX_CUTCELLS_REF: quadrays
   CMAKE_BUILD_PARALLEL_LEVEL: "2"
   CTEST_PARALLEL_LEVEL: "2"
   FI_PROVIDER: tcp
@@ -117,8 +117,7 @@ jobs:
             -B "${RUNNER_TEMP}/CutCells/cpp/build" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="${CONDA_PREFIX}" \
-            -DCMAKE_PREFIX_PATH="${CONDA_PREFIX}" \
-            -DCUTCELLS_WITH_ALGOIM=ON
+            -DCMAKE_PREFIX_PATH="${CONDA_PREFIX}"
           cmake --build "${RUNNER_TEMP}/CutCells/cpp/build"
           cmake --install "${RUNNER_TEMP}/CutCells/cpp/build"
           python -m pip install --no-build-isolation --no-deps --force-reinstall \
