@@ -232,10 +232,19 @@ void compute_distance_fim(
         {
             active_mask[u] = false; 
             
+            Real d_u = dist[u];
+            // The sync phase reactivates every vertex of the cells around an
+            // improved vertex. For hexahedra some of those vertices share no
+            // virtual simplex with any finite vertex yet. Relaxing from an
+            // infinite d_u is not just useless: d_v - inf_value rounds to
+            // -inf_value in update_3pt, which drops d_v and d_w and returns a
+            // purely geometric (far too small) distance.
+            if (d_u >= opt.inf_value)
+                continue;
+
             auto cell_links = vertex_to_cell->links(u);
             const Real* x_u = get_vertex_coords(u);
-            Real d_u = dist[u];
-            
+
             for (std::int32_t c : cell_links)
             {
                 auto c_verts = cell_to_vertex->links(c);
