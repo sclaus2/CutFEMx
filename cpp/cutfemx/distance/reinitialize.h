@@ -252,10 +252,12 @@ SurfaceMesh<Real> extract_surface_from_facets(
                     append_element(vertices, c);
                 }
             } else if (vertices.size() == 4) {
+                // Quadrilateral facets use Basix tensor order (0, 1, 2, 3),
+                // so the diagonal is 0--3.
                 std::array<std::int32_t, 3> tri0{
-                    vertices[0], vertices[1], vertices[2]};
+                    vertices[0], vertices[1], vertices[3]};
                 std::array<std::int32_t, 3> tri1{
-                    vertices[0], vertices[2], vertices[3]};
+                    vertices[0], vertices[3], vertices[2]};
                 for (std::int32_t c : cells) {
                     append_element(std::span<const std::int32_t>(tri0), c);
                     append_element(std::span<const std::int32_t>(tri1), c);

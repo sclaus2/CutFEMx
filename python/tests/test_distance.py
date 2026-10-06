@@ -142,6 +142,36 @@ def test_reinitialize_from_facets_uses_facets_as_zero_interface():
     np.testing.assert_allclose(phi.x.array, exact, atol=1.0e-12)
 
 
+def test_hex_reinitialize_from_quadrilateral_facets():
+    mesh = create_box(
+        MPI.COMM_SELF,
+        [np.array([0.0, 0.0, 0.0]), np.array([1.0, 1.0, 1.0])],
+        [4, 4, 4],
+        CellType.hexahedron,
+    )
+    V = functionspace(mesh, ("Lagrange", 1))
+    phi = Function(V)
+
+    coords = V.tabulate_dof_coordinates()
+    phi.x.array[:] = coords[:, 0] - 0.5
+    phi.x.scatter_forward()
+
+    fdim = mesh.topology.dim - 1
+    mesh.topology.create_connectivity(fdim, 0)
+    f_to_v = mesh.topology.connectivity(fdim, 0)
+    points = mesh.geometry.x
+    facets = [
+        facet
+        for facet in range(mesh.topology.index_map(fdim).size_local)
+        if np.allclose(points[f_to_v.links(facet), 0], 0.5)
+    ]
+    assert facets
+
+    reinitialize_from_facets(phi, np.asarray(facets, dtype=np.int32), max_iter=500)
+
+    np.testing.assert_allclose(phi.x.array, coords[:, 0] - 0.5, atol=1.0e-12)
+
+
 def _write_cube_stl(path, lo=0.35, hi=0.65):
     p = {
         "000": (lo, lo, lo),
