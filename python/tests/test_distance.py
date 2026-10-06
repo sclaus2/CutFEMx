@@ -81,6 +81,34 @@ def test_quad_reinitialize_updates_parabolic_level_set():
     assert post_error < 0.5 * pre_error
 
 
+@pytest.mark.parametrize("cell_type", [CellType.tetrahedron, CellType.hexahedron])
+def test_3d_reinitialize_matches_sphere_distance(cell_type):
+    # On hexahedra, a one-layer seed band plus the post-sync reactivation of
+    # whole cells used to relax from vertices at inf_value under MPI, which
+    # produced O(1) underestimates far from the interface.
+    comm = MPI.COMM_WORLD
+    n = 16
+    mesh = create_box(
+        comm,
+        [np.array([-0.5, -0.5, -0.5]), np.array([0.5, 0.5, 0.5])],
+        [n, n, n],
+        cell_type,
+        ghost_mode=GhostMode.shared_facet,
+    )
+    V = functionspace(mesh, ("Lagrange", 1))
+    phi = Function(V)
+
+    radius = 0.3
+    phi.interpolate(lambda x: x[0] ** 2 + x[1] ** 2 + x[2] ** 2 - radius**2)
+
+    reinitialize(phi, max_iter=500, tol=1e-10)
+
+    coords = V.tabulate_dof_coordinates()
+    exact = np.linalg.norm(coords, axis=1) - radius
+    error = comm.allreduce(np.max(np.abs(phi.x.array - exact)), op=MPI.MAX)
+    assert error < 1.5 / n
+
+
 def test_reinitialize_from_facets_uses_facets_as_zero_interface():
     mesh = create_rectangle(
         MPI.COMM_SELF,
