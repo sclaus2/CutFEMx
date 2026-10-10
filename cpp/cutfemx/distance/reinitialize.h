@@ -82,16 +82,11 @@ SurfaceMesh<Real> extract_surface_from_levelset(
     auto phi_handle = std::shared_ptr<const dolfinx::fem::Function<Real>>(
         &phi, [](const dolfinx::fem::Function<Real>*) {});
     auto cut_data = cutfemx::cut<Real>(phi_handle);
-    std::vector<std::int32_t> cut_cells =
-        cutfemx::locate_entities<Real>(cut_data, "phi=0");
-    
-    if (cut_cells.empty()) {
-        std::cout << "Warning: No cut cells found for reinitialization\n";
-        return surface;
-    }
-    
-    // The cut layer currently builds CutData with triangulate_cut_parts=true,
-    // so the zero-contour mesh is intervals in 2D and triangles in 3D.
+
+    // Every process takes part in creating the cut mesh, also without cut
+    // cells of its own. The cut layer currently builds CutData with
+    // triangulate_cut_parts=true, so the zero-contour mesh is intervals in 2D
+    // and triangles in 3D.
     cutfemx::mesh::CutMesh<Real> cut_mesh =
         cutfemx::create_cut_mesh<Real>(cut_data, "phi=0", "cut_only");
     
@@ -395,6 +390,16 @@ void init_nearfield_from_surface(
     }
 }
 
+/// Number of surface elements on all processes
+template <typename Real>
+std::int64_t global_num_elements(const SurfaceMesh<Real>& surface, MPI_Comm comm)
+{
+    std::int64_t local = surface.nE();
+    std::int64_t global = 0;
+    MPI_Allreduce(&local, &global, 1, MPI_INT64_T, MPI_SUM, comm);
+    return global;
+}
+
 /// Reinitialize level set function as signed distance from tagged facets.
 ///
 /// The supplied facets are treated as the exact zero-distance surface. The
@@ -410,13 +415,6 @@ void reinitialize_from_facets(
     MPI_Comm comm = mesh->comm();
     const int mpi_rank = dolfinx::MPI::rank(comm);
 
-    if (facets.empty()) {
-        if (mpi_rank == 0) {
-            std::cout << "Warning: No interface facets for reinitialization\n";
-        }
-        return;
-    }
-
     std::span<const Real> phi_vals = phi.x()->array();
     std::vector<int> original_signs(phi_vals.size());
     for (std::size_t i = 0; i < phi_vals.size(); ++i) {
@@ -424,7 +422,7 @@ void reinitialize_from_facets(
     }
 
     SurfaceMesh<Real> surface = extract_surface_from_facets(*mesh, facets);
-    if (surface.nE() == 0) {
+    if (global_num_elements(surface, comm) == 0) {
         if (mpi_rank == 0) {
             std::cout << "Warning: Empty facet surface, skipping reinitialization\n";
         }
@@ -514,7 +512,8 @@ void reinitialize(
     // 2. Extract surface mesh from zero-contour
     auto surface = extract_surface_from_levelset(phi);
     
-    if (surface.nE() == 0) {
+    // Processes without a part of the surface still take part in the solve
+    if (global_num_elements(surface, comm) == 0) {
         if (mpi_rank == 0) {
             std::cout << "Warning: Empty surface, skipping reinitialization\n";
         }
