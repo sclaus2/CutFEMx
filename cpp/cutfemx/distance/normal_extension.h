@@ -347,7 +347,12 @@ void extend_normal_velocity(
 
   InterfaceSurface<Real> surface
       = interface_surface_from_cut_mesh(interface_cut_mesh);
-  if (surface.nE() == 0)
+  // Ranks without interface pieces still take part in the collective solve.
+  std::int64_t local_num_elems = surface.nE();
+  std::int64_t global_num_elems = 0;
+  MPI_Allreduce(&local_num_elems, &global_num_elems, 1, MPI_INT64_T, MPI_SUM,
+                mesh->comm());
+  if (global_num_elems == 0)
     throw std::runtime_error("normal extension received an empty interface.");
 
   auto topology = mesh->topology_mutable();
