@@ -38,6 +38,7 @@ main.cpp
 test_distribute_stl_facets.cpp
 test_orient_surface.cpp
 test_cell_triangle_map.cpp
+test_eikonal_update.cpp
 #${CMAKE_CURRENT_BINARY_DIR}/scalar.c)
 )
 
