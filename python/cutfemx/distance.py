@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import math
 import time
 from typing import Any
 
@@ -151,13 +152,30 @@ def from_stl(
     return dist_func
 
 
+def _max_distance(max_distance: float | None) -> float:
+    if max_distance is None:
+        return math.inf
+    if not max_distance > 0.0:
+        raise ValueError("max_distance must be positive")
+    return float(max_distance)
+
+
 def reinitialize(
     phi: Function,
     max_iter: int = 200,
     tol: float = 1.0e-10,
+    max_distance: float | None = None,
 ) -> None:
-    """Reinitialize a level-set function in place as a signed distance field."""
-    _cpp.distance.reinitialize(phi._cpp_object, max_iter, tol)
+    """Reinitialize a level-set function in place as a signed distance field.
+
+    ``max_iter`` bounds the number of rounds of local solves and exchanges
+    between processes. If ``max_distance`` is given, distances are only
+    computed in the band ``|phi| <= max_distance`` and set to
+    ``±max_distance`` outside it.
+    """
+    _cpp.distance.reinitialize(
+        phi._cpp_object, max_iter, tol, _max_distance(max_distance)
+    )
 
 
 def reinitialize_from_facets(
@@ -165,11 +183,15 @@ def reinitialize_from_facets(
     facets,
     max_iter: int = 200,
     tol: float = 1.0e-10,
+    max_distance: float | None = None,
 ) -> None:
-    """Reinitialize ``phi`` from existing mesh facets as the zero interface."""
+    """Reinitialize ``phi`` from existing mesh facets as the zero interface.
+
+    ``max_iter``, ``tol`` and ``max_distance`` are as in :func:`reinitialize`.
+    """
     facet_array = np.ascontiguousarray(facets, dtype=np.int32)
     _cpp.distance.reinitialize_from_facets(
-        phi._cpp_object, facet_array, max_iter, tol
+        phi._cpp_object, facet_array, max_iter, tol, _max_distance(max_distance)
     )
 
 
@@ -183,12 +205,17 @@ def extend_normal_velocity(
     normal_sign: float = 1.0,
     max_iter: int = 1000,
     tol: float = 1.0e-10,
+    max_distance: float | None = None,
 ) -> NormalExtensionResult:
     """Extend scalar interface speed along normals into the background mesh.
 
     The C++ carrier solve is first-order and vertex based. If ``target_space``
     is supplied, the carrier fields are interpolated into that scalar Lagrange
     space and the matching vector Lagrange space for the velocity.
+
+    If ``max_distance`` is given, the speed is only extended to vertices within
+    that distance of the interface; speed and velocity are zero beyond it and
+    the signed distance is ``±max_distance``.
     """
     mesh = phi.function_space.mesh
     if interface_cut_mesh.mesh is None:
@@ -220,6 +247,7 @@ def extend_normal_velocity(
         normal_sign,
         max_iter,
         tol,
+        _max_distance(max_distance),
     )
 
     if target_space is None:

@@ -76,7 +76,7 @@ The initialization phase computes exact Euclidean distances for vertices close t
 
 ### Propagation (Farfield)
 
-We solve the Eikonal equation $|\nabla \phi| = 1$ using the **Fast Iterative Method (FIM)**. Unlike the Fast Marching Method (which uses a global priority queue and fixes one node per step), FIM allows multiple nodes to be updated simultaneously and re-updated if necessary, making it ideal for parallel architectures and distributed meshes.
+We solve the Eikonal equation $|\nabla \phi| = 1$ on the vertices of the mesh. Each process runs a fast marching solve on its part of the mesh, ordered by a priority queue, and the processes then exchange the distances of the vertices they share. The solve is *label correcting*: a vertex whose distance improves after it was processed is processed again. This keeps the result exact on stencils that are not causal (obtuse simplices, distorted cells), where a pure fast marching method would accept wrong values, and it lets distances from neighbouring processes arrive in any order.
 
 #### 1. Update Schemes (Geometric Upwind)
 
@@ -90,43 +90,35 @@ The core operation is computing a candidate distance $T(\mathbf{x})$ for a verte
     This is equivalent to solving a quadratic equation for the optimal entry point.
 
 *   **3D Update (Tetrahedron)**: Wavefront arrives through a tetrahedron from a face $\{\mathbf{x}_1, \mathbf{x}_2, \mathbf{x}_3\}$.
-    Solved using Projected Newton's Method to find the optimal entry point on the face $(u, v)$ minimizing the travel time.
+    The objective $T(\mathbf{p}) + \|\mathbf{x} - \mathbf{p}\|$ is convex in the entry point $\mathbf{p}$, so an interior stationary point is the minimum over the whole face. It is computed in closed form: the unit vector $\mathbf{g}$ from $\mathbf{p}$ to $\mathbf{x}$ has the in-plane part fixed by $\mathbf{g}\cdot(\mathbf{x}_i - \mathbf{x}_1) = T(\mathbf{x}_i) - T(\mathbf{x}_1)$ and the normal part by $\|\mathbf{g}\| = 1$. If $\mathbf{p}$ falls outside the face, the edge updates give the minimum.
 
-For every active vertex, we query all incident cells (triangles in 2D, tetrahedra in 3D) and apply the highest-dimensional update possible, falling back to lower dimensions if causality conditions (gradient direction) are not met.
+Quadrilaterals and hexahedra are split into virtual triangles and tetrahedra (2 and 6, along the diagonal from vertex 0). For axis-aligned boxes these are right triangles and orthoschemes, so the stencils are causal.
 
-#### 2. Algorithm Flow (Active Set)
+#### 2. Local Solve (Priority Queue)
 
-1.  **Initialization**: All vertices with known exact distances (Nearfield) are marked as `ACTIVE` and pushed to a queue.
-2.  **Iteration**: While the queue is not empty:
-    *   Pop vertex $u$. Mark as inactive.
-    *   **Relax Neighbors**: For each neighbor $v$ of $u$:
-        *   Compute candidate distance $D_{new}$ using the stencils above (using $u$ and mutual neighbors).
-        *   If $D_{new} < D(v) - \epsilon$:
-             *   Update $D(v) = D_{new}$.
-             *   If $v$ is not `ACTIVE`, mark it `ACTIVE` and push to queue.
+1.  **Initialization**: All vertices with known distances (Nearfield) are pushed to a min-heap keyed by distance.
+2.  **Drain**: While the heap is not empty:
+    *   Pop the vertex $u$ with the smallest key; skip it if its distance has improved since it was pushed.
+    *   **Relax Neighbors**: For each vertex $v$ of a (virtual) simplex containing $u$:
+        *   Compute candidate distance $D_{new}$ using the stencils above (using $u$ and the other vertices of the simplex).
+        *   If $D_{new} < D(v) - \text{tol}$: set $D(v) = D_{new}$ and push $v$.
 
-#### 3. Parallel Communication (Ghost Sync)
+On causal stencils every vertex is popped once, as in the fast marching method.
 
-In a distributed setting, the wavefront must cross MPI partition boundaries.
+#### 3. Parallel Communication (Rounds)
 
-*   **Shared State**: Boundary vertices exist as "Owned" on one rank and "Ghosts" on neighbors.
-*   **Sync Interval**: Every $k$ iterations (default 2), we synchronize ghost values.
-*   **Min-Reduction**:
-    1.  Each rank sends its current values for shared vertices to neighbors.
-    2.  Neighbors compute $D_{ghost} = \min(D_{local}, D_{received})$.
-*   **Reactivation**:
-    *   If a ghost value decreases significantly, it is added to the local `ACTIVE` queue.
-    *   **Crucial Step**: We add the updated ghost vertices to the `ACTIVE` queue. In the next iteration, the solver "pops" these ghosts and relaxes their neighbors. (Implementation Note: We also proactively add the breakdown neighbors to the queue to accelerate this inward propagation).
+In a distributed setting, the wavefront must cross MPI partition boundaries. Boundary vertices exist as "Owned" on one rank and "Ghosts" on neighbors. The solve runs in rounds:
 
-#### 4. Example Scenario
+1.  **Local solve**: Every rank pops vertices with distances up to $D_{min} + \Delta$, where $D_{min}$ is the smallest pending distance on any rank.
+2.  **Exchange** (DOLFINx neighbourhood scatter, only between ranks that share vertices):
+    1.  Ghost distances are reduced onto their owners with $\min$.
+    2.  Owners overwrite their ghosts, so all copies agree after every round.
+    *   Every vertex whose distance improved in the exchange is pushed to the heap again.
+3.  **Termination**: One global $\min$ reduction gives the next $D_{min}$; the solve stops when no rank has pending vertices.
 
-Consider a 2D mesh distributed on 2 Ranks (Left and Right).
-1.  **Init**: Source is in Rank Left. Rank Left computes distances up to the partition boundary. Rank Right has all values set to $\infty$.
-2.  **Sync**: Rank Left sends finite values for boundary vertices to Rank Right.
-3.  **Update**: Rank Right receives these values. The boundary ghosts on Rank Right drop from $\infty$ to real distances.
-4.  **Reactivation**: Rank Right adds these ghosts and their inner neighbors to the active queue.
-5.  **Propagation**: Rank Right's FIM solver picks up these active nodes and propagates the wavefront eastward through its domain.
-6.  **Convergence**: Process stops when no values change on any rank.
+The round width $\Delta$ (`FMMOptions::round_width`, by default 1/32 of the diagonal of the mesh bounding box) keeps a rank from computing far ahead of fronts that have not yet arrived from its neighbours, which would be recomputed when they do. The number of rounds is about the range of distances divided by $\Delta$ plus the number of partition boundaries the fronts cross; it does not grow with the mesh size or the number of ranks.
+
+With `max_distance`, vertices are only pushed while their distance is at most `max_distance`, and all larger distances (including unreached vertices) are set to `max_distance`. For level-set reinitialization this computes a narrow band around the interface at a fraction of the cost.
 
 ## 4. Signed Distance Computation
 

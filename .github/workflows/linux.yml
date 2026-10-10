@@ -164,4 +164,5 @@ jobs:
         run: |
           mpiexec -n 2 python -m pytest -q \
             python/tests/test_adapt_mesh_to_stl.py::test_adapt_mesh_mpi \
-            python/tests/test_distance.py::test_normal_extension_payload_values_are_consistent_across_ghosts
+            python/tests/test_distance.py::test_normal_extension_payload_values_are_consistent_across_ghosts \
+            python/tests/test_distance.py::test_parallel_distance_matches_serial
