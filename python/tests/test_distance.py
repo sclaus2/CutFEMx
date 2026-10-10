@@ -24,7 +24,13 @@ from cutfemx.distance import (
 )
 
 from dolfinx.fem import Function, functionspace
-from dolfinx.mesh import CellType, GhostMode, create_box, create_rectangle
+from dolfinx.mesh import (
+    CellType,
+    GhostMode,
+    create_box,
+    create_rectangle,
+    locate_entities,
+)
 
 
 def test_reinitialize_updates_parabolic_level_set():
@@ -140,6 +146,59 @@ def test_reinitialize_from_facets_uses_facets_as_zero_interface():
 
     exact = coords[:, 0] - 0.5
     np.testing.assert_allclose(phi.x.array, exact, atol=1.0e-12)
+
+
+def test_reinitialize_on_ranks_without_cut_cells():
+    # A small circle in a corner leaves most ranks without cut cells in
+    # parallel; those ranks must still take part in the collective steps.
+    comm = MPI.COMM_WORLD
+    mesh = create_rectangle(
+        comm,
+        [np.array([-0.5, -0.5]), np.array([0.5, 0.5])],
+        [24, 24],
+        CellType.triangle,
+    )
+    V = functionspace(mesh, ("Lagrange", 1))
+    phi = Function(V)
+
+    center = np.array([-0.25, -0.25])
+    radius = 0.12
+    phi.interpolate(lambda x: (x[0] - center[0]) ** 2 + (x[1] - center[1]) ** 2 - radius**2)
+
+    coords = V.tabulate_dof_coordinates()[:, :2]
+    exact = np.linalg.norm(coords - center, axis=1) - radius
+    pre_error = comm.allreduce(np.max(np.abs(phi.x.array - exact)), op=MPI.MAX)
+
+    reinitialize(phi, max_iter=500, tol=1e-10)
+
+    post_error = comm.allreduce(np.max(np.abs(phi.x.array - exact)), op=MPI.MAX)
+    assert post_error < 0.5 * pre_error
+
+
+def test_reinitialize_from_facets_on_ranks_without_facets():
+    comm = MPI.COMM_WORLD
+    mesh = create_rectangle(
+        comm,
+        [np.array([0.0, 0.0]), np.array([1.0, 1.0])],
+        [8, 8],
+        CellType.triangle,
+    )
+    V = functionspace(mesh, ("Lagrange", 1))
+    phi = Function(V)
+
+    coords = V.tabulate_dof_coordinates()
+    phi.x.array[:] = coords[:, 0] - 0.25
+    phi.x.array[np.isclose(coords[:, 0], 0.25)] = 0.25
+    phi.x.scatter_forward()
+
+    fdim = mesh.topology.dim - 1
+    facets = locate_entities(mesh, fdim, lambda x: np.isclose(x[0], 0.25))
+    facets = facets[facets < mesh.topology.index_map(fdim).size_local]
+    assert comm.allreduce(facets.size, op=MPI.SUM) == 8
+
+    reinitialize_from_facets(phi, facets, max_iter=500)
+
+    np.testing.assert_allclose(phi.x.array, coords[:, 0] - 0.25, atol=1.0e-12)
 
 
 def test_hex_reinitialize_from_quadrilateral_facets():
@@ -363,7 +422,7 @@ def test_normal_extension_payload_values_are_consistent_across_ghosts():
     comm = MPI.COMM_WORLD
     _, V, _, result, _ = _build_circle_extension(comm, n=16)
     if result is None:
-        pytest.skip("normal-extension MPI check requires every rank to own cut cells")
+        pytest.skip("the circle does not cut the mesh")
 
     coords = V.tabulate_dof_coordinates()[:, :2]
     speed = np.asarray(result.speed.x.array, dtype=float)

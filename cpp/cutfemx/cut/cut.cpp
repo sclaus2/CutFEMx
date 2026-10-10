@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <basix/element-families.h>
+#include <bit>
 #include <cctype>
 #include <cstdint>
 #include <dolfinx/common/IndexMap.h>
@@ -883,6 +884,11 @@ select_part(const CutData<T>& cut_data, std::string_view ls_part)
 {
   auto part
       = cutcells::part::select<T, std::int32_t>(cut_data.result, ls_part);
+  // CutCells infers the dimension of the selection from the cells of the
+  // cut, and assumes three dimensions on a process that has no cells. Infer
+  // it from the mesh so that all processes agree.
+  part.dim = cutcells::infer_selection_dim(
+      cutcells::parse_selection_expr(ls_part), cut_data.tdim);
   const std::int32_t num_owned = cut_data.num_local_cells;
   const auto ghost = [num_owned](std::int32_t cell)
   { return cell >= num_owned; };
@@ -1045,33 +1051,42 @@ mesh::CutMesh<T> dolfinx_cut_mesh_from_cutcells_mesh(
 {
   mesh::CutMesh<T> out;
   out._bg_mesh = std::move(background_mesh);
+  const MPI_Comm comm = out._bg_mesh->comm();
 
-  if (cutcells_mesh._num_cells == 0)
-    return out;
-
-  if (cutcells_mesh._types.empty())
-    throw std::runtime_error("CutCells visualisation mesh has no cell types");
-
-  const cutcells::cell::type first_type = cutcells_mesh._types.front();
-  if (cutcells_mesh._offset.size()
-      != static_cast<std::size_t>(cutcells_mesh._num_cells + 1))
+  if (cutcells_mesh._num_cells > 0)
   {
-    throw std::runtime_error("CutCells visualisation mesh has invalid offsets");
+    if (cutcells_mesh._types.size()
+        != static_cast<std::size_t>(cutcells_mesh._num_cells))
+    {
+      throw std::runtime_error(
+          "CutCells visualisation mesh has invalid cell types");
+    }
+    if (cutcells_mesh._offset.size()
+        != static_cast<std::size_t>(cutcells_mesh._num_cells + 1))
+    {
+      throw std::runtime_error(
+          "CutCells visualisation mesh has invalid offsets");
+    }
   }
 
-  const bool single_cell_type = std::ranges::all_of(
-      cutcells_mesh._types, [first_type](cutcells::cell::type type)
-      { return type == first_type; });
+  // Mesh creation is collective and all ranks must agree on the cell type,
+  // including ranks that hold no cut pieces. Agree on the set of CutCells
+  // cell types present anywhere; the mesh is null on every rank when the
+  // selected part is globally empty.
+  unsigned int local_type_mask = 0;
+  for (const cutcells::cell::type type : cutcells_mesh._types)
+    local_type_mask |= 1u << static_cast<int>(type);
+  unsigned int type_mask = 0;
+  MPI_Allreduce(&local_type_mask, &type_mask, 1, MPI_UNSIGNED, MPI_BOR, comm);
+  if (type_mask == 0)
+    return out;
 
-  const bool split_mixed_surface_to_triangles =
-      !single_cell_type
-      && std::ranges::all_of(
-             cutcells_mesh._types,
-             [](cutcells::cell::type type)
-             {
-               return type == cutcells::cell::type::triangle
-                      || type == cutcells::cell::type::quadrilateral;
-             });
+  const unsigned int surface_type_mask
+      = (1u << static_cast<int>(cutcells::cell::type::triangle))
+        | (1u << static_cast<int>(cutcells::cell::type::quadrilateral));
+  const bool single_cell_type = std::has_single_bit(type_mask);
+  const bool split_mixed_surface_to_triangles
+      = !single_cell_type && (type_mask & ~surface_type_mask) == 0;
 
   if (!single_cell_type && !split_mixed_surface_to_triangles)
   {
@@ -1082,13 +1097,14 @@ mesh::CutMesh<T> dolfinx_cut_mesh_from_cutcells_mesh(
   const dolfinx::mesh::CellType cell_type =
       split_mixed_surface_to_triangles
           ? dolfinx::mesh::CellType::triangle
-          : mesh::cutcells_to_dolfinx_cell_type(first_type);
+          : mesh::cutcells_to_dolfinx_cell_type(static_cast<cutcells::cell::type>(
+              std::countr_zero(type_mask)));
   const int vertices_per_cell = dolfinx::mesh::num_cell_vertices(cell_type);
 
   const std::int64_t num_vertices_local = cutcells_mesh._num_vertices;
   std::int64_t vertex_offset = 0;
   MPI_Exscan(&num_vertices_local, &vertex_offset, 1, MPI_INT64_T, MPI_SUM,
-             out._bg_mesh->comm());
+             comm);
 
   std::vector<std::int64_t> cells;
   std::vector<std::int32_t> parent_index;
@@ -1179,17 +1195,24 @@ mesh::CutMesh<T> dolfinx_cut_mesh_from_cutcells_mesh(
     }
   }
 
+  // Ranks without cut pieces may not know the geometric dimension; take it
+  // from the background mesh so that every rank passes the same shape.
+  const std::size_t gdim = out._bg_mesh->geometry().dim();
+  if (cutcells_mesh._num_vertices > 0
+      && static_cast<std::size_t>(cutcells_mesh._gdim) != gdim)
+  {
+    throw std::runtime_error(
+        "CutCells visualisation mesh has an unexpected geometric dimension");
+  }
   dolfinx::fem::CoordinateElement<T> element(cell_type, 1);
   const std::array<std::size_t, 2> xshape{
-      static_cast<std::size_t>(cutcells_mesh._num_vertices),
-      static_cast<std::size_t>(cutcells_mesh._gdim)};
+      static_cast<std::size_t>(cutcells_mesh._num_vertices), gdim};
   dolfinx::mesh::CellReorderFunction identity_reorder
       = identity_cell_reordering;
   out._cut_mesh = std::make_shared<dolfinx::mesh::Mesh<T>>(
       dolfinx::mesh::create_mesh(
-          out._bg_mesh->comm(), out._bg_mesh->comm(),
-          std::span<const std::int64_t>(cells.data(), cells.size()), element,
-          out._bg_mesh->comm(), cutcells_mesh._vertex_coords, xshape, nullptr,
+          comm, comm, std::span<const std::int64_t>(cells.data(), cells.size()),
+          element, comm, cutcells_mesh._vertex_coords, xshape, nullptr,
           std::int32_t(2), identity_reorder));
 
   out._parent_index = split_mixed_surface_to_triangles

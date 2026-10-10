@@ -254,6 +254,80 @@ def test_cut_api_create_cut_mesh_full():
     assert np.count_nonzero(cut_mesh.is_cut_cell == 0) > 0
 
 
+def _small_circle_level_set(center=(0.3, 0.3), radius=0.15):
+    msh = mesh.create_unit_square(MPI.COMM_WORLD, 16, 16)
+    V = fem.functionspace(msh, ("Lagrange", 1))
+    level_set = fem.Function(V)
+    level_set.interpolate(
+        lambda x: np.sqrt((x[0] - center[0]) ** 2 + (x[1] - center[1]) ** 2) - radius
+    )
+    return msh, level_set
+
+
+def _local_cut_mesh_length(cut_mesh):
+    one = fem.Constant(cut_mesh.mesh, 1.0)
+    return fem.assemble_scalar(fem.form(one * ufl.dx(domain=cut_mesh.mesh)))
+
+
+def test_cut_api_create_cut_mesh_includes_ranks_without_cut_cells():
+    comm = MPI.COMM_WORLD
+    msh, level_set = _small_circle_level_set()
+    tdim = msh.topology.dim
+    num_owned = msh.topology.index_map(tdim).size_local
+
+    full_cutter = cutfemx.cut(level_set)
+    owned_cut_cells = cutfemx.locate_entities(full_cutter, "phi=0")
+    owned_cut_cells = owned_cut_cells[owned_cut_cells < num_owned]
+    full_cut_mesh = cutfemx.create_cut_mesh(full_cutter, "phi=0", mode="cut_only")
+    assert full_cut_mesh.mesh is not None
+    full_length = _local_cut_mesh_length(full_cut_mesh)
+    np.testing.assert_allclose(
+        comm.allreduce(full_length, op=MPI.SUM), 2 * np.pi * 0.15, rtol=0.02
+    )
+
+    # Host the cut on a single rank so that every other rank owns no cut cells.
+    host_rank = comm.allreduce(
+        comm.rank if owned_cut_cells.size > 0 else comm.size, op=MPI.MIN
+    )
+    cells = np.arange(num_owned if comm.rank == host_rank else 0, dtype=np.int32)
+    cutter = cutfemx.cut(level_set, cells, tdim)
+    cut_mesh = cutfemx.create_cut_mesh(cutter, "phi=0", mode="cut_only")
+
+    assert cut_mesh.mesh is not None
+    assert cut_mesh.mesh.topology.cell_type == mesh.CellType.interval
+    num_local_cells = cut_mesh.mesh.topology.index_map(1).size_local
+    assert cut_mesh.parent_index.size == num_local_cells
+    if comm.rank == host_rank:
+        assert num_local_cells > 0
+        assert set(cut_mesh.parent_index.tolist()) == set(owned_cut_cells.tolist())
+    else:
+        assert num_local_cells == 0
+
+    length = comm.allreduce(_local_cut_mesh_length(cut_mesh), op=MPI.SUM)
+    np.testing.assert_allclose(
+        length, comm.bcast(full_length, root=host_rank), rtol=1.0e-12
+    )
+
+    # The other ranks host no cells at all and must still read "phi<0" as a
+    # volume selection.
+    volume_mesh = cutfemx.create_cut_mesh(cutter, "phi<0", mode="full")
+    assert volume_mesh.mesh is not None
+    assert volume_mesh.mesh.topology.cell_type == mesh.CellType.triangle
+    num_local_cells = volume_mesh.mesh.topology.index_map(tdim).size_local
+    assert volume_mesh.parent_index.size == num_local_cells
+    assert (num_local_cells > 0) == (comm.rank == host_rank)
+
+
+def test_cut_api_create_cut_mesh_is_none_on_every_rank_without_cut():
+    _, level_set = _small_circle_level_set(center=(2.0, 2.0), radius=0.1)
+
+    cutter = cutfemx.cut(level_set)
+    cut_mesh = cutfemx.create_cut_mesh(cutter, "phi=0", mode="cut_only")
+
+    assert cut_mesh.mesh is None
+    assert cut_mesh.parent_index.size == 0
+
+
 def test_cut_api_create_cut_mesh_rejects_interface_full_mode():
     _, level_set = _line_level_set()
 

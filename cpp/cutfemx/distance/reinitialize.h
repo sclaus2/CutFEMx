@@ -32,6 +32,15 @@
 
 namespace cutfemx::distance {
 
+/// Sum of a rank-local count over all ranks of a communicator.
+inline std::int64_t global_count(std::size_t local_count, MPI_Comm comm)
+{
+    std::int64_t local = static_cast<std::int64_t>(local_count);
+    std::int64_t global = 0;
+    MPI_Allreduce(&local, &global, 1, MPI_INT64_T, MPI_SUM, comm);
+    return global;
+}
+
 /// Surface mesh structure for reinitialization
 /// Supports both edges (2D) and triangles (3D)
 template <typename Real>
@@ -76,26 +85,20 @@ SurfaceMesh<Real> extract_surface_from_levelset(
     // Set vertices per element based on dimension
     surface.verts_per_elem = (tdim == 3) ? 3 : 2;  // triangles for 3D, edges for 2D
     
-    // Build cut data through the public CutFEMx cut facade and use the new
-    // cut-layer locator for the zero-contour cells.
+    // Build cut data through the public CutFEMx cut facade.
     // "phi=0" marks cells where the level set changes sign
     auto phi_handle = std::shared_ptr<const dolfinx::fem::Function<Real>>(
         &phi, [](const dolfinx::fem::Function<Real>*) {});
     auto cut_data = cutfemx::cut<Real>(phi_handle);
-    std::vector<std::int32_t> cut_cells =
-        cutfemx::locate_entities<Real>(cut_data, "phi=0");
-    
-    if (cut_cells.empty()) {
-        std::cout << "Warning: No cut cells found for reinitialization\n";
-        return surface;
-    }
-    
+
     // The cut layer currently builds CutData with triangulate_cut_parts=true,
     // so the zero-contour mesh is intervals in 2D and triangles in 3D.
     cutfemx::mesh::CutMesh<Real> cut_mesh =
         cutfemx::create_cut_mesh<Real>(cut_data, "phi=0", "cut_only");
     
-    if (!cut_mesh._cut_mesh || cut_mesh._parent_index.empty()) {
+    // The cut mesh is null on every rank when no rank has cut cells; ranks
+    // without cut cells otherwise hold an empty local part of it.
+    if (!cut_mesh._cut_mesh) {
         return surface;
     }
 
@@ -410,7 +413,7 @@ void reinitialize_from_facets(
     MPI_Comm comm = mesh->comm();
     const int mpi_rank = dolfinx::MPI::rank(comm);
 
-    if (facets.empty()) {
+    if (global_count(facets.size(), comm) == 0) {
         if (mpi_rank == 0) {
             std::cout << "Warning: No interface facets for reinitialization\n";
         }
@@ -424,7 +427,7 @@ void reinitialize_from_facets(
     }
 
     SurfaceMesh<Real> surface = extract_surface_from_facets(*mesh, facets);
-    if (surface.nE() == 0) {
+    if (global_count(surface.nE(), comm) == 0) {
         if (mpi_rank == 0) {
             std::cout << "Warning: Empty facet surface, skipping reinitialization\n";
         }
@@ -514,7 +517,7 @@ void reinitialize(
     // 2. Extract surface mesh from zero-contour
     auto surface = extract_surface_from_levelset(phi);
     
-    if (surface.nE() == 0) {
+    if (global_count(surface.nE(), comm) == 0) {
         if (mpi_rank == 0) {
             std::cout << "Warning: Empty surface, skipping reinitialization\n";
         }
