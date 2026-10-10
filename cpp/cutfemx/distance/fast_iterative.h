@@ -5,22 +5,42 @@
 // SPDX-License-Identifier:    MIT
 
 // =========================================================================
-// Fast Iterative Method (FIM) Orchestrator
-// Robust for parallel execution on unstructured grids.
-// Uses "Active Set" label-correcting approach rather than Dijkstra-like ordering.
+// Distributed eikonal solver on vertex graphs
+//
+// Each process runs a heap-ordered (fast marching) label-correcting solve
+// on its part of the mesh, then exchanges the distances of shared vertices
+// with its neighbours. Vertices whose distance improved in the exchange go
+// back on the heap, and the rounds repeat until no process has pending
+// vertices. Each round only processes distances up to the smallest pending
+// distance on any process plus a round width, so that a process does not
+// compute far ahead of fronts that are still to arrive from its neighbours.
+// The number of rounds depends on the range of distances over the round
+// width and on how many partition boundaries the fronts cross, not on the
+// mesh size.
+//
+// Label correcting (re-pushing improved vertices) keeps the solve exact on
+// stencils that are not causal (obtuse simplices, distorted cells), where a
+// pure fast marching method would accept wrong values.
 // =========================================================================
 
 #pragma once
 
 #include <dolfinx/mesh/Mesh.h>
 #include <dolfinx/common/MPI.h>
+#include <dolfinx/common/Scatterer.h>
 #include <vector>
 #include <queue>
 #include <cmath>
 #include <algorithm>
 #include <dolfinx/common/Timer.h>
 #include <array>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <numeric>
 #include <span>
+#include <stdexcept>
+#include <utility>
 
 #include "eikonal_update.h"
 #include "parallel_exchange.h"
@@ -37,11 +57,21 @@ enum class NearFieldMode { TRIANGLES, IMPLICIT };
 struct FMMOptions {
     NearFieldMode mode = NearFieldMode::TRIANGLES;
     
-    // FIM specific
+    // Maximum number of local-solve-and-exchange rounds
     int max_iter = 1000;
-    double tol = 1e-10; 
+    // Improvements of a vertex distance by less than tol are not propagated,
+    // so the result is within tol of the converged discrete solution
+    double tol = 1e-10;
     double inf_value = 1e30;
-    int sync_interval = 2; // Exchange every k iterations
+    // Distances are only computed up to max_distance; larger distances and
+    // unreached vertices are set to max_distance
+    double max_distance = std::numeric_limits<double>::infinity();
+    // In parallel, each round only processes distances up to the smallest
+    // pending distance on any process plus round_width. Smaller widths repeat
+    // less work where fronts from different processes meet, at the cost of
+    // more rounds (about the range of distances divided by round_width).
+    // round_width <= 0 uses 1/32 of the diagonal of the mesh bounding box.
+    double round_width = 0.0;
 
     // Legacy / Compat fields (ignored by FIM or mapped)
     int band_layers = 2; 
@@ -67,6 +97,26 @@ struct FIMTransportPayload
             && normal_dim > 0;
     }
 };
+
+/// Order of transported payloads [speed, normal...] used to choose between
+/// sources at the same distance. Components that agree to a relative 1e-8
+/// count as equal, so rounding differences between processes do not decide.
+template <typename Real>
+bool payload_precedes(Real speed_a, const Real* normal_a, Real speed_b,
+                      const Real* normal_b, int normal_dim)
+{
+    auto differ = [](Real a, Real b)
+    {
+        return std::abs(a - b)
+               > Real(1e-8) * std::max({Real(1), std::abs(a), std::abs(b)});
+    };
+    if (differ(speed_a, speed_b))
+        return speed_a < speed_b;
+    for (int d = 0; d < normal_dim; ++d)
+        if (differ(normal_a[d], normal_b[d]))
+            return normal_a[d] < normal_b[d];
+    return false;
+}
 
 template <typename F>
 void for_each_virtual_simplex(int tdim, std::span<const std::int32_t> c_verts,
@@ -109,371 +159,399 @@ void for_each_virtual_simplex(int tdim, std::span<const std::int32_t> c_verts,
     }
 }
 
-template <typename Real>
-void assign_payload_from_best_source(FIMTransportPayload<Real>* payload,
-                                     std::int32_t target,
-                                     std::span<const std::int32_t> sources,
-                                     std::span<Real> dist)
-{
-    if (!payload)
-        return;
-
-    std::int32_t best = -1;
-    Real best_value = std::numeric_limits<Real>::max();
-    for (std::int32_t source : sources)
-    {
-        if (source >= 0 && dist[static_cast<std::size_t>(source)] < best_value)
-        {
-            best = source;
-            best_value = dist[static_cast<std::size_t>(source)];
-        }
-    }
-    if (best < 0)
-        return;
-
-    payload->speed[static_cast<std::size_t>(target)]
-        = payload->speed[static_cast<std::size_t>(best)];
-    for (int d = 0; d < payload->normal_dim; ++d)
-    {
-        payload->normals[static_cast<std::size_t>(target) * payload->normal_dim
-                         + static_cast<std::size_t>(d)]
-            = payload->normals[static_cast<std::size_t>(best) * payload->normal_dim
-                               + static_cast<std::size_t>(d)];
-    }
-}
-
-// Low-level FIM Solver
+// Distributed eikonal solve on the vertices of a mesh.
+//
+// dist holds the initial distances (inf_value where unknown) for owned and
+// ghost vertices and is overwritten by the solution. Every finite vertex is
+// a source. payload, if given, is copied from the vertex an update came from
+// (velocity extension). Where updates give the same distance (within tol)
+// with different payloads, the payload that comes first in payload_precedes
+// wins, so the payload does not depend on the processing order or the
+// partition. On
+// return, ghost entries equal their owners'.
 template <typename Real>
 void compute_distance_fim(
     const dolfinx::mesh::Mesh<Real>& mesh,
     std::span<Real> dist,
-    const std::vector<std::int32_t>& seeds,
+    const std::vector<std::int32_t>& /*seeds*/,
     const FMMOptions& opt = {},
     FIMTransportPayload<Real>* payload = nullptr)
 {
-    // 0. Setup
-    // ------------------------------------------------------------------------
+    dolfinx::common::Timer timer("FIM solve");
+
     MPI_Comm comm = mesh.comm();
     const int mpi_rank = dolfinx::MPI::rank(comm);
+    const int mpi_size = dolfinx::MPI::size(comm);
     const int tdim = mesh.topology()->dim();
-    
-    // Topology maps
+
     auto topology = mesh.topology();
-    // Ensure connectivity
     if (!topology->connectivity(0, tdim)) {
         mesh.topology_mutable()->create_connectivity(0, tdim);
         mesh.topology_mutable()->create_connectivity(tdim, 0);
     }
     auto vertex_to_cell = topology->connectivity(0, tdim);
     auto cell_to_vertex = topology->connectivity(tdim, 0);
-    
-    const std::int32_t num_vertices = vertex_to_cell->num_nodes(); // owned + ghosts
+
     const auto& vertex_map = topology->index_map(0);
-    std::int32_t num_owned = vertex_map->size_local();
-    
-    // CRITICAL: Build mapping from topology vertex index to geometry DOF index
-    // Use centralized cache
+    const std::int32_t num_owned = vertex_map->size_local();
+    const std::int32_t num_vertices = num_owned + vertex_map->num_ghosts();
+    if (dist.size() < static_cast<std::size_t>(num_vertices))
+        throw std::invalid_argument("FIM distance array is too small.");
+    if (payload && !payload->valid(num_vertices))
+        throw std::invalid_argument("FIM payload arrays are too small.");
+
     VertexMapCache<Real> vmap;
     vmap.build(mesh);
-    
-    // Direct pointer access for coordinates via cache
-    auto get_vertex_coords = [&vmap](std::int32_t v) -> const Real* {
-        return vmap.coords(v);
-    };
-    
-    // 1. Initialization (NearField)
-    // ------------------------------------------------------------------------
-    // Allow ALL vertices (Owned + Ghost) to be active.
-    // This allows ghosts updated by local neighbors to immediately propagate
-    // back to other local neighbors or ghosts.
-    std::vector<bool> active_mask(num_vertices, false); 
-    std::vector<std::int32_t> active_queue;
-    active_queue.reserve(num_vertices / 4);
-    
-    // Initial sync to ensure consistency (e.g. if seeds are ghosts)
-    std::vector<Real> dist_before(dist.begin(), dist.end());
-    if (payload && payload->valid(num_vertices))
-        min_exchange_vertices_payload(*vertex_map, dist, payload->speed,
-                                      payload->normals, payload->normal_dim,
-                                      static_cast<Real>(opt.inf_value));
-    else
-        min_exchange_vertices(*vertex_map, dist, static_cast<Real>(opt.inf_value));
-    
-    int initial_activated = 0;
-    
-    // Populate active set - scan ALL vertices (owned + ghost)
-    // If a node is finite, it should be active to propagate.
-    for (std::int32_t v = 0; v < num_vertices; ++v) {
-        if (dist[v] < opt.inf_value) {
-            if (!active_mask[v]) {
-                active_mask[v] = true;
-                active_queue.push_back(v);
-                initial_activated++;
-            }
-        }
-    }
-    
-    if (mpi_rank == 0) spdlog::info("FIM Init: {} active nodes.", initial_activated);
-    
-    // 2. FIM Iteration Loop
-    // ------------------------------------------------------------------------
-    dolfinx::common::Timer timer("FIM Iteration");
-    
-    for (int iter = 0; iter < opt.max_iter; ++iter)
+
+    const Real inf_value = static_cast<Real>(opt.inf_value);
+    const Real tol = static_cast<Real>(opt.tol);
+    const Real max_distance
+        = std::min(static_cast<Real>(opt.max_distance), inf_value);
+
+    // Min-heap of (tentative distance, vertex). Entries whose distance is
+    // larger than the vertex's current distance are stale and skipped.
+    using Entry = std::pair<Real, std::int32_t>;
+    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> heap;
+
+    auto payload_less = [&](Real speed_a, const Real* normal_a, Real speed_b,
+                            const Real* normal_b)
     {
-        // A. Local Relaxation Phase
-        std::vector<std::int32_t> next_active_queue;
-        next_active_queue.reserve(active_queue.size());
-        
-        // Track max change for convergence (only on OWNED nodes)
-        Real local_max_change = 0.0;
-        
-        for (std::int32_t u : active_queue)
+        return payload_precedes(speed_a, normal_a, speed_b, normal_b,
+                                payload->normal_dim);
+    };
+    auto normal_of = [&](std::int32_t v)
+    {
+        return payload->normals.data()
+               + static_cast<std::size_t>(v) * payload->normal_dim;
+    };
+    // Is distance d_a with the payload of vertex a better than distance d_b
+    // with the payload of vertex b?
+    auto better = [&](Real d_a, std::int32_t a, Real d_b, std::int32_t b)
+    {
+        if (d_a < d_b - tol)
+            return true;
+        if (!payload || d_a > d_b + tol)
+            return false;
+        return payload_less(payload->speed[a], normal_of(a), payload->speed[b],
+                            normal_of(b));
+    };
+    // Is an exchanged block [distance, payload...] better than vertex v?
+    auto block_better = [&](const Real* block, std::int32_t v)
+    {
+        if (block[0] < dist[v] - tol)
+            return true;
+        if (!payload || block[0] > dist[v] + tol)
+            return false;
+        return payload_less(block[1], block + 2, payload->speed[v], normal_of(v));
+    };
+
+    auto copy_payload = [&](std::int32_t from, std::int32_t to)
+    {
+        payload->speed[to] = payload->speed[from];
+        std::copy_n(normal_of(from), payload->normal_dim, normal_of(to));
+    };
+
+    auto improve = [&](std::int32_t target, Real new_d,
+                       std::span<const std::int32_t> sources)
+    {
+        // The payload comes from the best of the update's sources
+        std::int32_t best = sources[0];
+        for (std::int32_t v : sources)
+            if (better(dist[v], v, dist[best], best))
+                best = v;
+        if (!better(new_d, best, dist[target], target))
+            return;
+        dist[target] = std::min(dist[target], new_d);
+        if (payload)
+            copy_payload(best, target);
+        if (dist[target] <= max_distance)
+            heap.emplace(dist[target], target);
+    };
+
+    // Relax every vertex of the virtual simplices around u from u.
+    auto relax_from = [&](std::int32_t u)
+    {
+        const Real d_u = dist[u];
+        const Real* x_u = vmap.coords(u);
+        for (std::int32_t c : vertex_to_cell->links(u))
         {
-            active_mask[u] = false; 
-            
-            Real d_u = dist[u];
-            // The sync phase reactivates every vertex of the cells around an
-            // improved vertex. For hexahedra some of those vertices share no
-            // virtual simplex with any finite vertex yet. Relaxing from an
-            // infinite d_u is not just useless: d_v - inf_value rounds to
-            // -inf_value in update_3pt, which drops d_v and d_w and returns a
-            // purely geometric (far too small) distance.
-            if (d_u >= opt.inf_value)
-                continue;
+            for_each_virtual_simplex(
+                tdim, cell_to_vertex->links(c),
+                [&](std::span<const std::int32_t> simplex)
+                {
+                    if (std::find(simplex.begin(), simplex.end(), u)
+                        == simplex.end())
+                        return;
 
-            auto cell_links = vertex_to_cell->links(u);
-            const Real* x_u = get_vertex_coords(u);
+                    // The other vertices of the simplex, in order
+                    std::array<std::int32_t, 3> others{-1, -1, -1};
+                    int num_others = 0;
+                    for (std::int32_t v : simplex)
+                        if (v != u)
+                            others[static_cast<std::size_t>(num_others++)] = v;
 
-            for (std::int32_t c : cell_links)
-            {
-                auto c_verts = cell_to_vertex->links(c);
-
-                for_each_virtual_simplex(
-                    tdim, c_verts,
-                    [&](std::span<const std::int32_t> simplex)
+                    for (int i = 0; i < num_others; ++i)
                     {
-                        int u_idx = -1;
-                        for (std::size_t k = 0; k < simplex.size(); ++k)
+                        const std::int32_t target = others[static_cast<std::size_t>(i)];
+                        const Real* x_t = vmap.coords(target);
+
+                        // Remaining vertices of the face opposite target.
+                        // Distances beyond max_distance are tentative and
+                        // depend on the processing order, so they are not
+                        // used.
+                        std::array<std::int32_t, 2> face{-1, -1};
+                        int num_face = 0;
+                        for (int j = 0; j < num_others; ++j)
                         {
-                            if (simplex[k] == u)
+                            const std::int32_t v = others[static_cast<std::size_t>(j)];
+                            if (j != i && dist[v] < inf_value
+                                && dist[v] <= max_distance)
+                                face[static_cast<std::size_t>(num_face++)] = v;
+                        }
+
+                        if (num_face == 2)
+                        {
+                            // The interior minimum is the minimum over the
+                            // whole face when it exists.
+                            const std::int32_t v = face[0];
+                            const std::int32_t w = face[1];
+                            const Real d = update_3pt_interior(
+                                x_t, x_u, d_u, vmap.coords(v), dist[v],
+                                vmap.coords(w), dist[w]);
+                            if (d < inf_value)
                             {
-                                u_idx = static_cast<int>(k);
-                                break;
+                                const std::array<std::int32_t, 3> src{u, v, w};
+                                improve(target, d, src);
+                                continue;
                             }
                         }
-                        if (u_idx == -1)
-                            return;
 
-                        auto accept_update =
-                            [&](std::int32_t target, Real new_d,
-                                std::span<const std::int32_t> sources)
+                        bool edge_update = false;
+                        for (int j = 0; j < num_face; ++j)
                         {
-                            if (new_d < dist[target] - 1e-13)
-                            {
-                                Real change = dist[target] - new_d;
-                                dist[target] = new_d;
-                                assign_payload_from_best_source(payload, target,
-                                                                sources, dist);
-
-                                if (target < num_owned
-                                    && change > local_max_change)
-                                    local_max_change = change;
-
-                                if (!active_mask[target])
-                                {
-                                    active_mask[target] = true;
-                                    next_active_queue.push_back(target);
-                                }
-                            }
-                        };
-
-                        if (simplex.size() == 3)
-                        {
-                            std::int32_t v = -1;
-                            std::int32_t w = -1;
-                            for (std::size_t i = 0; i < simplex.size(); ++i)
-                            {
-                                if (static_cast<int>(i) == u_idx)
-                                    continue;
-                                if (v < 0)
-                                    v = simplex[i];
-                                else
-                                    w = simplex[i];
-                            }
-
-                            auto attempt_triangle_target =
-                                [&](std::int32_t target, std::int32_t other)
-                            {
-                                std::array<std::int32_t, 2> sources{u, other};
-                                Real new_d = opt.inf_value;
-                                if (dist[other] < opt.inf_value)
-                                    new_d = update_2pt(get_vertex_coords(target),
-                                                       x_u, d_u,
-                                                       get_vertex_coords(other),
-                                                       dist[other]);
-                                else
-                                {
-                                    sources[1] = u;
-                                    new_d = update_1pt(get_vertex_coords(target),
-                                                       x_u, d_u);
-                                }
-                                accept_update(target, new_d, sources);
-                            };
-
-                            attempt_triangle_target(v, w);
-                            attempt_triangle_target(w, v);
+                            const std::int32_t v = face[static_cast<std::size_t>(j)];
+                            const std::array<std::int32_t, 2> src{u, v};
+                            improve(target,
+                                    update_2pt(x_t, x_u, d_u, vmap.coords(v),
+                                               dist[v]),
+                                    src);
+                            edge_update = true;
                         }
-                        else if (simplex.size() == 4)
+                        if (!edge_update)
                         {
-                            for (std::size_t i = 0; i < simplex.size(); ++i)
-                            {
-                                if (static_cast<int>(i) == u_idx)
-                                    continue;
-                                const std::int32_t target = simplex[i];
-
-                                std::array<std::int32_t, 2> others{-1, -1};
-                                int oi = 0;
-                                for (std::size_t j = 0; j < simplex.size(); ++j)
-                                {
-                                    if (static_cast<int>(j) != u_idx && j != i)
-                                        others[static_cast<std::size_t>(oi++)]
-                                            = simplex[j];
-                                }
-                                const std::int32_t v = others[0];
-                                const std::int32_t w = others[1];
-
-                                std::array<std::int32_t, 3> sources1{u, u, u};
-                                accept_update(target,
-                                              update_1pt(get_vertex_coords(target),
-                                                         x_u, d_u),
-                                              std::span<const std::int32_t>(
-                                                  sources1.data(), 1));
-
-                                if (dist[v] < opt.inf_value)
-                                {
-                                    std::array<std::int32_t, 2> sources{u, v};
-                                    accept_update(
-                                        target,
-                                        update_2pt(get_vertex_coords(target),
-                                                   x_u, d_u,
-                                                   get_vertex_coords(v), dist[v]),
-                                        sources);
-                                }
-                                if (dist[w] < opt.inf_value)
-                                {
-                                    std::array<std::int32_t, 2> sources{u, w};
-                                    accept_update(
-                                        target,
-                                        update_2pt(get_vertex_coords(target),
-                                                   x_u, d_u,
-                                                   get_vertex_coords(w), dist[w]),
-                                        sources);
-                                }
-                                if (dist[v] < opt.inf_value
-                                    && dist[w] < opt.inf_value)
-                                {
-                                    std::array<std::int32_t, 3> sources{u, v, w};
-                                    accept_update(
-                                        target,
-                                        update_3pt(get_vertex_coords(target),
-                                                   x_u, d_u,
-                                                   get_vertex_coords(v), dist[v],
-                                                   get_vertex_coords(w), dist[w]),
-                                        sources);
-                                }
-                            }
+                            const std::array<std::int32_t, 1> src{u};
+                            improve(target, update_1pt(x_t, x_u, d_u), src);
                         }
-                    });
-            } 
-        } 
-        
-        active_queue = std::move(next_active_queue);
-        
-        // B. Synchronization Phase
-        // FIX: Sync MORE frequently near convergence to fix boundary artifacts
-        int current_sync_interval = opt.sync_interval;
-        if (iter >= 50) current_sync_interval = 1;  // Sync every iteration late
-        else if (iter >= 20) current_sync_interval = std::min(opt.sync_interval, 2);
-        
-        if (iter % current_sync_interval == 0)
+                    }
+                });
+        }
+    };
+
+    std::int64_t num_relaxations = 0;
+    auto drain = [&](Real threshold)
+    {
+        while (!heap.empty())
         {
-            std::vector<Real> dist_before_sync(dist.begin(), dist.end()); 
-            if (payload && payload->valid(num_vertices))
-                min_exchange_vertices_payload(*vertex_map, dist, payload->speed,
-                                              payload->normals, payload->normal_dim,
-                                              static_cast<Real>(opt.inf_value));
-            else
-                min_exchange_vertices(*vertex_map, dist, static_cast<Real>(opt.inf_value));
-            
-            int owned_cnt = 0;
-            int ghost_cnt = 0;
-            
-            // Reactivate ANY vertex that improved (Owned or Ghost)
-            // Even ghosts need reactivation because they might have been updated 
-            // by the Owner to a better value than we computed locally,
-            // and that better value needs to propagate to local neighbors.
-            for (std::int32_t v = 0; v < num_vertices; ++v) {
-                if (dist[v] < dist_before_sync[v] - 1e-13) {
-                     if (v < num_owned) {
-                          owned_cnt++;
-                          Real chg = dist_before_sync[v] - dist[v];
-                          if(chg > local_max_change) local_max_change = chg;
-                     } else {
-                          ghost_cnt++;
-                     }
-                     
-                     // Activate the changed vertex itself
-                     if (!active_mask[v]) {
-                        active_mask[v] = true;
-                        active_queue.push_back(v);
-                     }
-                     
-                     // IMPORTANT: Also activate 1-ring neighbors through incident cells
-                     // This ensures the improved value propagates aggressively
-                     auto cell_links_v = vertex_to_cell->links(v);
-                     for (std::int32_t c : cell_links_v) {
-                         auto c_verts = cell_to_vertex->links(c);
-                         for (std::int32_t n : c_verts) {
-                             // Only activate owned neighbors (ghosts will be handled by their owner)
-                             if (n < num_owned && !active_mask[n]) {
-                                 active_mask[n] = true;
-                                 active_queue.push_back(n);
-                             }
-                         }
-                     }
-                }
+            const auto [d, u] = heap.top();
+            if (d > dist[u])
+            {
+                heap.pop();
+                continue;
             }
-            if ((owned_cnt + ghost_cnt > 0) && mpi_rank == 0 && iter%10==0) {
-                spdlog::info("Iter {} Sync: Owned={} Ghost={}", iter, owned_cnt, ghost_cnt);
+            if (d > threshold)
+                break;
+            heap.pop();
+            ++num_relaxations;
+            relax_from(u);
+        }
+    };
+
+    // Smallest pending distance on any process, infinity if none
+    constexpr Real no_work = std::numeric_limits<Real>::infinity();
+    auto global_min_pending = [&]() -> Real
+    {
+        while (!heap.empty() && heap.top().first > dist[heap.top().second])
+            heap.pop();
+        Real local = heap.empty() ? no_work : heap.top().first;
+        Real global = local;
+        if (mpi_size > 1)
+            MPI_Allreduce(&local, &global, 1, dolfinx::MPI::mpi_t<Real>,
+                          MPI_MIN, comm);
+        return global;
+    };
+
+    // Exchange of shared vertices with neighbouring processes: ghost
+    // distances are reduced onto their owners with min (carrying the payload
+    // of the minimum), then owners overwrite their ghosts. Each vertex is
+    // a block of [distance, payload...] values.
+    const int width = 1 + (payload ? 1 + payload->normal_dim : 0);
+    std::unique_ptr<dolfinx::common::Scatterer<>> scatterer;
+    std::vector<Real> owned_buffer, ghost_buffer;
+    if (mpi_size > 1)
+    {
+        scatterer = std::make_unique<dolfinx::common::Scatterer<>>(
+            *vertex_map, width);
+        owned_buffer.resize(scatterer->local_indices().size());
+        ghost_buffer.resize(scatterer->remote_indices().size());
+    }
+
+    auto pack = [&](std::int32_t v, Real* block)
+    {
+        block[0] = dist[v];
+        if (payload)
+        {
+            block[1] = payload->speed[v];
+            for (int d = 0; d < payload->normal_dim; ++d)
+                block[2 + d] = payload->normals[static_cast<std::size_t>(v)
+                                                    * payload->normal_dim + d];
+        }
+    };
+    auto unpack = [&](std::int32_t v, const Real* block)
+    {
+        dist[v] = block[0];
+        if (payload)
+        {
+            payload->speed[v] = block[1];
+            for (int d = 0; d < payload->normal_dim; ++d)
+                payload->normals[static_cast<std::size_t>(v)
+                                     * payload->normal_dim + d]
+                    = block[2 + d];
+        }
+    };
+
+    auto exchange = [&]()
+    {
+        const auto& owned_idx = scatterer->local_indices();
+        const auto& ghost_idx = scatterer->remote_indices();
+        const std::size_t num_owned_blocks = owned_idx.size() / width;
+        const std::size_t num_ghost_blocks = ghost_idx.size() / width;
+        auto owned_vertex = [&](std::size_t k)
+        { return static_cast<std::int32_t>(owned_idx[k * width] / width); };
+        auto ghost_vertex = [&](std::size_t k)
+        { return num_owned + static_cast<std::int32_t>(ghost_idx[k * width] / width); };
+        // Ghosts -> owners, min
+        for (std::size_t k = 0; k < num_ghost_blocks; ++k)
+            pack(ghost_vertex(k), ghost_buffer.data() + k * width);
+        MPI_Request request = MPI_REQUEST_NULL;
+        scatterer->scatter_rev_begin(ghost_buffer.data(), owned_buffer.data(),
+                                     request);
+        scatterer->scatter_end(request);
+        for (std::size_t k = 0; k < num_owned_blocks; ++k)
+        {
+            const std::int32_t v = owned_vertex(k);
+            const Real* block = owned_buffer.data() + k * width;
+            if (block_better(block, v))
+            {
+                const Real d = std::min(dist[v], block[0]);
+                unpack(v, block);
+                dist[v] = d;
+                if (d <= max_distance)
+                    heap.emplace(d, v);
             }
         }
-        
-        // C. Convergence Check
-        // ------------------------------------
-        double global_max_change = 0;
-        // Proper MPI type for Real (assuming double for now or using dolfinx helper)
-        double local_max_double = static_cast<double>(local_max_change);
-        MPI_Allreduce(&local_max_double, &global_max_change, 1, MPI_DOUBLE, MPI_MAX, comm);
-        
-        int local_q_size = active_queue.size();
-        int global_q_size = 0;
-        MPI_Allreduce(&local_q_size, &global_q_size, 1, MPI_INT, MPI_SUM, comm);
-        
-        if (global_max_change < opt.tol && global_q_size == 0) {
-            if (mpi_rank == 0) spdlog::info("FIM Converged at iter {}", iter);
-            break;
+
+        // Owners -> ghosts, copy
+        for (std::size_t k = 0; k < num_owned_blocks; ++k)
+            pack(owned_vertex(k), owned_buffer.data() + k * width);
+        request = MPI_REQUEST_NULL;
+        scatterer->scatter_fwd_begin(owned_buffer.data(), ghost_buffer.data(),
+                                     request);
+        scatterer->scatter_end(request);
+        for (std::size_t k = 0; k < num_ghost_blocks; ++k)
+        {
+            const std::int32_t v = ghost_vertex(k);
+            const Real* block = ghost_buffer.data() + k * width;
+            // Any decrease, even within tol, makes the pending heap entry of
+            // v stale, so v must be pushed again.
+            bool changed = block[0] < dist[v];
+            if (payload)
+                changed = changed || block[1] != payload->speed[v]
+                          || !std::equal(block + 2, block + 2 + payload->normal_dim,
+                                         normal_of(v));
+            unpack(v, block);
+            if (changed && block[0] <= max_distance)
+                heap.emplace(block[0], v);
+        }
+    };
+
+    // Every finite vertex is a source. Seeds on ghost vertices reach their
+    // owners in the first exchange.
+    for (std::int32_t v = 0; v < num_vertices; ++v)
+        if (dist[v] <= max_distance)
+            heap.emplace(dist[v], v);
+
+    // A serial solve is a single fast marching pass.
+    Real round_width = no_work;
+    if (mpi_size > 1 && opt.round_width > 0)
+        round_width = static_cast<Real>(opt.round_width);
+    else if (mpi_size > 1)
+    {
+        // Bounding box as [min_x, min_y, min_z, -max_x, -max_y, -max_z]
+        std::array<Real, 6> box;
+        box.fill(std::numeric_limits<Real>::max());
+        for (std::int32_t v = 0; v < num_vertices; ++v)
+        {
+            if (!vmap.has_geom(v))
+                continue;
+            const Real* x = vmap.coords(v);
+            for (int k = 0; k < 3; ++k)
+            {
+                box[k] = std::min(box[k], x[k]);
+                box[3 + k] = std::min(box[3 + k], -x[k]);
+            }
+        }
+        MPI_Allreduce(MPI_IN_PLACE, box.data(), 6, dolfinx::MPI::mpi_t<Real>,
+                      MPI_MIN, comm);
+        Real diagonal_sq = 0;
+        for (int k = 0; k < 3; ++k)
+            diagonal_sq += (box[3 + k] + box[k]) * (box[3 + k] + box[k]);
+        round_width = std::sqrt(diagonal_sq) / Real(32);
+    }
+    int round = 0;
+    Real pending = global_min_pending();
+    while (pending < no_work && round < opt.max_iter)
+    {
+        ++round;
+        drain(pending + round_width);
+        if (mpi_size > 1)
+            exchange();
+        pending = global_min_pending();
+    }
+    const bool converged = !(pending < no_work);
+
+    // Vertices beyond the band may hold tentative distances (and payloads)
+    // that were never propagated; they are not part of the solution.
+    if (max_distance < inf_value)
+    {
+        for (std::int32_t v = 0; v < num_vertices; ++v)
+        {
+            if (dist[v] <= max_distance)
+                continue;
+            dist[v] = max_distance;
+            if (payload)
+            {
+                payload->speed[v] = Real(0);
+                for (int d = 0; d < payload->normal_dim; ++d)
+                    payload->normals[static_cast<std::size_t>(v)
+                                         * payload->normal_dim + d]
+                        = Real(0);
+            }
         }
     }
-    
-    // CRITICAL: Final owner→ghost copy to ensure perfect consistency for VTK output
-    // The MIN-rule sync may leave ghosts with values slightly different from owners.
-    // This strict copy ensures ghost values EXACTLY match their owners.
-    if (payload && payload->valid(num_vertices))
-        copy_owner_to_ghost_payload(*vertex_map, dist, payload->speed,
-                                    payload->normals, payload->normal_dim);
-    else
-        copy_owner_to_ghost(*vertex_map, dist);
+
+    std::int64_t total_relaxations = 0;
+    MPI_Reduce(&num_relaxations, &total_relaxations, 1, MPI_INT64_T, MPI_SUM,
+               0, comm);
+    if (mpi_rank == 0)
+    {
+        if (converged)
+            spdlog::info("FIM converged in {} rounds, {} vertex relaxations.",
+                         round, total_relaxations);
+        else
+            spdlog::warn("FIM stopped after max_iter={} rounds without "
+                         "converging ({} vertex relaxations).",
+                         opt.max_iter, total_relaxations);
+    }
 }
 
 // Helper to get keys from map

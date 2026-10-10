@@ -373,6 +373,7 @@ void extend_normal_velocity(
   phi_vmap.build(*mesh, phi->function_space().get());
 
   std::vector<Real> dist(static_cast<std::size_t>(num_vertices), opt.inf_value);
+  const Real tol = static_cast<Real>(opt.tol);
   std::vector<Real> payload_speed(static_cast<std::size_t>(num_vertices), Real(0));
   std::vector<Real> payload_normal(
       static_cast<std::size_t>(num_vertices) * static_cast<std::size_t>(gdim),
@@ -398,22 +399,33 @@ void extend_normal_velocity(
       {
         Real closest[3] = {Real(0), Real(0), Real(0)};
         Real d = point_interface_distance(p, surface, elem, closest);
-        if (d < dist[static_cast<std::size_t>(v)])
-        {
-          dist[static_cast<std::size_t>(v)] = d;
-          std::span<const Real> closest_span(closest, static_cast<std::size_t>(gdim));
-          payload_speed[static_cast<std::size_t>(v)]
-              = evaluate_interface_speed(interface_speed, elem, closest_span);
+        const Real current = dist[static_cast<std::size_t>(v)];
+        if (d > current + tol)
+          continue;
 
-          std::vector<double> normal = evaluate_level_set_normal_at_point(
-              phi, surface.parent_cell[static_cast<std::size_t>(elem)],
-              closest_span, normal_sign);
-          for (int dcomp = 0; dcomp < gdim; ++dcomp)
-          {
-            payload_normal[static_cast<std::size_t>(v) * gdim
-                           + static_cast<std::size_t>(dcomp)]
-                = static_cast<Real>(normal[static_cast<std::size_t>(dcomp)]);
-          }
+        std::span<const Real> closest_span(closest, static_cast<std::size_t>(gdim));
+        const Real speed_value
+            = evaluate_interface_speed(interface_speed, elem, closest_span);
+        std::vector<double> normal_value = evaluate_level_set_normal_at_point(
+            phi, surface.parent_cell[static_cast<std::size_t>(elem)],
+            closest_span, normal_sign);
+        std::array<Real, 3> normal{};
+        for (int dcomp = 0; dcomp < gdim; ++dcomp)
+          normal[static_cast<std::size_t>(dcomp)]
+              = static_cast<Real>(normal_value[static_cast<std::size_t>(dcomp)]);
+
+        // Elements at the same distance (e.g. on both sides of a symmetry
+        // plane) are ordered by their payload, so that the choice does not
+        // depend on the element order of the process.
+        Real* current_normal = payload_normal.data() + static_cast<std::size_t>(v) * gdim;
+        const bool tie_wins = payload_precedes(
+            speed_value, normal.data(), payload_speed[static_cast<std::size_t>(v)],
+            current_normal, gdim);
+        if (d < current - tol || tie_wins)
+        {
+          dist[static_cast<std::size_t>(v)] = std::min(current, d);
+          payload_speed[static_cast<std::size_t>(v)] = speed_value;
+          std::copy_n(normal.begin(), gdim, current_normal);
         }
       }
     }

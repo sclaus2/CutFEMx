@@ -115,6 +115,188 @@ def test_3d_reinitialize_matches_sphere_distance(cell_type):
     assert error < 1.5 / n
 
 
+def _perturbed_box(comm, n, cell_type, amplitude):
+    mesh = create_box(
+        comm,
+        [np.array([-0.5, -0.5, -0.5]), np.array([0.5, 0.5, 0.5])],
+        [n, n, n],
+        cell_type,
+        ghost_mode=GhostMode.shared_facet,
+    )
+    x = mesh.geometry.x
+    inner = np.all(np.abs(x) < 0.5 - 1.0e-12, axis=1)
+    # A function of the coordinates, so that every partition moves the
+    # vertices the same way; it makes some cells obtuse.
+    shift = (amplitude / n) * np.stack(
+        [
+            np.sin(37.0 * x[:, 1] + 11.0 * x[:, 2]),
+            np.sin(23.0 * x[:, 2] + 29.0 * x[:, 0]),
+            np.sin(31.0 * x[:, 0] + 17.0 * x[:, 1]),
+        ],
+        axis=1,
+    )
+    x[inner] += shift[inner]
+    return mesh
+
+
+def _sphere(x, centre=(0.0, 0.0, 0.0), radius=0.3):
+    return sum((x[i] - centre[i]) ** 2 for i in range(3)) - radius**2
+
+
+def _two_spheres(x):
+    return np.minimum(
+        _sphere(x, (-0.22, 0.0, 0.0), 0.15), _sphere(x, (0.22, 0.05, 0.0), 0.15)
+    )
+
+
+def _by_coordinates(V, values):
+    coords = np.round(V.tabulate_dof_coordinates(), 10)
+    values = np.asarray(values).reshape(coords.shape[0], -1)
+    return {tuple(c): v for c, v in zip(coords, values)}
+
+
+def _reinitialized(comm, cell_type, amplitude, level_set, **kwargs):
+    mesh = _perturbed_box(comm, 10, cell_type, amplitude)
+    V = functionspace(mesh, ("Lagrange", 1))
+    phi = Function(V)
+    phi.interpolate(level_set)
+    reinitialize(phi, max_iter=500, tol=1.0e-12, **kwargs)
+    return [_by_coordinates(V, phi.x.array)]
+
+
+def _extended(comm, cell_type, amplitude, level_set):
+    mesh = _perturbed_box(comm, 10, cell_type, amplitude)
+    V = functionspace(mesh, ("Lagrange", 1))
+    phi = Function(V)
+    phi.interpolate(level_set)
+    interface = cutfemx.create_cut_mesh(cutfemx.cut(phi), "phi=0", mode="cut_only")
+    speed = Function(functionspace(interface.mesh, ("Lagrange", 1)))
+    speed.interpolate(lambda x: 1.0 + 0.5 * x[2] + 0.25 * x[0] * x[1])
+    result = extend_normal_velocity(
+        phi, speed, interface, k_ring=1, max_iter=500, tol=1.0e-12
+    )
+    return [
+        _by_coordinates(result.signed_distance.function_space, result.signed_distance.x.array),
+        _by_coordinates(result.speed.function_space, result.speed.x.array),
+        _by_coordinates(result.velocity.function_space, result.velocity.x.array),
+    ]
+
+
+@pytest.mark.parametrize(
+    "solve",
+    [
+        lambda comm: _reinitialized(comm, CellType.hexahedron, 0.0, _sphere),
+        lambda comm: _reinitialized(comm, CellType.tetrahedron, 0.0, _sphere),
+        lambda comm: _reinitialized(comm, CellType.tetrahedron, 0.3, _sphere),
+        lambda comm: _reinitialized(comm, CellType.hexahedron, 0.3, _two_spheres),
+        lambda comm: _reinitialized(
+            comm, CellType.tetrahedron, 0.3, _sphere, max_distance=0.25
+        ),
+    ],
+    ids=["hex", "tet", "obtuse-tet", "obtuse-hex-two-spheres", "obtuse-tet-band"],
+)
+def test_parallel_distance_matches_serial(solve):
+    # Under MPI, the distributed solve must give the serial solution of the
+    # same mesh at every vertex.
+    _check_matches_serial(solve)
+
+
+@pytest.mark.xfail(
+    reason="extend_normal_velocity seeds each vertex with the distance to the "
+    "interface elements of its own process, so a closer element on another "
+    "process can be missed",
+    strict=False,
+)
+@pytest.mark.parametrize(
+    "solve",
+    [
+        lambda comm: _extended(comm, CellType.hexahedron, 0.0, _sphere),
+        lambda comm: _extended(comm, CellType.tetrahedron, 0.3, _two_spheres),
+    ],
+    ids=["hex", "obtuse-tet-two-spheres"],
+)
+def test_parallel_extension_matches_serial(solve):
+    _check_matches_serial(solve)
+
+
+def _check_matches_serial(solve):
+    comm = MPI.COMM_WORLD
+    parallel = solve(comm)
+    serial = solve(MPI.COMM_SELF)
+    for p, s in zip(parallel, serial):
+        assert p.keys() <= s.keys()
+        difference = max(
+            (float(np.max(np.abs(p[k] - s[k]))) for k in p), default=0.0
+        )
+        assert comm.allreduce(difference, op=MPI.MAX) < 1.0e-10
+
+
+def _min_face_update(x, face, values, k=40):
+    """Brute-force min over the face of linear values plus distance to x."""
+    s, t = np.meshgrid(np.linspace(0.0, 1.0, k + 1), np.linspace(0.0, 1.0, k + 1))
+    inside = s + t <= 1.0
+    s, t = s[inside], t[inside]
+    points = face[0] + s[:, None] * (face[1] - face[0]) + t[:, None] * (face[2] - face[0])
+    linear = values[0] + s * (values[1] - values[0]) + t * (values[2] - values[0])
+    return np.min(linear + np.linalg.norm(x - points, axis=1))
+
+
+@pytest.mark.parametrize("amplitude", [0.0, 0.3])
+def test_reinitialize_is_a_fixed_point_of_the_face_updates(amplitude):
+    # No vertex distance may exceed an update from one of its faces: missed
+    # updates leave distances too large.
+    n = 8
+    mesh = _perturbed_box(MPI.COMM_SELF, n, CellType.tetrahedron, amplitude)
+    V = functionspace(mesh, ("Lagrange", 1))
+    phi = Function(V)
+    phi.interpolate(_sphere)
+    reinitialize(phi, max_iter=500, tol=1.0e-12)
+
+    distance = np.abs(phi.x.array)
+    coords = V.tabulate_dof_coordinates()
+    worst = 0.0
+    for cell in V.dofmap.list:
+        for j in range(4):
+            face = np.delete(cell, j)
+            update = _min_face_update(coords[cell[j]], coords[face], distance[face])
+            worst = max(worst, distance[cell[j]] - update)
+    # The grid minimum is within (1 + |grad d|) * grid spacing of the minimum
+    assert worst < 3.0 * (1.5 / n) / 40
+
+
+def test_reinitialize_band_matches_full_solve():
+    comm = MPI.COMM_WORLD
+    n = 16
+    mesh = create_box(
+        comm,
+        [np.array([-0.5, -0.5, -0.5]), np.array([0.5, 0.5, 0.5])],
+        [n, n, n],
+        CellType.hexahedron,
+        ghost_mode=GhostMode.shared_facet,
+    )
+    V = functionspace(mesh, ("Lagrange", 1))
+    radius = 0.3
+
+    def level_set():
+        phi = Function(V)
+        phi.interpolate(lambda x: x[0] ** 2 + x[1] ** 2 + x[2] ** 2 - radius**2)
+        return phi
+
+    full = level_set()
+    reinitialize(full, max_iter=500, tol=1e-12)
+    max_distance = 3.0 / n
+    band = level_set()
+    reinitialize(band, max_iter=500, tol=1e-12, max_distance=max_distance)
+
+    inside = np.abs(full.x.array) < max_distance - 1.0e-12
+    assert comm.allreduce(int(np.any(inside)), op=MPI.MAX)
+    assert comm.allreduce(int(np.any(~inside)), op=MPI.MAX)
+    np.testing.assert_allclose(band.x.array[inside], full.x.array[inside], atol=1e-10)
+    np.testing.assert_allclose(
+        band.x.array[~inside], np.sign(full.x.array[~inside]) * max_distance
+    )
+
+
 def test_reinitialize_from_facets_uses_facets_as_zero_interface():
     mesh = create_rectangle(
         MPI.COMM_SELF,
@@ -337,7 +519,9 @@ def test_unsigned_distance_pipeline_uses_distributed_stl_wrappers(tmp_path):
     assert np.max(values) > 0.0
 
 
-def _build_circle_extension(comm=MPI.COMM_SELF, *, n=24, target_degree=None):
+def _build_circle_extension(
+    comm=MPI.COMM_SELF, *, n=24, target_degree=None, max_distance=None
+):
     radius = 0.45
     mesh = create_rectangle(
         comm,
@@ -374,6 +558,7 @@ def _build_circle_extension(comm=MPI.COMM_SELF, *, n=24, target_degree=None):
         interface_cut_mesh,
         k_ring=1,
         target_space=target_space,
+        max_distance=max_distance,
         max_iter=500,
         tol=1.0e-10,
     )
@@ -399,6 +584,28 @@ def test_extension_velocity_matches_circle_speed_near_interface():
     np.testing.assert_allclose(velocity_norm, result.speed.x.array, atol=1.0e-12)
     assert np.min(result.signed_distance.x.array) < 0.0
     assert np.max(result.signed_distance.x.array) > 0.0
+
+
+def test_extension_velocity_band_matches_full_extension():
+    _, V, _, full, radius = _build_circle_extension()
+    max_distance = 0.15
+    _, _, _, band, _ = _build_circle_extension(max_distance=max_distance)
+
+    distance = np.abs(full.signed_distance.x.array)
+    inside = distance < max_distance - 1.0e-12
+    assert np.any(inside) and np.any(~inside)
+    np.testing.assert_allclose(
+        band.signed_distance.x.array[inside],
+        full.signed_distance.x.array[inside],
+        atol=1.0e-12,
+    )
+    np.testing.assert_allclose(
+        band.speed.x.array[inside], full.speed.x.array[inside], atol=1.0e-12
+    )
+    np.testing.assert_allclose(
+        np.abs(band.signed_distance.x.array[~inside]), max_distance
+    )
+    assert np.all(band.speed.x.array[~inside] == 0.0)
 
 
 def test_higher_order_extension_output_interpolates_sampled_speed():

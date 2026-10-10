@@ -8,6 +8,8 @@
 #include <array.h>
 #include <caster_mpi.h>
 
+#include <limits>
+
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/array.h>
@@ -163,30 +165,33 @@ void declare_distance(nb::module_& m, std::string type)
   m.def(
       "reinitialize",
       [](std::shared_ptr<dolfinx::fem::Function<Real>> phi, int max_iter,
-         double tol)
+         double tol, double max_distance)
       {
         cutfemx::distance::FMMOptions opt;
         opt.max_iter = max_iter;
         opt.tol = tol;
+        opt.max_distance = max_distance;
         cutfemx::distance::reinitialize<Real>(*phi, opt);
       },
-      nb::arg("phi"), nb::arg("max_iter") = 1000, nb::arg("tol") = 1e-10);
+      nb::arg("phi"), nb::arg("max_iter") = 1000, nb::arg("tol") = 1e-10,
+      nb::arg("max_distance") = std::numeric_limits<double>::infinity());
 
   m.def(
       "reinitialize_from_facets",
       [](std::shared_ptr<dolfinx::fem::Function<Real>> phi,
          nb::ndarray<const std::int32_t, nb::ndim<1>, nb::c_contig> facets,
-         int max_iter, double tol)
+         int max_iter, double tol, double max_distance)
       {
         cutfemx::distance::FMMOptions opt;
         opt.max_iter = max_iter;
         opt.tol = tol;
+        opt.max_distance = max_distance;
         cutfemx::distance::reinitialize_from_facets<Real>(
             *phi, std::span<const std::int32_t>(facets.data(), facets.size()),
             opt);
       },
       nb::arg("phi"), nb::arg("facets"), nb::arg("max_iter") = 1000,
-      nb::arg("tol") = 1e-10);
+      nb::arg("tol") = 1e-10, nb::arg("max_distance") = std::numeric_limits<double>::infinity());
 
   m.def(
       "extend_normal_velocity",
@@ -196,11 +201,13 @@ void declare_distance(nb::module_& m, std::string type)
          std::shared_ptr<dolfinx::fem::Function<Real>> speed,
          std::shared_ptr<dolfinx::fem::Function<Real>> velocity,
          std::shared_ptr<dolfinx::fem::Function<Real>> signed_distance,
-         int k_ring, double normal_sign, int max_iter, double tol)
+         int k_ring, double normal_sign, int max_iter, double tol,
+         double max_distance)
       {
         cutfemx::distance::FMMOptions opt;
         opt.max_iter = max_iter;
         opt.tol = tol;
+        opt.max_distance = max_distance;
         cutfemx::distance::extend_normal_velocity<Real>(
             std::move(phi), *interface_speed, interface_cut_mesh, *speed,
             *velocity, *signed_distance, k_ring, normal_sign, opt);
@@ -209,7 +216,7 @@ void declare_distance(nb::module_& m, std::string type)
       nb::arg("interface_cut_mesh"), nb::arg("speed"), nb::arg("velocity"),
       nb::arg("signed_distance"), nb::arg("k_ring") = 1,
       nb::arg("normal_sign") = 1.0, nb::arg("max_iter") = 1000,
-      nb::arg("tol") = 1.0e-10);
+      nb::arg("tol") = 1.0e-10, nb::arg("max_distance") = std::numeric_limits<double>::infinity());
 
   m.def(
       "refinement_edges_from_stl",
