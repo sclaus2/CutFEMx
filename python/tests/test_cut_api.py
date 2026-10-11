@@ -9,6 +9,8 @@ from collections import Counter
 
 from mpi4py import MPI
 
+import basix
+import basix.ufl
 import cutfemx
 import numpy as np
 import pytest
@@ -755,6 +757,50 @@ def test_cutfemx_form_assembles_runtime_interior_facet_jump_matrix():
     assert ("interior_facet", -1) in cut_form.runtime_providers
     assert np.isfinite(matrix_norm_sq)
     assert matrix_norm_sq > 0.0
+
+
+def test_runtime_interior_facet_sides_agree_on_reflected_facet():
+    """Two triangles that order their shared edge in opposite directions (a
+    reflected facet, as Plaza refinement produces) must evaluate a cut-facet
+    rule at the same physical points from both sides."""
+    if MPI.COMM_WORLD.size > 1:
+        pytest.skip("two-cell mesh test")
+    points = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    cells = np.array([[0, 1, 2], [3, 2, 1]], dtype=np.int64)
+    domain = ufl.Mesh(basix.ufl.element("Lagrange", "triangle", 1, shape=(2,)))
+    msh = mesh.create_mesh(MPI.COMM_SELF, cells, domain, points)
+
+    tdim = msh.topology.dim
+    facets = _interior_facet_indices(msh)
+    assert facets.size == 1
+    msh.topology.create_connectivity(tdim - 1, tdim)
+    msh.topology.create_connectivity(tdim, tdim - 1)
+    msh.topology.create_connectivity(tdim, 0)
+    reference = basix.topology(basix.CellType.triangle)[tdim - 1]
+    orders = []
+    for c in msh.topology.connectivity(tdim - 1, tdim).links(facets[0]):
+        local = int(np.flatnonzero(msh.topology.connectivity(tdim, tdim - 1).links(c) == facets[0])[0])
+        orders.append(msh.topology.connectivity(tdim, 0).links(c)[reference[local]])
+    assert orders[0][0] == orders[1][1]  # the two cells order the facet oppositely
+
+    V = fem.functionspace(msh, ("Lagrange", 1))
+    level_set = fem.Function(V)
+    level_set.interpolate(lambda x: x[0] - 0.3)  # cuts the shared edge off-centre
+    cutter = cutfemx.cut(level_set, facets, tdim - 1)
+    rules = cutfemx.runtime_quadrature(cutter, "phi<0", order=2)
+    dS = ufl.Measure("dS", domain=msh, subdomain_data=rules)
+
+    D = fem.functionspace(msh, ("DG", 1))
+    f = fem.Function(D)
+    f.interpolate(lambda x: 3.0 * x[0] - 7.0 * x[1] + 0.5)  # continuous
+    jump_sq = cutfemx.fem.assemble_scalar(cutfemx.fem.form((f("+") - f("-")) ** 2 * dS))
+    plus = cutfemx.fem.assemble_scalar(cutfemx.fem.form(f("+") * dS))
+    minus = cutfemx.fem.assemble_scalar(cutfemx.fem.form(f("-") * dS))
+    # Fluid part of the edge x + y = 1: from (0.3, 0.7) to (0, 1).
+    exact = 0.3 * np.sqrt(2.0) * (3.0 * 0.15 - 7.0 * 0.85 + 0.5)
+    assert abs(jump_sq) < 1e-24
+    assert np.isclose(plus, exact, rtol=1e-12)
+    assert np.isclose(minus, exact, rtol=1e-12)
 
 
 def test_cut_api_runtime_quadrature_physical_points_are_lazy_cpp_cache():
