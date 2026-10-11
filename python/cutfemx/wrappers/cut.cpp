@@ -364,6 +364,30 @@ void declare_cut_api(nb::module_& m, std::string type)
       nb::arg("backend") = "straight");
 
   m.def(
+      "runtime_quadrature_compressed",
+      [](const CutData& cut_data, const std::string& ls_part, int order,
+         const std::string& backend, int degree)
+      {
+        cutcells::compression::CompressionStats stats;
+        auto rules = cutfemx::runtime_quadrature(cut_data, ls_part, order,
+                                                 backend, degree, &stats);
+        nb::dict d;
+        d["degree"] = degree;
+        d["n_rules"] = stats.n_rules;
+        d["n_compressed"] = stats.n_compressed;
+        d["n_skipped"] = stats.n_skipped;
+        d["points_before"] = stats.points_before;
+        d["points_after"] = stats.points_after;
+        d["max_residual"] = stats.max_residual;
+        return nb::make_tuple(nb::cast(std::move(rules)), d);
+      },
+      nb::arg("cut"), nb::arg("ls_part"), nb::arg("order"), nb::arg("backend"),
+      nb::arg("degree"),
+      "runtime_quadrature with every rule compressed to at most as many points "
+      "as the polynomial space of the given degree has moments; returns "
+      "(rules, stats).");
+
+  m.def(
       "runtime_quadratures",
       [](const CutData& cut_data, std::vector<std::string> ls_parts, int order,
          const std::string& backend)

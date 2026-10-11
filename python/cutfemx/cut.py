@@ -275,6 +275,7 @@ def runtime_quadrature(
     order: int,
     *,
     backend: str = "straight",
+    compress: int | None = None,
 ):
     """Create runintgen-compatible runtime quadrature for selected entities.
 
@@ -284,11 +285,27 @@ def runtime_quadrature(
     ``"straight"`` (or ``"lut"``), the lookup tables' straight pieces, or
     ``"quadrays"``, curved rules of the level sets themselves, for cells of the
     mesh dimension.
+
+    ``compress``: if given, every rule is replaced by at most as many of its
+    points as the polynomial space of that degree has moments (Q_p on
+    quadrilaterals and hexahedra, P_p on simplices), with positive weights
+    that integrate the space exactly as the original rule
+    (``cutcells.compress_rules``). For Q_k elements on affine hexahedra,
+    ``compress=2 * k`` leaves stiffness and mass matrices unchanged up to
+    rounding. The counters are in ``rules.compression`` (points before and
+    after, largest moment residual).
     """
-    cpp_rules = _cpp.runtime_quadrature(
-        cut_data._cpp_object, ls_part, order, backend
+    if compress is None:
+        cpp_rules = _cpp.runtime_quadrature(
+            cut_data._cpp_object, ls_part, order, backend
+        )
+        return _runtime_quadrature_from_cpp(cpp_rules, cut_data)
+    cpp_rules, stats = _cpp.runtime_quadrature_compressed(
+        cut_data._cpp_object, ls_part, order, backend, int(compress)
     )
-    return _runtime_quadrature_from_cpp(cpp_rules, cut_data)
+    rules = _runtime_quadrature_from_cpp(cpp_rules, cut_data)
+    rules.compression = dict(stats)
+    return rules
 
 
 def _runtime_quadrature_from_cpp(cpp_rules, cut_data: CutData) -> RuntimeQuadratureRules:

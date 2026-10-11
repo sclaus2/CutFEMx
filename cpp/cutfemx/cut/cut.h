@@ -28,6 +28,8 @@
 #include "../mesh/cut_mesh.h"
 #include "runtime_quadrature.h"
 
+#include <cutcells/compression/compress.h>
+
 namespace cutfemx
 {
 
@@ -227,6 +229,30 @@ template <std::floating_point T>
 RuntimeQuadrature<T> runtime_quadrature(const CutData<T>& cut_data,
                                         std::string_view ls_part, int order,
                                         std::string_view backend = "straight");
+
+/// runtime_quadrature with every rule compressed by
+/// cutcells::compression::compress_rules: at most as many of its points as
+/// the polynomial space of degree @p compress_degree has moments, with
+/// positive weights that integrate that space exactly as the original rule
+/// (Caratheodory-Tchakaloff). The space is total degree (P_p) on simplex
+/// meshes and degree in each coordinate (Q_p) on the other cells. For Q_k
+/// elements on affine hexahedra, degree 2k leaves stiffness and mass
+/// matrices unchanged up to rounding; outside the space a compressed rule is
+/// less accurate than the original one. Rules with a negative weight, or no
+/// more points than moments, are copied.
+///
+/// Not for the lookup tables' rules on a zero set of the host facets:
+/// surface_normal makes those rules again piece by piece.
+///
+/// @param compress_degree  degree of the moment space, >= 0
+/// @param stats            if not null, receives the counters of the
+///                         compression (rules, points before and after,
+///                         largest moment residual)
+template <std::floating_point T>
+RuntimeQuadrature<T> runtime_quadrature(
+    const CutData<T>& cut_data, std::string_view ls_part, int order,
+    std::string_view backend, int compress_degree,
+    cutcells::compression::CompressionStats* stats = nullptr);
 
 template <std::floating_point T>
 std::vector<std::pair<std::string, RuntimeQuadrature<T>>> runtime_quadratures(

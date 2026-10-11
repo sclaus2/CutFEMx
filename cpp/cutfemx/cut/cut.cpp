@@ -1305,6 +1305,15 @@ RuntimeQuadrature<T> runtime_quadrature(const CutData<T>& cut_data,
                                         std::string_view ls_part, int order,
                                         std::string_view backend)
 {
+  return runtime_quadrature(cut_data, ls_part, order, backend, -1, nullptr);
+}
+
+template <std::floating_point T>
+RuntimeQuadrature<T> runtime_quadrature(
+    const CutData<T>& cut_data, std::string_view ls_part, int order,
+    std::string_view backend, int compress_degree,
+    cutcells::compression::CompressionStats* stats)
+{
   validate_quadrature_order(order);
   const QuadratureBackend parsed_backend = quadrature_backend(backend);
 
@@ -1322,6 +1331,27 @@ RuntimeQuadrature<T> runtime_quadrature(const CutData<T>& cut_data,
   {
     rules = cutcells::part::quadrature_rules<T, std::int32_t>(
         part, order, /*include_uncut_cells=*/false, cut_data.options.quadrays);
+  }
+  if (compress_degree >= 0)
+  {
+    if (!surface_provenance.empty())
+    {
+      throw std::invalid_argument(
+          "runtime_quadrature: the lookup tables' rules on a zero set of the "
+          "host facets cannot be compressed (surface_normal makes them again "
+          "piece by piece); use backend 'quadrays'");
+    }
+    namespace cc = cutcells::compression;
+    const cc::MomentSpace space
+        = dolfinx::mesh::is_simplex(cut_data.mesh_owner->topology()->cell_type())
+              ? cc::MomentSpace::total
+              : cc::MomentSpace::tensor;
+    cutcells::quadrature::QuadratureRules<T> compressed;
+    cc::CompressionStats local;
+    cc::compress_rules(rules, compress_degree, space, compressed, local);
+    rules = std::move(compressed);
+    if (stats)
+      *stats = local;
   }
   return runtime_quadrature_from_rules(
       cut_data, std::move(rules), std::move(surface_provenance));
@@ -1454,6 +1484,12 @@ template RuntimeQuadrature<double> runtime_quadrature(
     const CutData<double>&, std::string_view, int, std::string_view);
 template RuntimeQuadrature<float> runtime_quadrature(
     const CutData<float>&, std::string_view, int, std::string_view);
+template RuntimeQuadrature<double> runtime_quadrature(
+    const CutData<double>&, std::string_view, int, std::string_view, int,
+    cutcells::compression::CompressionStats*);
+template RuntimeQuadrature<float> runtime_quadrature(
+    const CutData<float>&, std::string_view, int, std::string_view, int,
+    cutcells::compression::CompressionStats*);
 
 template std::vector<std::pair<std::string, RuntimeQuadrature<double>>>
 runtime_quadratures(
