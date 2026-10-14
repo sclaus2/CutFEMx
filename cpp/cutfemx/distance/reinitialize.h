@@ -32,6 +32,15 @@
 
 namespace cutfemx::distance {
 
+/// Sum of a rank-local count over all ranks of a communicator.
+inline std::int64_t global_count(std::size_t local_count, MPI_Comm comm)
+{
+    std::int64_t local = static_cast<std::int64_t>(local_count);
+    std::int64_t global = 0;
+    MPI_Allreduce(&local, &global, 1, MPI_INT64_T, MPI_SUM, comm);
+    return global;
+}
+
 /// Surface mesh structure for reinitialization
 /// Supports both edges (2D) and triangles (3D)
 template <typename Real>
@@ -76,8 +85,7 @@ SurfaceMesh<Real> extract_surface_from_levelset(
     // Set vertices per element based on dimension
     surface.verts_per_elem = (tdim == 3) ? 3 : 2;  // triangles for 3D, edges for 2D
     
-    // Build cut data through the public CutFEMx cut facade and use the new
-    // cut-layer locator for the zero-contour cells.
+    // Build cut data through the public CutFEMx cut facade.
     // "phi=0" marks cells where the level set changes sign
     auto phi_handle = std::shared_ptr<const dolfinx::fem::Function<Real>>(
         &phi, [](const dolfinx::fem::Function<Real>*) {});
@@ -90,7 +98,9 @@ SurfaceMesh<Real> extract_surface_from_levelset(
     cutfemx::mesh::CutMesh<Real> cut_mesh =
         cutfemx::create_cut_mesh<Real>(cut_data, "phi=0", "cut_only");
     
-    if (!cut_mesh._cut_mesh || cut_mesh._parent_index.empty()) {
+    // The cut mesh is null on every rank when no rank has cut cells; ranks
+    // without cut cells otherwise hold an empty local part of it.
+    if (!cut_mesh._cut_mesh) {
         return surface;
     }
 
@@ -390,16 +400,6 @@ void init_nearfield_from_surface(
     }
 }
 
-/// Number of surface elements on all processes
-template <typename Real>
-std::int64_t global_num_elements(const SurfaceMesh<Real>& surface, MPI_Comm comm)
-{
-    std::int64_t local = surface.nE();
-    std::int64_t global = 0;
-    MPI_Allreduce(&local, &global, 1, MPI_INT64_T, MPI_SUM, comm);
-    return global;
-}
-
 /// Reinitialize level set function as signed distance from tagged facets.
 ///
 /// The supplied facets are treated as the exact zero-distance surface. The
@@ -415,6 +415,13 @@ void reinitialize_from_facets(
     MPI_Comm comm = mesh->comm();
     const int mpi_rank = dolfinx::MPI::rank(comm);
 
+    if (global_count(facets.size(), comm) == 0) {
+        if (mpi_rank == 0) {
+            std::cout << "Warning: No interface facets for reinitialization\n";
+        }
+        return;
+    }
+
     std::span<const Real> phi_vals = phi.x()->array();
     std::vector<int> original_signs(phi_vals.size());
     for (std::size_t i = 0; i < phi_vals.size(); ++i) {
@@ -422,7 +429,7 @@ void reinitialize_from_facets(
     }
 
     SurfaceMesh<Real> surface = extract_surface_from_facets(*mesh, facets);
-    if (global_num_elements(surface, comm) == 0) {
+    if (global_count(surface.nE(), comm) == 0) {
         if (mpi_rank == 0) {
             std::cout << "Warning: Empty facet surface, skipping reinitialization\n";
         }
@@ -513,7 +520,7 @@ void reinitialize(
     auto surface = extract_surface_from_levelset(phi);
     
     // Processes without a part of the surface still take part in the solve
-    if (global_num_elements(surface, comm) == 0) {
+    if (global_count(surface.nE(), comm) == 0) {
         if (mpi_rank == 0) {
             std::cout << "Warning: Empty surface, skipping reinitialization\n";
         }

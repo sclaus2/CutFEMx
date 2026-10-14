@@ -190,10 +190,15 @@ def cut(
     *,
     cut_approximation: str = "auto",
     cut_approximation_order: int = 1,
-    max_refinement_iterations: int = 8,
-    edge_max_depth: int = 20,
 ) -> CutData:
-    """Cut one or more scalar level-set functions on cells or selected entities."""
+    """Cut one or more scalar level-set functions on cells or selected entities.
+
+    Every host entity is classified as inside, outside or cut by every level
+    set. ``cut_approximation`` sets the order of the Pk-iso-P1 template on
+    which the straight backend cuts a cell: ``"auto"`` (the level sets'
+    degree), ``"linear"`` (1) or ``"iso_p1"`` (``cut_approximation_order``,
+    1 to 4).
+    """
     level_sets = _normalise_level_sets(level_set)
     candidate_entities, dim = _candidate_entities(entities, entity_dim)
     if len(level_sets) == 1:
@@ -203,8 +208,6 @@ def cut(
                     level_sets[0]._cpp_object,
                     cut_approximation,
                     cut_approximation_order,
-                    max_refinement_iterations,
-                    edge_max_depth,
                 ),
                 level_sets=level_sets,
             )
@@ -215,8 +218,6 @@ def cut(
                 dim,
                 cut_approximation,
                 cut_approximation_order,
-                max_refinement_iterations,
-                edge_max_depth,
             ),
             level_sets=level_sets,
             entities=candidate_entities,
@@ -228,8 +229,6 @@ def cut(
                 [phi._cpp_object for phi in level_sets],
                 cut_approximation,
                 cut_approximation_order,
-                max_refinement_iterations,
-                edge_max_depth,
             ),
             level_sets=level_sets,
         )
@@ -240,8 +239,6 @@ def cut(
             dim,
             cut_approximation,
             cut_approximation_order,
-            max_refinement_iterations,
-            edge_max_depth,
         ),
         level_sets=level_sets,
         entities=candidate_entities,
@@ -278,12 +275,37 @@ def runtime_quadrature(
     order: int,
     *,
     backend: str = "straight",
+    compress: int | None = None,
 ):
-    """Create runintgen-compatible runtime quadrature for selected entities."""
-    cpp_rules = _cpp.runtime_quadrature(
-        cut_data._cpp_object, ls_part, order, backend
+    """Create runintgen-compatible runtime quadrature for selected entities.
+
+    One rule per cut host entity, and rules on the host facets that lie in a
+    zero set the selector asks for. ``order`` is the polynomial degree the
+    rules integrate exactly on flat pieces, 1 to 10. ``backend`` is
+    ``"straight"`` (or ``"lut"``), the lookup tables' straight pieces, or
+    ``"quadrays"``, curved rules of the level sets themselves, for cells of the
+    mesh dimension.
+
+    ``compress``: if given, every rule is replaced by at most as many of its
+    points as the polynomial space of that degree has moments (Q_p on
+    quadrilaterals and hexahedra, P_p on simplices), with positive weights
+    that integrate the space exactly as the original rule
+    (``cutcells.compress_rules``). For Q_k elements on affine hexahedra,
+    ``compress=2 * k`` leaves stiffness and mass matrices unchanged up to
+    rounding. The counters are in ``rules.compression`` (points before and
+    after, largest moment residual).
+    """
+    if compress is None:
+        cpp_rules = _cpp.runtime_quadrature(
+            cut_data._cpp_object, ls_part, order, backend
+        )
+        return _runtime_quadrature_from_cpp(cpp_rules, cut_data)
+    cpp_rules, stats = _cpp.runtime_quadrature_compressed(
+        cut_data._cpp_object, ls_part, order, backend, int(compress)
     )
-    return _runtime_quadrature_from_cpp(cpp_rules, cut_data)
+    rules = _runtime_quadrature_from_cpp(cpp_rules, cut_data)
+    rules.compression = dict(stats)
+    return rules
 
 
 def _runtime_quadrature_from_cpp(cpp_rules, cut_data: CutData) -> RuntimeQuadratureRules:

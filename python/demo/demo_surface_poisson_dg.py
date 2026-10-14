@@ -176,15 +176,13 @@ phi.x.scatter_forward()
 cell_cut = cutfemx.cut(phi)
 cut_cells = cutfemx.locate_entities(cell_cut, "phi=0")
 gamma_rules = cutfemx.runtime_quadrature(
-    cell_cut, "phi=0", quadrature_order, backend="algoim"
+    cell_cut, "phi=0", quadrature_order, backend="quadrays"
 )
 
 facet_dim = msh.topology.dim - 1
 skeleton_facets = cutfemx.interior_facets_for_cells(msh, cut_cells)
 facet_cut = cutfemx.cut(phi, skeleton_facets, facet_dim)
-skeleton_rules = cutfemx.runtime_quadrature(
-    facet_cut, "phi=0", quadrature_order, backend="algoim"
-)
+skeleton_rules = cutfemx.runtime_quadrature(facet_cut, "phi=0", quadrature_order)
 surface_skeleton_facets = cutfemx.locate_entities(facet_cut, "phi=0")
 ghost_facets = surface_skeleton_facets
 

@@ -15,7 +15,8 @@
 #include <unordered_set>
 #include <utility>
 
-#include <cutcells/ho_mesh_part_output.h>
+#include <cutcells/part/mesh_part.h>
+#include <cutcells/part/output.h>
 
 #include <dolfinx/mesh/Topology.h>
 
@@ -109,6 +110,25 @@ cell_neighbors(const dolfinx::mesh::Mesh<T>& mesh, std::int32_t num_cells)
   return neighbors;
 }
 
+/// The measure of the part @p selector in each of its cut cells, from the
+/// lookup tables' pieces.
+template <std::floating_point T>
+std::unordered_map<std::int32_t, T>
+cut_cell_measures(const cutfemx::CutData<T>& cut_data, const std::string& selector)
+{
+  const auto part = select_part(cut_data, selector);
+  const auto rules = cutcells::part::quadrature_rules<T, std::int32_t>(
+      part, /*order=*/2, /*include_uncut_cells=*/false, cut_data.options.lut);
+  std::unordered_map<std::int32_t, T> measures;
+  for (std::size_t r = 0; r < rules._parent_map.size(); ++r)
+  {
+    measures[rules._parent_map[r]] = std::accumulate(
+        rules._weights.begin() + rules._offset[r],
+        rules._weights.begin() + rules._offset[r + 1], T(0));
+  }
+  return measures;
+}
+
 template <std::floating_point T>
 void validate_original_cell_cut(const cutfemx::CutData<T>& cut_data)
 {
@@ -178,13 +198,12 @@ CellAggregation<T> create_cell_aggregation(
                                   aggregation.cut_cells.end());
   aggregation.active_cells = sorted_unique(std::move(aggregation.active_cells));
 
-  auto part = cutcells::select_part(cut_data.mesh_view, cut_data.cut_cells,
-                                    cut_data.parent_cells, strict_selector);
-  auto [fraction_parents, fractions]
-      = cutcells::output::volume_fractions(part);
-  std::unordered_map<std::int32_t, T> selected_fraction;
-  for (std::size_t i = 0; i < fraction_parents.size(); ++i)
-    selected_fraction[static_cast<std::int32_t>(fraction_parents[i])] = fractions[i];
+  // The selected volume fraction of a cut cell: the measure of the selected
+  // part over that of both parts.
+  const std::string complement_selector
+      = parsed.name + (parsed.relation == '<' ? '>' : '<') + "0";
+  const auto selected = cut_cell_measures(cut_data, strict_selector);
+  const auto complement = cut_cell_measures(cut_data, complement_selector);
 
   std::unordered_set<std::int32_t> root_set;
   for (std::int32_t cell : aggregation.interior_cells)
@@ -192,7 +211,11 @@ CellAggregation<T> create_cell_aggregation(
 
   for (std::int32_t cell : aggregation.cut_cells)
   {
-    const T fraction = selected_fraction.contains(cell) ? selected_fraction[cell] : T(0);
+    const auto it = selected.find(cell);
+    const auto jt = complement.find(cell);
+    const T inside = it != selected.end() ? it->second : T(0);
+    const T total = inside + (jt != complement.end() ? jt->second : T(0));
+    const T fraction = total > T(0) ? inside / total : T(0);
     aggregation.cut_volume_fraction[static_cast<std::size_t>(cell)] = fraction;
 
     if (root_policy == RootPolicy::interior_or_well_cut

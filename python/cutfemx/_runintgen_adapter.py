@@ -511,6 +511,38 @@ def _facet_integration_rows(
     return np.asarray(flat, dtype=np.int32).reshape((-1, width))
 
 
+def _secondary_facet_vertex_permutations(
+    mesh: Any, rows: npt.NDArray[np.int32]
+) -> npt.NDArray[np.int32]:
+    """Facet vertex permutation of the second side of interior-facet rows.
+
+    ``rows`` are DOLFINx interior-facet rows ``(cell0, local_facet0, cell1,
+    local_facet1)``. Runtime facet rules are charted on the first cell's
+    reference facet. Entry ``[r, k]`` is the position, among cell1's local
+    facet vertices, of cell0's local facet vertex ``k``; it differs from the
+    identity on facets the two cells order differently (reflected facets,
+    common after mesh refinement), where both sides must still evaluate at the
+    same physical points.
+    """
+    import basix
+
+    topology = mesh.topology
+    tdim = topology.dim
+    cell = _mesh_basix_cell(mesh)
+    reference = basix.topology(cell)
+    facet_vertices = np.asarray(reference[tdim - 1], dtype=np.int64)
+    topology.create_connectivity(tdim, 0)
+    cell_vertices = np.asarray(topology.connectivity(tdim, 0).array, dtype=np.int64)
+    cell_vertices = cell_vertices.reshape((-1, len(reference[0])))
+    rows = np.asarray(rows, dtype=np.int64)
+    side0 = cell_vertices[rows[:, 0:1], facet_vertices[rows[:, 1]]]
+    side1 = cell_vertices[rows[:, 2:3], facet_vertices[rows[:, 3]]]
+    matches = side1[:, None, :] == side0[:, :, None]
+    if not np.all(matches.sum(axis=2) == 1):
+        raise RuntimeError("Interior facet rows do not describe a shared facet.")
+    return np.ascontiguousarray(matches.argmax(axis=2), dtype=np.int32)
+
+
 def _facet_payload_with_rows(
     *,
     mesh: Any,
@@ -572,6 +604,9 @@ def _facet_payload_with_rows(
             parent_cell_type=_mesh_basix_cell(mesh),
             quadrature=runtime_payload,
             entity_indices=runtime_rows,
+            secondary_vertex_permutations=_secondary_facet_vertex_permutations(
+                mesh, runtime_rows
+            ),
         )
     else:  # pragma: no cover - caller controls this.
         raise ValueError(f"Unsupported facet integral type {integral_type!r}.")

@@ -198,7 +198,8 @@ def test_cell_aggregation_opposite_volume_fractions_sum_to_one_on_cut_cells():
 
 
 def test_cell_aggregation_rejects_rootless_active_component():
-    _, phi = _line_cut(n=(2, 1), offset=0.5)
+    # The line cuts both cells of the left column; no cell lies inside it.
+    _, phi = _line_cut(n=(2, 1), offset=0.25)
     cut_data = cutfemx.cut(phi)
 
     with pytest.raises(RuntimeError, match="without an admissible root"):

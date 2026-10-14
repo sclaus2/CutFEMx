@@ -35,7 +35,7 @@ The demo executes the surface solve in this order:
 
 1. Define the level set function.
 2. Build the hexahedral background mesh and interpolate a quadratic level set.
-3. Cut cells with `"phi=0"` and create Algoim surface quadrature.
+3. Cut cells with `"phi=0"` and create curved surface quadrature.
 4. Build the active surface skeleton by cutting interior facets adjacent to
    the cut cells; use those same surface skeleton facets as the ghost set.
 5. Build `dx_gamma`, `dS_gamma`, and `dS_ghost`.
@@ -77,7 +77,8 @@ cut_cells = cutfemx.locate_entities(cell_cut, "phi=0")
 ## Surface Quadrature
 
 CutFEMx generates quadrature points directly on $\Gamma\cap K$ for each cut
-background cell. The demo uses the `algoim` backend for the surface rules.
+background cell. The demo uses the `quadrays` backend for the surface rules,
+which integrates the quadratic level set itself.
 
 ```{raw} html
 <figure class="tutorial-figure">
@@ -88,7 +89,7 @@ background cell. The demo uses the `algoim` backend for the surface rules.
 
 ```python
 gamma_rules = cutfemx.runtime_quadrature(
-    cell_cut, "phi=0", quadrature_order, backend="algoim"
+    cell_cut, "phi=0", quadrature_order, backend="quadrays"
 )
 dx_gamma = ufl.Measure("dx", domain=msh, subdomain_data=gamma_rules)
 ```
@@ -126,9 +127,7 @@ facets are cut again by the level set, this time as lower-dimensional entities.
 ```python
 skeleton_facets = cutfemx.interior_facets_for_cells(msh, cut_cells)
 facet_cut = cutfemx.cut(phi, skeleton_facets, facet_dim)
-skeleton_rules = cutfemx.runtime_quadrature(
-    facet_cut, "phi=0", quadrature_order, backend="algoim"
-)
+skeleton_rules = cutfemx.runtime_quadrature(facet_cut, "phi=0", quadrature_order)
 ghost_facets = cutfemx.locate_entities(facet_cut, "phi=0")
 
 dS_gamma = ufl.Measure("dS", domain=msh, subdomain_data=skeleton_rules)
